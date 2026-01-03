@@ -10,9 +10,6 @@ jobs:
   build:
     runs-on: ubuntu-24.04
 
-    env:
-      API: 34
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,11 +18,17 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            meson ninja pkg-config \
-            python3-pip python3-mako \
-            flex bison \
-            glslang-tools spirv-tools \
-            unzip curl git
+            ninja-build \
+            meson \
+            python3-pip \
+            python3-mako \
+            flex \
+            bison \
+            glslang-tools \
+            spirv-tools \
+            patchelf \
+            curl \
+            unzip
 
       - name: Install latest Meson
         run: |
@@ -36,16 +39,16 @@ jobs:
         run: |
           curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q ndk.zip
-          echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
 
       - name: Create Android cross file
         run: |
-          cat > android-aarch64.txt << EOF
+          cat > android-aarch64 << EOF
           [binaries]
-          c = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang'
-          cpp = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++'
-          ar = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang'
+          cpp = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++'
+          ar = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
 
           [host_machine]
           system = 'android'
@@ -58,57 +61,52 @@ jobs:
         run: |
           git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
           cd mesa
-          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      # ===== INLINE PATCHES =====
-      - name: Apply inline patches
+      - name: Apply inline patches (Winlator-style)
         run: |
           cd mesa
 
-          cat << 'EOF' > prefer_sysmem.patch
-          diff --git a/src/freedreno/vulkan/tu_device.c b/src/freedreno/vulkan/tu_device.c
-          @@ -123,6 +123,7 @@
-             device->use_sysmem = true;
-          EOF
+          # Prefer sysmem
+          curl -L -o sysmem.patch https://raw.githubusercontent.com/K11MCH1/AdrenoToolsDrivers/main/patches/prefer_sysmem.patch || true
+          git apply sysmem.patch || true
 
-          git apply prefer_sysmem.patch || echo "sysmem patch skipped"
+          # Extra memory / DX12 tweaks (optional)
+          curl -L -o mem.patch https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30000.diff || true
+          git apply mem.patch || true
 
-      - name: Configure Mesa (Winlator-like build)
+      - name: Configure Mesa (Winlator-like)
         run: |
           cd mesa
           meson setup build-android \
-            --cross-file ../android-aarch64.txt \
+            --cross-file ../android-aarch64 \
             -Dplatforms=android \
-            -Dplatform-sdk-version=${API} \
+            -Dplatform-sdk-version=34 \
             -Dandroid-stub=true \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=kgsl \
             -Dgallium-drivers= \
             -Dbuildtype=release \
-            -Db_lto=false \
-            -Dstrip=false \
-            -Ddebug=true \
+            -Db_lto=true \
+            -Dstrip=true \
             -Dglx=disabled \
             -Degl=disabled \
-            -Dgles1=disabled \
-            -Dgles2=disabled \
             -Dopengl=false
 
       - name: Build Turnip
         run: |
-          ninja -C mesa/build-android
-          cp mesa/build-android/src/freedreno/vulkan/libvulkan_freedreno.so \
-             vulkan.ad07xx.so
+          cd mesa
+          ninja -C build-android
+          cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so ../vulkan.ad07xx.so
 
       - name: Create meta.json
         run: |
           cat > meta.json << EOF
           {
             "schemaVersion": 1,
-            "name": "Turnip Driver (YML only)",
-            "author": "Sea Nasr",
+            "name": "Mesa Turnip (YML Only)",
             "vendor": "Mesa",
-            "driverVersion": "Mesa main (${COMMIT})",
+            "driver": "turnip",
             "minApi": 27,
             "libraryName": "vulkan.ad07xx.so"
           }
@@ -117,11 +115,10 @@ jobs:
       - name: Package
         run: |
           zip -9 turnip-yml-only.zip vulkan.ad07xx.so meta.json
-          ls -lh vulkan.ad07xx.so
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: turnip-yml-${{ env.COMMIT }}
-          name: Turnip YML Only Build
+          tag_name: yml-${{ env.MESA_COMMIT }}
+          name: Turnip YML Only
           files: turnip-yml-only.zip

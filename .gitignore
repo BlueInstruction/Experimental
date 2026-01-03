@@ -1,0 +1,39 @@
+# 構建目錄和輸出
+workdir/
+out/
+build*/
+build-android/
+*.zip
+android-aarch64.txt
+
+# 開發環境和臨時文件
+.DS_Store
+*.log
+*.pyc
+__pycache__/
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# 系統文件
+Thumbs.db
+desktop.ini
+
+# 緩存和子項目
+subprojects/packagecache/
+subprojects/*/  # 排除子項目源代碼
+!subprojects/*.wrap  # 保留 wrap 文件
+
+# Mesa 構建產生的臨時文件
+meson-private/
+meson-info/
+compile_commands.json
+
+# 下載的 NDK（已緩存）
+android-ndk-*.zip
+
+# 其他臨時文件
+temp/
+tmp/

@@ -1,0 +1,26 @@
+diff --git a/src/util/disk_cache.c b/src/util/disk_cache.c
+index 3b2d9c4f2a1..c1a9f7a8e11 100644
+--- a/src/util/disk_cache.c
++++ b/src/util/disk_cache.c
+@@ -52,6 +52,9 @@
+ #define DEFAULT_MAX_SIZE (1024ULL * 1024ULL * 1024ULL)
+ #define DEFAULT_MIN_FREE_SPACE (512ULL * 1024ULL * 1024ULL)
+
++#define A750_SHADER_CACHE_MAX_SIZE \
++    (2ULL * 1024ULL * 1024ULL * 1024ULL)
++
+ static uint64_t
+ get_max_cache_size(void)
+ {
+@@ -59,6 +62,18 @@ get_max_cache_size(void)
+     const char *size_str = getenv("MESA_SHADER_CACHE_MAX_SIZE");
+     uint64_t max_size = DEFAULT_MAX_SIZE;
+
++    const char *a750_override = getenv("TU_A750_SHADER_CACHE");
++    if (a750_override && strcmp(a750_override, "1") == 0) {
++        return A750_SHADER_CACHE_MAX_SIZE;
++    }
++
+     if (size_str) {
+         uint64_t parsed = strtoull(size_str, NULL, 10);
+         if (parsed > 0)

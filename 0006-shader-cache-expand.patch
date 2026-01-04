@@ -1,33 +1,14 @@
-From 4a7c9b6d4b8b1d2e1a0c9f8e7d6c5b4a3f2e1d0c Mon Sep 17 00:00:00 2001
-From: MesaTurnipDriver <dev@mesa.local>
-Date: Sun, 4 Jan 2026 18:00:00 +0000
-Subject: [PATCH] util/disk_cache: increase default shader cache size on Android
-
-Increase default shader cache size to 2GB on Android when
-MESA_SHADER_CACHE_MAX_SIZE is not explicitly set.
-
----
- src/util/disk_cache.c | 10 ++++++++--
- 1 file changed, 8 insertions(+), 2 deletions(-)
-
 diff --git a/src/util/disk_cache.c b/src/util/disk_cache.c
-index 5c2c0d9e8f1..a3b4c5d6e7f 100644
+index 3b2c5e0d4b6..9a1f6c4e2d1 100644
 --- a/src/util/disk_cache.c
 +++ b/src/util/disk_cache.c
-@@ -81,8 +81,14 @@ static uint64_t
- disk_cache_get_max_size(void)
+@@ -90,7 +90,13 @@ disk_cache_get_max_size(void)
  {
     const char *env = getenv("MESA_SHADER_CACHE_MAX_SIZE");
--   uint64_t max_size = env ? strtoull(env, NULL, 10) : (uint64_t)1 << 30;
-+   uint64_t max_size;
-+
+-   return env ? strtoull(env, NULL, 10) : (uint64_t)1 << 30;
 +   if (env && env[0] != '\0') {
-+      max_size = strtoull(env, NULL, 10);
-+   } else {
-+      max_size = (uint64_t)2 << 30;
++      return strtoull(env, NULL, 10);
 +   }
-
-    return max_size;
++
++   return (uint64_t)2 << 30;
  }
---
-2.43.0

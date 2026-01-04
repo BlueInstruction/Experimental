@@ -44,14 +44,15 @@ jobs:
       - name: Clone Mesa
         run: |
           git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          cd mesa
+          git rev-parse --short HEAD > ../MESA_COMMIT
 
       - name: Apply shader cache patch
         run: |
-          #!/usr/bin/env bash
           set -e
           cd mesa
-          git apply "$GITHUB_WORKSPACE/0006-shader-cache-expand.patch"
-        
+          git apply ../0006-shader-cache-expand.patch
+
       - name: Create Android cross file
         run: |
           cat > android-aarch64.txt << EOF

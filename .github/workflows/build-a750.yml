@@ -33,8 +33,7 @@ jobs:
             flex \
             bison \
             unzip \
-            curl \
-            patch
+            curl
 
       - name: Download Android NDK
         run: |
@@ -48,66 +47,65 @@ jobs:
           cd mesa
           git rev-parse --short HEAD > ../MESA_COMMIT
 
-      - name: Create patch file if missing
-        run: |
-          mkdir -p patches/a750
-          cat > patches/a750/0006-shader-cache-expand.patch << 'EOF'
-From 8c2a4e9c0b3d1a4c2f6e8b7a9d12f3456789abcd Mon Sep 17 00:00:00 2001
-From: MesaTurnipDriver <dev@mesa.local>
-Date: Sun, 4 Jan 2026 18:00:00 +0000
-Subject: [PATCH] util/disk_cache: increase default shader cache size on Android
-
-On high-RAM Android devices (12GB+), the default shader cache size
-is too small for modern DX12 titles running through VKD3D-Proton.
-
-Increase the Android default to 2GB while still respecting
-MESA_SHADER_CACHE_MAX_SIZE if explicitly set.
-
-This reduces shader recompilation stalls in heavy titles.
----
- src/util/disk_cache.c | 8 +++++++-
- 1 file changed, 7 insertions(+), 1 deletion(-)
-
-diff --git a/src/util/disk_cache.c b/src/util/disk_cache.c
-index 1f2a3b4c5d6..7a8b9c0d1e2 100644
---- a/src/util/disk_cache.c
-+++ b/src/util/disk_cache.c
-@@ -84,7 +84,13 @@ static uint64_t
- disk_cache_get_max_size(void)
- {
-        const char *env = getenv("MESA_SHADER_CACHE_MAX_SIZE");
--       uint64_t max_size = env ? strtoull(env, NULL, 10) : (uint64_t)1 << 30;
-+       uint64_t max_size;
-+
-+       if (env && env[0] != '\0') {
-+               max_size = strtoull(env, NULL, 10);
-+       } else {
-+               max_size = (uint64_t)2 << 30;
-+       }
-
-        return max_size;
- }
--- 
-2.43.0
-EOF
-          
-          echo "Patch file created with size: $(wc -l patches/a750/0006-shader-cache-expand.patch)"
-
       - name: Apply A750 patches
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Patch file contents:"
-          cat patches/a750/0006-shader-cache-expand.patch
+          echo "開始應用補丁"
+          echo "當前工作目錄: $(pwd)"
+          echo "檢查補丁文件狀態"
           
-          cd mesa
-          echo "Applying patch..."
-          if git apply --check ../patches/a750/0006-shader-cache-expand.patch; then
-            git apply ../patches/a750/0006-shader-cache-expand.patch
-            echo "Patch applied successfully"
+          if [ -f "patches/a750/0006-shader-cache-expand.patch" ]; then
+            echo "補丁文件存在"
+            echo "補丁文件大小: $(stat -c%s patches/a750/0006-shader-cache-expand.patch) 字節"
           else
-            echo "Patch failed to apply, trying alternative method..."
-            # 使用 patch 命令作為備用
-            patch -p1 < ../patches/a750/0006-shader-cache-expand.patch || echo "Patch application failed"
+            echo "錯誤: 補丁文件不存在"
+            exit 1
+          fi
+          
+          echo "進入 Mesa 原始碼目錄"
+          cd mesa
+          
+          echo "測試補丁應用"
+          if git apply --check ../patches/a750/0006-shader-cache-expand.patch; then
+            echo "補丁檢查通過, 開始應用"
+            git apply ../patches/a750/0006-shader-cache-expand.patch
+            echo "補丁應用完成"
+          else
+            echo "補丁檢查失敗, 分析問題"
+            
+            # 獲取當前文件內容
+            FILE_PATH="src/util/disk_cache.c"
+            if [ -f "$FILE_PATH" ]; then
+              echo "查找目標代碼位置"
+              
+              # 檢查原始代碼是否存在
+              if grep -q "uint64_t max_size = env ? strtoull(env, NULL, 10) : (uint64_t)1 << 30;" "$FILE_PATH"; then
+                echo "找到目標代碼, 進行手動修改"
+                
+                # 創建備份
+                cp "$FILE_PATH" "${FILE_PATH}.backup"
+                
+                # 執行替換
+                sed -i 's/uint64_t max_size = env ? strtoull(env, NULL, 10) : (uint64_t)1 << 30;/uint64_t max_size;\n\n   if (env && env[0] != '\''\\0'\'') {\n      max_size = strtoull(env, NULL, 10);\n   } else {\n      max_size = (uint64_t)2 << 30;\n   }/' "$FILE_PATH"
+                
+                # 驗證修改
+                if [ $? -eq 0 ]; then
+                  echo "手動修改完成"
+                  echo "修改後內容預覽:"
+                  sed -n '84,95p' "$FILE_PATH"
+                else
+                  echo "手動修改失敗"
+                  exit 1
+                fi
+              else
+                echo "目標代碼不存在, 檢查文件版本"
+                echo "文件內容預覽 (行 80-90):"
+                sed -n '80,90p' "$FILE_PATH"
+                exit 1
+              fi
+            else
+              echo "錯誤: 文件 $FILE_PATH 不存在"
+              exit 1
+            fi
           fi
 
       - name: Create Android cross file

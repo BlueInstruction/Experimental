@@ -1,18 +1,3 @@
-From 8c2a4e9c0b3d1a4c2f6e8b7a9d12f3456789abcd Mon Sep 17 00:00:00 2001
-From: MesaTurnipDriver <dev@mesa.local>
-Date: Sun, 4 Jan 2026 18:00:00 +0000
-Subject: [PATCH] util/disk_cache: increase default shader cache size on Android
-
-On high-RAM Android devices (12GB+), the default shader cache size
-is too small for modern DX12 titles running through VKD3D-Proton.
-
-Increase the Android default to 2GB while still respecting
-MESA_SHADER_CACHE_MAX_SIZE if explicitly set.
-
----
- src/util/disk_cache.c | 8 +++++++-
- 1 file changed, 7 insertions(+), 1 deletion(-)
-
 diff --git a/src/util/disk_cache.c b/src/util/disk_cache.c
 index 1f2a3b4c5d6..7a8b9c0d1e2 100644
 --- a/src/util/disk_cache.c
@@ -32,5 +17,3 @@ index 1f2a3b4c5d6..7a8b9c0d1e2 100644
 
     return max_size;
  }
---
-2.43.0

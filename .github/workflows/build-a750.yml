@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build-a750:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     env:
       ANDROID_API: "34"
@@ -74,11 +74,15 @@ jobs:
 
       - name: Build Turnip driver
         run: |
-          set -e
-          cd mesa
+          wget -q https://archive.mesa3d.org/mesa-${{ env.mesa-version }}.tar.xz
+          tar -xf mesa-${{ env.mesa-version }}.tar.xz
+          cd mesa-${{ env.mesa-version }}
 
-          meson setup build-android \
-            --cross-file ../android-aarch64.txt \
+          sed -e "s|NDKDIR|$ANDROID_NDK_LATEST_HOME|g" < ../android-aarch64 > android-aarch64
+          patch -p1 -i ../0006-shader-cache-expand.patch
+          patch -p1 -i ../mesa-android-include-all-vulkan-extension.patch
+
+          meson setup build-android --cross-file ./android-aarch64 \
             -Dplatforms=android \
             -Dandroid-stub=true \
             -Dvulkan-drivers=freedreno \
@@ -107,6 +111,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: a750-${{ github.run_number }}
           name: Turnip Adreno A750
           files: out/turnip-adreno-a750.zip

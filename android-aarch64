@@ -10,3 +10,8 @@ system = 'android'
 cpu_family = 'aarch64'
 cpu = 'aarch64'
 endian = 'little'
+
+[properties]
+# Adreno 750 (A7xx) specific compiler flags for maximum performance
+c_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt']
+cpp_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt']

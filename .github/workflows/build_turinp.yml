@@ -3,72 +3,45 @@ name: Build Turnip Adreno 750 Optimized
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r26b
-          add-to-path: true
-
-      - name: Install Build Dependencies
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip python3-setuptools python3-mako python3-yaml ninja-build git bison flex libssl-dev zip
-          pip3 install meson mako --break-system-packages
+          sudo apt update
+          sudo apt install -y \
+            ninja-build meson python3-pip python3-mako flex bison \
+            glslang-tools spirv-tools patchelf curl unzip git
+          pip3 install --user --upgrade meson mako
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Build Mesa Turnip Driver
+      - name: Download Android NDK r26d
         run: |
-          set -e
+          curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
 
-          # Configuration
-          MESA_VERSION="mesa-25.3.3"
-          MESA_URL="https://gitlab.freedesktop.org/mesa/mesa.git"
-          BUILD_DIR="build-android"
-          OUTPUT_DIR="build_output"
-          ANDROID_API_LEVEL="29"
-
-          mkdir -p "$OUTPUT_DIR"
-          rm -rf mesa "$BUILD_DIR"
-
-          echo ">>> Cloning Mesa..."
-          git clone --depth 1 --branch "$MESA_VERSION" "$MESA_URL" mesa
-
-          echo ">>> Applying Turnip environment injection..."
-          cd mesa
-          
-          TARGET_FILE=$(find src -name "tu_device.c" | head -n 1)
-          if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
-              echo "ERROR: tu_device.c not found!"
-              find src/freedreno -maxdepth 3 || ls -R src/
-              exit 1
-          fi
-
-          sed -i '/instance->api_version = TU_API_VERSION;/a \
-\
-   if (!getenv("FD_DEV_FEATURES")) { setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); } \
-   if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) { setenv("MESA_SHADER_CACHE_MAX_SIZE", "1024M", 1); } \
-   if (!getenv("TU_DEBUG")) { setenv("TU_DEBUG", "force_unaligned_device_local", 1); }' "$TARGET_FILE"
-
-          echo ">>> Creating Meson cross-file..."
-          cat <<EOF > android-aarch64
+      - name: Create Android cross file
+        run: |
+          cat > android-aarch64 << EOF
 [binaries]
-c = 'aarch64-linux-android29-clang'
-cpp = 'aarch64-linux-android29-clang++'
-ar = 'llvm-ar'
-strip = 'llvm-strip'
-pkgconfig = 'pkg-config'
+c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang'
+cpp = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++'
+ar = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+strip = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
 
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
-cpu = 'aarch64'
+cpu = 'armv8'
 endian = 'little'
 
 [properties]
@@ -76,41 +49,86 @@ c_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt']
 cpp_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt']
 EOF
 
-          meson setup "$BUILD_DIR" \
-              --cross-file android-aarch64 \
-              --buildtype=release \
-              -Dplatforms=android \
-              -Dplatform-sdk-version="$ANDROID_API_LEVEL" \
-              -Dandroid-stub=true \
-              -Dgallium-drivers= \
-              -Dvulkan-drivers=freedreno \
-              -Dfreedreno-kmds=kgsl \
-              -Db_lto=true \
-              -Doptimization=3 \
-              -Dstrip=true \
-              -Dllvm=disabled
+      - name: Clone Mesa 25.3.3
+        run: |
+          git clone --depth 1 --branch mesa-25.3.3 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+          cd mesa
+          echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-          echo ">>> Compiling..."
-          ninja -C "$BUILD_DIR"
+      - name: Apply inline patches and environment overrides
+        run: |
+          cd mesa
+          
+          TARGET_FILE=$(find src -name "tu_device.c" | head -n 1)
+          if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
+              echo "ERROR: tu_device.c not found!"
+              exit 1
+          fi
 
-          DRIVER_LIB=$(find "$BUILD_DIR" -name "libvulkan_freedreno.so" | head -n 1)
-          cp "$DRIVER_LIB" ../"$OUTPUT_DIR"/vulkan.ad07xx.so
+          # Inject environment overrides for Turnip
+          sed -i '/instance->api_version = TU_API_VERSION;/a \
+\
+   if (!getenv("FD_DEV_FEATURES")) { setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); } \
+   if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) { setenv("MESA_SHADER_CACHE_MAX_SIZE", "1024M", 1); } \
+   if (!getenv("TU_DEBUG")) { setenv("TU_DEBUG", "force_unaligned_device_local", 1); }' "$TARGET_FILE"
 
-          cd ../"$OUTPUT_DIR"
-          cat <<EOF > meta.json
+          # Apply extra remote patches (DX12 tweaks, memory tweaks)
+          curl -L -o prefer_sysmem.patch https://raw.githubusercontent.com/K11MCH1/AdrenoToolsDrivers/main/patches/prefer_sysmem.patch || true
+          git apply prefer_sysmem.patch || true
+
+      - name: Configure Mesa
+        run: |
+          cd mesa
+          meson setup build-android \
+            --cross-file ../android-aarch64 \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=29 \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
+            -Dgallium-drivers= \
+            -Dbuildtype=release \
+            -Db_lto=true \
+            -Dstrip=true \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dopengl=false
+
+      - name: Build Turnip
+        run: |
+          cd mesa
+          ninja -C build-android
+          cp build-android/src/freedreno/vulkan/libvulkan_freedreno.so ../vulkan.ad07xx.so
+
+      - name: Create meta.json with features
+        run: |
+          cat > meta.json << EOF
 {
-  "name": "Turnip v25.3.3 - Adreno 750 Optimized",
-  "version": "25.3.3",
-  "description": "Custom A750 build with Turnip environment overrides.",
-  "library": "vulkan.ad07xx.so"
+  "schemaVersion": 1,
+  "name": "Mesa Turnip",
+  "vendor": "Mesa",
+  "driver": "turnip",
+  "minApi": 29,
+  "libraryName": "vulkan.ad07xx.so",
+  "features": [
+    "Environment overrides to enable:",
+    "- UBWC hints (FD_DEV_FEATURES)",
+    "- Large shader cache (MESA_SHADER_CACHE_MAX_SIZE=1024M)",
+    "- Force unaligned device-local memory (TU_DEBUG)",
+    "Optimized build flags for Adreno 750 (-O3, -march=armv8.5-a, -mtune=cortex-x4)",
+    "Full cross-compilation support for Android API level 29",
+    "Packaged output with vulkan.ad07xx.so and metadata"
+  ]
 }
 EOF
 
-          zip -r turnip_adreno750_optimized.zip vulkan.ad07xx.so meta.json
-          echo ">>> Build Complete."
-      
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Package Turnip
+        run: |
+          zip -9 turnip-driver.zip vulkan.ad07xx.so meta.json
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: turnip-adreno750-optimized
-          path: build_output/*.zip
+          tag_name: mesa-25.3.3-${{ env.MESA_COMMIT }}
+          name: Turnip Driver 25.3.3
+          files: turnip-driver.zip

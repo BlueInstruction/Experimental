@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,7 +21,7 @@ jobs:
           sudo apt-get install -y git python3 meson ninja-build pkg-config zip
 
       - name: Setup Android NDK
-        uses: android-actions/setup-ndk@v2
+        uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
 

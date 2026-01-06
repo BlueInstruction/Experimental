@@ -1,29 +1,12 @@
 [binaries]
-c = 'aarch64-linux-android21-clang'
-cpp = 'aarch64-linux-android21-clang++'
+c = 'aarch64-linux-android29-clang'
+cpp = 'aarch64-linux-android29-clang++'
 ar = 'llvm-ar'
 strip = 'llvm-strip'
-pkg-config = 'pkg-config'
+pkgconfig = 'pkg-config'
 
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
-cpu = 'armv8'
+cpu = 'aarch64'
 endian = 'little'
-
-[properties]
-root = '/path/to/ndk/toolchain'
-cmake_toolchain_file = '/path/to/ndk/build/cmake/android.toolchain.cmake'
-cmake_defaults = true
-
-[constants]
-ndk_path = '/path/to/ndk'
-
-[paths]
-prefix = '/android/aarch64'
-
-[built-in options]
-c_args = ['-DANDROID', '-D__ANDROID_API__=21', '--target=aarch64-linux-android21', '-fPIC']
-cpp_args = ['-DANDROID', '-D__ANDROID_API__=21', '--target=aarch64-linux-android21', '-fPIC']
-c_link_args = ['-Wl,--build-id=sha1', '-Wl,-z,noexecstack', '-Wl,-z,relro', '-Wl,-z,now', '-Wl,--warn-shared-textrel', '-Wl,--fatal-warnings']
-cpp_link_args = ['-Wl,--build-id=sha1', '-Wl,-z,noexecstack', '-Wl,-z,relro', '-Wl,-z,now', '-Wl,--warn-shared-textrel', '-Wl,--fatal-warnings']

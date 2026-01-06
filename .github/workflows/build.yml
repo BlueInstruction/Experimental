@@ -35,27 +35,22 @@ jobs:
       - name: Create Android cross file
         run: |
           cat > android-aarch64 << EOF
+          [constants]
+          ndk_path = '$ANDROID_NDK_HOME'
+
           [binaries]
-          c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang'
-          cpp = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++'
-          ar = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          ar = ndk_path / 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-ar'
+          c = [ndk_path / 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang', '-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt']
+          cpp = [ndk_path / 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++', '-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
           c_ld = 'lld'
           cpp_ld = 'lld'
+          strip = ndk_path / 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-strip'
 
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
-          cpu = 'armv8-a'
+          cpu = 'armv8'
           endian = 'little'
-
-          [properties]
-          sys_root = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
-          needs_exe_wrapper = true
-
-          [built-in options]
-          c_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt', '-D__ANDROID_MIN_SDK_VERSION=29']
-          cpp_args = ['-march=armv8.5-a', '-mtune=cortex-x4', '-O3', '-fno-plt', '-D__ANDROID_MIN_SDK_VERSION=29']
           EOF
 
       - name: Clone Mesa 25.3.3
@@ -97,6 +92,7 @@ jobs:
             -Dplatforms=android \
             -Dplatform-sdk-version=34 \
             -Dandroid-stub=true \
+            -Dandroid-libbacktrace=disabled \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=kgsl \
             -Dgallium-drivers= \

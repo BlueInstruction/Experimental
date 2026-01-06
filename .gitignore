@@ -1,4 +1,15 @@
-build-android/
-out/
-mesa/
+# Build directories
+build/
+package/
+
+# Archives
 *.zip
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

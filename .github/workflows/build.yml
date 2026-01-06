@@ -61,7 +61,7 @@ jobs:
       - name: Apply inline patches and environment overrides
         run: |
           cd mesa
-          TARGET_FILE="src/freedreno/vulkan/tu_instance.c"
+          TARGET_FILE="src/freedreno/vulkan/tu_device.cc"
           if [ ! -f "$TARGET_FILE" ]; then
               echo "ERROR: $TARGET_FILE not found!"
               exit 1
@@ -73,7 +73,7 @@ jobs:
           fi
 
           # Inject environment overrides after the API version line
-          sed -i '/instance->api_version = tu_instance_api_version(pCreateInfo);/a \
+          sed -i '/\*pApiVersion = TU_API_VERSION;/a \
           \
           if (!getenv("FD_DEV_FEATURES")) { setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1); } \
           if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) { setenv("MESA_SHADER_CACHE_MAX_SIZE", "1024M", 1); } \

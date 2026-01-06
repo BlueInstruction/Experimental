@@ -1,43 +1,16 @@
 diff --git a/src/freedreno/vulkan/tu_device.c b/src/freedreno/vulkan/tu_device.c
-index 8a3b2c1..9d4e5f6 100644
 --- a/src/freedreno/vulkan/tu_device.c
 +++ b/src/freedreno/vulkan/tu_device.c
-@@ -234,6 +234,31 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+@@ -234,6 +234,18 @@
     instance->physical_device_count = -1;
- 
     instance->api_version = TU_API_VERSION;
-+   
-+   // === START CUSTOM OPTIMIZATIONS ===
-+   // 1. Force UBWC Hint for Adreno 7xx (Fixes AC Mirage Sky / Horizon Glitches)
-+   // We inject this env var programmatically if not already set.
-+   const char *dev_features = getenv("FD_DEV_FEATURES");
-+   if (!dev_features) {
++
++   if (!getenv("FD_DEV_FEATURES")) {
 +       setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1);
-+       fprintf(stderr, "Turnip [OPT]: Enforced UBWC Hint for A7xx (Mirage/Horizon Fix)\n");
 +   }
-+
-+   // 2. Increase Shader Cache for Heavy Games (Fixes AC Valhalla Menu Lag)
-+   const char *cache_size = getenv("MESA_SHADER_CACHE_MAX_SIZE");
-+   if (!cache_size) {
++   if (!getenv("MESA_SHADER_CACHE_MAX_SIZE")) {
 +       setenv("MESA_SHADER_CACHE_MAX_SIZE", "1024M", 1);
-+       fprintf(stderr, "Turnip [OPT]: Enforced 1GB Shader Cache (Valhalla Fix)\n");
 +   }
-+
-+   // 3. Force Descriptor Indexing (Spider-Man Fix)
-+   // Note: Actual feature bit is handled in tu_GetPhysicalDeviceFeatures, 
-+   // but we log here to confirm the "Secret Recipe" build is active.
-+   fprintf(stderr, "Turnip [OPT]: Build 25.3.3 'Secret Recipe' Active for Adreno 750\n");
-+   // === END CUSTOM OPTIMIZATIONS ===
- 
-    if (pCreateInfo->pApplicationInfo) {
-       const VkApplicationInfo *app = pCreateInfo->pApplicationInfo;
-diff --git a/src/freedreno/vulkan/tu_physical_device.c b/src/freedreno/vulkan/tu_physical_device.c
-index 4b2c1d3..5e3f2a1 100644
---- a/src/freedreno/vulkan/tu_physical_device.c
-+++ b/src/freedreno/vulkan/tu_physical_device.c
-@@ -50,7 +50,7 @@
-    .driverName = "turnip",
--   .driverInfo = "Mesa " PACKAGE_VERSION MESA_GIT_SHA1,
-+   .driverInfo = "Turnip Optimized (A750 Secret Recipe)",
-    .conformanceVersion = { .major = 1, .minor = 3, .subminor = 0, .patch = 0 },
- };
++   if (!getenv("TU_DEBUG")) {
++       setenv("TU_DEBUG", "force_unaligned_device_local", 1);
++   }

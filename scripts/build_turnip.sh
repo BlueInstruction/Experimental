@@ -1,50 +1,67 @@
 #!/usr/bin/env bash
 set -e
 
-ANDROID_NDK="${ANDROID_NDK:?Set ANDROID_NDK path}"
-ANDROID_API=24
-ARCH=aarch64
-BUILD_DIR=build-android
-OUT_DIR=out
+# Configuration
+MESON_CROSS_FILE="android-aarch64"
+BUILD_DIR="build"
+PACKAGE_DIR="package"
+DRIVER_NAME="vulkan.ad07xx.so"
+META_FILE="meta.json"
+ZIP_NAME="MesaTurnipDriver-v25.3.3.zip"
 
-mkdir -p "$BUILD_DIR" "$OUT_DIR"
+echo "Starting Mesa Turnip build process..."
 
-# Generate cross file
-cat > "$BUILD_DIR/android-aarch64.ini" <<EOF
-[binaries]
-c = '${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${ARCH}-linux-android${ANDROID_API}-clang'
-cpp = '${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/${ARCH}-linux-android${ANDROID_API}-clang++'
-ar = '${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-strip = '${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-pkgconfig = 'pkg-config'
-
-[host_machine]
-system = 'android'
-cpu_family = 'arm'
-cpu = 'armv8'
-endian = 'little'
-EOF
-
-# Clone Mesa release
-if [ ! -d mesa ]; then
-    git clone --branch mesa-25.3.3 --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git mesa
+# 1. Apply patch if it exists
+if [ -f "000001.patch" ]; then
+    echo "Applying patch 000001.patch..."
+    git apply 000001.patch
+    echo "Patch applied successfully."
+else
+    echo "Warning: 000001.patch not found. Skipping patch application."
 fi
 
-meson setup "$BUILD_DIR/meson" mesa \
-    --cross-file "$BUILD_DIR/android-aarch64.ini" \
-    -Dvulkan-drivers=freedreno
+# 2. Setup Meson build directory
+echo "Configuring build with Meson..."
+meson setup $BUILD_DIR \
+    --cross-file $MESON_CROSS_FILE \
+    --buildtype release \
+    -Dplatforms=android \
+    -Dgallium-drivers=turnip \
+    -Dvulkan-drivers=adreno \
+    -Dvulkan-beta=true \
+    -Dandroid-stub=true \
+    -Dstrip=true \
+    -Dbuildtype=release
 
-ninja -C "$BUILD_DIR/meson" src/freedreno/vulkan/libvulkan_freedreno.so
+# 3. Compile the driver
+echo "Compiling Mesa with Ninja..."
+ninja -C $BUILD_DIR
 
-cp "$BUILD_DIR/meson/src/freedreno/vulkan/libvulkan_freedreno.so" "$OUT_DIR/vulkan.ad07xx.so"
+# 4. Prepare package directory
+echo "Preparing package directory..."
+mkdir -p $PACKAGE_DIR/lib/arm64-v8a
 
-cat > "$OUT_DIR/meta.json" <<JSON
+# 5. Copy the built driver
+echo "Copying driver to package directory..."
+cp $BUILD_DIR/src/vulkan/drivers/turnip/libvulkan_turnip.so $PACKAGE_DIR/lib/arm64-v8a/$DRIVER_NAME
+
+# 6. Create meta.json
+echo "Creating $META_FILE..."
+cat > $PACKAGE_DIR/$META_FILE << EOF
 {
-  "name": "Turnip Vulkan Driver",
+  "arch": "arm64-v8a",
+  "abi": "arm64-v8a",
+  "id": "mesa_adreno_driver",
   "version": "25.3.3",
-  "library": "vulkan.ad07xx.so",
-  "adreno_support": ["6xx", "7xx", "750"]
+  "name": "Mesa Turnip Driver (Adreno)",
+  "author": "Mesa Project",
+  "description": "Mesa Turnip Vulkan driver for Adreno GPUs, optimized for Android emulators."
 }
-JSON
+EOF
 
-zip -9 -r "$OUT_DIR/turnip_adreno_emulator.zip" "$OUT_DIR/vulkan.ad07xx.so" "$OUT_DIR/meta.json"
+# 7. Create the final ZIP archive
+echo "Creating final ZIP archive: $ZIP_NAME..."
+cd $PACKAGE_DIR && zip -r "../$ZIP_NAME" .
+
+echo "Build and packaging completed successfully!"
+echo "Output file: $ZIP_NAME"

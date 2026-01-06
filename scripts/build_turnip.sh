@@ -16,13 +16,11 @@ echo ">>> [2/6] Cloning Mesa ($MESA_VERSION)..."
 git clone --depth 1 --branch "$MESA_VERSION" "$MESA_URL" mesa
 
 echo ">>> [3/6] Generating and Applying Patch..."
-# Creating the patch file inside the script to ensure 100% correct formatting
-cat << 'EOF' > mesa/secret_recipe.patch
-diff --git a/src/freedreno/vulkan/tu_device.c b/src/freedreno/vulkan/tu_device.c
-index 8a3b2c1..9d4e5f6 100644
+# We create the patch with the standard a/ and b/ prefixes for git compatibility
+cat << 'EOF' > mesa_patch.diff
 --- a/src/freedreno/vulkan/tu_device.c
 +++ b/src/freedreno/vulkan/tu_device.c
-@@ -234,6 +234,22 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+@@ -234,6 +234,22 @@
     instance->physical_device_count = -1;
  
     instance->api_version = TU_API_VERSION;
@@ -47,9 +45,16 @@ index 8a3b2c1..9d4e5f6 100644
        const VkApplicationInfo *app = pCreateInfo->pApplicationInfo;
 EOF
 
+# Move into the mesa directory to apply
 cd mesa
-# Apply with whitespace ignore to be safe
-git apply --whitespace=fix secret_recipe.patch
+if [ -f "src/freedreno/vulkan/tu_device.c" ]; then
+    echo "Found tu_device.c, applying patch..."
+    git apply -p1 --whitespace=fix ../mesa_patch.diff
+else
+    echo "CRITICAL ERROR: Could not find src/freedreno/vulkan/tu_device.c"
+    find . -name "tu_device.c"
+    exit 1
+fi
 cd ..
 
 echo ">>> [4/6] Configuring Meson..."

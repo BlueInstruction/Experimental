@@ -1,0 +1,35 @@
+name: Build Turnip Driver
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 meson ninja-build pkg-config zip
+
+      - name: Setup Android NDK
+        uses: android-actions/setup-ndk@v2
+        with:
+          ndk-version: r26d
+
+      - name: Build Turnip
+        run: |
+          bash scripts/build_turinp
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-driver
+          path: out/turnip_adreno_emulator.zip

@@ -19,12 +19,23 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          # REMOVED: android-ndk libandroid-sdk-ndk-dev (These caused the error)
-          # ADDED: python3-mako python3-yaml (To avoid some pip issues)
           sudo apt-get install -y python3-pip python3-setuptools python3-mako python3-yaml ninja-build git bison flex libssl-dev
-
-          # FIX: Ubuntu 24.04 requires --break-system-packages for global pip installs
           pip3 install meson mako --break-system-packages
+
+      - name: Ensure Scripts Directory Exists
+        run: |
+          # Create directory if missing
+          mkdir -p scripts
+          
+          # Move build script to scripts/ if it was placed in root by mistake
+          if [ -f "build_turnip" ]; then mv build_turnip scripts/; fi
+          
+          # Verify file exists
+          if [ ! -f "scripts/build_turnip" ]; then
+            echo "ERROR: scripts/build_turnip not found in repository!"
+            ls -R
+            exit 1
+          fi
 
       - name: Build Turnip Driver
         run: |

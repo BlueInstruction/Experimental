@@ -1,6 +1,8 @@
 name: Build Mesa Turnip v25.3.3 Android
-
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -58,7 +60,6 @@ EOF
       - name: Apply inline patches and environment overrides
         run: |
           cd mesa
-          
           TARGET_FILE=$(find src -name "tu_device.c" | head -n 1)
           if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
               echo "ERROR: tu_device.c not found!"

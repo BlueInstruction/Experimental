@@ -32,14 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build python3-pip python3-mako \
             flex bison patchelf curl unzip clang lld llvm pkg-config \
-            libdrm-dev
-
-      - name: Install Glslang
-        run: |
-          curl -L -o glslang.zip https://github.com/KhronosGroup/glslang/releases/download/14.3.0/glslang-14.3.0-linux-x64-Release.zip
-          unzip glslang.zip -d glslang_bins
-          chmod +x glslang_bins/bin/glslangValidator
-          echo "$PWD/glslang_bins/bin" >> $GITHUB_PATH
+            libdrm-dev glslang-tools glslang-dev
 
       - name: Upgrade Meson
         run: |

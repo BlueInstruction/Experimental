@@ -1,4 +1,4 @@
-name: Turnip Builder 07xx - Glslang Fix
+name: Release Turnip Driver
 
 on:
   workflow_dispatch:
@@ -6,19 +6,22 @@ on:
       mesa_branch:
         description: 'Mesa branch/tag'
         required: false
-        default: 'main'
+        default: 'mesa-25.3.3'
       target_device:
         description: 'Target Device'
         required: false
         default: 'adreno-750'
         type: choice
         options: [adreno-730, adreno-740, adreno-750]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -33,7 +36,7 @@ jobs:
 
       - name: Install Latest Glslang (v15+)
         run: |
-          curl -L -o glslang.zip https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-linux-Release.zip
+          curl -L -o glslang.zip https://github.com/KhronosGroup/glslang/releases/download/15.0.0/glslang-15.0.0-linux-Release.zip
           unzip glslang.zip -d glslang_bins
           chmod +x glslang_bins/bin/glslangValidator
           echo "$PWD/glslang_bins/bin" >> $GITHUB_PATH
@@ -52,13 +55,12 @@ jobs:
 
       - name: Clone Mesa
         run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.mesa_branch }} https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
+          git clone --depth 1 --branch ${{ github.event.inputs.mesa_branch || 'mesa-25.3.3' }} https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
 
       - name: Build
         run: |
           cd mesa-source
           
-          # Verify versions
           meson --version
           glslangValidator --version
           
@@ -89,17 +91,33 @@ jobs:
             -Dopengl=false \
             -Dgallium-rusticl=false \
             -Dmicrosoft-clc=disabled \
-            -Dtools=
+            -Dtools=''
             
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
 
-      - name: Final Rename and Upload
+      - name: Prepare Artifact
         run: |
-          mkdir -p final_zip
-          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so final_zip/vulkan.ad07xx.so
-          
-      - name: Upload Artifact
+          mkdir -p release_assets
+          DEVICE="${{ github.event.inputs.target_device || 'adreno-750' }}"
+          MESA_BRANCH="${{ github.event.inputs.mesa_branch || 'mesa-25.3.3' }}"
+          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so "release_assets/vulkan.turnip-${DEVICE}.so"
+          echo "RELEASE_TAG=v${MESA_BRANCH}-${DEVICE}" >> $GITHUB_ENV
+          echo "MESA_BRANCH=${MESA_BRANCH}" >> $GITHUB_ENV
+          echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
+
+      - name: Create Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" \
+            --title "Turnip Driver for Mesa ${{ env.MESA_BRANCH }} on ${{ env.DEVICE }}" \
+            --notes "Built for ${{ env.DEVICE }} from Mesa ${{ env.MESA_BRANCH }}." \
+            release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifact for Dispatch
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: Turnip-vulkan.ad07xx
-          path: final_zip/vulkan.ad07xx.so
+          name: Turnip-vulkan-${{ github.event.inputs.target_device }}
+          path: release_assets/*

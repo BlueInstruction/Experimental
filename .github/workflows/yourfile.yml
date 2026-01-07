@@ -74,14 +74,25 @@ jobs:
           esac
           echo "config=$CONFIG" >> $GITHUB_OUTPUT
 
-      - name: Upload Empty Patches if none exist
-        run: mkdir -p patches && touch patches/.keep
-      
+      - name: Prepare Patches for Upload
+        run: |
+          # Create the directory if it doesn't exist
+          mkdir -p ${{ github.workspace }}/patches-to-upload
+          
+          # If you have patches in your source, copy them
+          if [ -d "source/patches" ]; then
+            cp -r source/patches/* ${{ github.workspace }}/patches-to-upload/ 2>/dev/null || true
+          fi
+          
+          # SAFETY: Ensure the directory is NEVER empty so the upload-artifact doesn't skip
+          touch ${{ github.workspace }}/patches-to-upload/.keep_alive
+
       - name: Upload Patches Artifact
         uses: actions/upload-artifact@v4
         with:
           name: patches-bundle
-          path: patches/
+          path: ${{ github.workspace }}/patches-to-upload/
+          retention-days: 1
 
   build-turnip:
     needs: setup-environment
@@ -101,7 +112,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y meson ninja-build python3-pip python3-mako flex bison \
             patchelf curl unzip clang lld llvm libclang-dev pkg-config jq
-          pip3 install --upgrade meson mako
+          pip3 install --break-system-packages --upgrade meson mako
           
       - name: Setup Android NDK
         run: |
@@ -140,8 +151,8 @@ jobs:
           meson setup build-android --cross-file android_cross.ini -Dplatforms=android -Dvulkan-drivers=freedreno -Dfreedreno-kmds=$KMD_LIST -Dbuildtype=release
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
 
-      - name: Upload Artifacts
+      - name: Upload Driver
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-${{ github.event.inputs.target_device }}
+          name: turnip-${{ github.event.inputs.target_device }}-${{ env.MESA_COMMIT }}
           path: mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so

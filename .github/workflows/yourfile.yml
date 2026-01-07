@@ -1,4 +1,4 @@
-name: Turnip Builder Simple
+name: Turnip Builder Simple - Fixed
 
 on:
   workflow_dispatch:
@@ -28,9 +28,13 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build python3-pip python3-mako flex bison \
-            patchelf curl unzip clang lld llvm libclang-dev pkg-config jq
-          pip3 install --break-system-packages --upgrade meson mako
+          sudo apt-get install -y meson ninja-build python3-pip python3-mako python3-setuptools \
+            flex bison patchelf curl unzip clang lld llvm libclang-dev pkg-config jq
+
+      - name: Setup Python Tools
+        run: |
+          # Removed --break-system-packages as it is not needed/supported on this runner version
+          pip3 install --upgrade meson mako
 
       - name: Setup NDK
         run: |
@@ -75,3 +79,4 @@ jobs:
         with:
           name: turnip-${{ github.event.inputs.target_device }}-${{ env.MESA_COMMIT }}
           path: mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so
+

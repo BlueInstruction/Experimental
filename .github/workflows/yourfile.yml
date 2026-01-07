@@ -1,4 +1,4 @@
-name: Turnip Builder Simple - Fixed
+name: Turnip Builder 07xx
 
 on:
   workflow_dispatch:
@@ -7,13 +7,12 @@ on:
         description: 'Mesa branch/tag'
         required: false
         default: 'main'
-        type: string
       target_device:
         description: 'Target Device'
         required: false
         default: 'adreno-750'
         type: choice
-        options: [adreno-730, adreno-740, adreno-750, generic-a6xx]
+        options: [adreno-730, adreno-740, adreno-750]
 
 permissions:
   contents: write
@@ -28,13 +27,9 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build python3-pip python3-mako python3-setuptools \
-            flex bison patchelf curl unzip clang lld llvm libclang-dev pkg-config jq
-
-      - name: Setup Python Tools
-        run: |
-          # Removed --break-system-packages as it is not needed/supported on this runner version
-          pip3 install --upgrade meson mako
+          sudo apt-get install -y meson ninja-build python3-pip python3-mako \
+            flex bison patchelf curl unzip clang lld llvm pkg-config \
+            glslang-tools libdrm-dev
 
       - name: Setup NDK
         run: |
@@ -45,14 +40,10 @@ jobs:
       - name: Clone Mesa
         run: |
           git clone --depth 1 --branch ${{ github.event.inputs.mesa_branch }} https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
-          cd mesa-source
-          echo "MESA_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-      - name: Configure and Build
+      - name: Build
         run: |
           cd mesa-source
-          
-          # Create Cross File
           cat > android_cross.ini << EOF
           [binaries]
           c = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang'
@@ -60,6 +51,7 @@ jobs:
           ar = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
           strip = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
           ld = 'lld'
+          pkgconfig = '/usr/bin/pkg-config'
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
@@ -67,16 +59,19 @@ jobs:
           endian = 'little'
           EOF
           
-          DEVICE="${{ github.event.inputs.target_device }}"
-          KMD="kgsl"
-          if [ "$DEVICE" = "adreno-750" ]; then KMD="msm,kgsl"; fi
-          
-          meson setup build-android --cross-file android_cross.ini -Dplatforms=android -Dvulkan-drivers=freedreno -Dfreedreno-kmds=$KMD -Dbuildtype=release
+          # Force Gen 7+ KMDs
+          meson setup build-android --cross-file android_cross.ini -Dplatforms=android -Dplatform-sdk-version=34 -Dandroid-stub=true -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl -Dbuildtype=release -Dopengl=false -Dtools=
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
 
-      - name: Upload Final Driver
+      - name: Final Rename and Upload
+        run: |
+          mkdir -p final_zip
+          # Renaming to your requested format
+          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so final_zip/vulkan.ad07xx.so
+          
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-${{ github.event.inputs.target_device }}-${{ env.MESA_COMMIT }}
-          path: mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so
+          name: Turnip-vulkan.ad07xx
+          path: final_zip/vulkan.ad07xx.so
 

@@ -38,7 +38,10 @@ jobs:
         run: |
           git clone --depth 1 --branch 14.3.0 https://github.com/KhronosGroup/glslang.git
           cd glslang
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/glslang_install
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/glslang_install \
+            -DENABLE_OPT=0
           cmake --build build -j$(nproc)
           cmake --install build
           echo "$HOME/glslang_install/bin" >> $GITHUB_PATH

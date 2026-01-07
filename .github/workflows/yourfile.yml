@@ -87,7 +87,9 @@ jobs:
             -Dfreedreno-kmds=msm,kgsl \
             -Dbuildtype=release \
             -Dopengl=false \
-            -Dmesa-clc=disabled \
+            -Dgallium-rusticl=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dprecomp-compiler=disabled \
             -Dtools=
             
           ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so

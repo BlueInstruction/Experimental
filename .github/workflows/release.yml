@@ -1,0 +1,504 @@
+Name: Advanced Turnip Builder with Auto-Patching
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_branch:
+        description: 'Mesa branch/tag (default: main)'
+        required: false
+        default: 'main'
+        type: string
+      target_device:
+        description: 'Target Adreno device'
+        required: false
+        default: 'adreno-750'
+        type: choice
+        options:
+          - adreno-730
+          - adreno-740
+          - adreno-750
+          - generic-a6xx
+          - generic-a7xx
+      enable_auto_patches:
+        description: 'Enable automatic patch updates'
+        required: false
+        default: true
+        type: boolean
+      optimization_level:
+        description: 'Build optimization level'
+        required: false
+        default: 'aggressive'
+        type: choice
+        options:
+          - balanced
+          - aggressive
+          - size-optimized
+
+env:
+  ANDROID_NDK_VERSION: 'r26d'
+  ANDROID_API_LEVEL: '34'
+  MIRROR_SOURCES:
+    - 'https://gitlab.freedesktop.org/mesa/mesa.git'
+    - 'https://github.com/K11MCH1/mesa.git'
+    - 'https://gitlab.freedesktop.org/robclark/mesa.git'
+
+permissions:
+  contents: write
+
+jobs:
+  setup-environment:
+    runs-on: ubuntu-24.04
+    outputs:
+      mesa_source: ${{ steps.select-source.outputs.selected_source }}
+      patches_list: ${{ steps.scan-patches.outputs.patches_json }}
+      device_config: ${{ steps.device-config.outputs.config }}
+      WORKSPACE: ${{ steps.setup-ws.outputs.WORKSPACE }}
+    
+    steps:
+      - name: Install Prerequisites
+        run: sudo apt-get update && sudo apt-get install -y jq curl git
+
+      - name: Checkout with patches directory
+        uses: actions/checkout@v4
+        with:
+          path: source
+          
+      - name: Setup workspace
+        id: setup-ws
+        run: |
+          mkdir -p ${{ github.workspace }}/build
+          mkdir -p ${{ github.workspace }}/cache
+          mkdir -p ${{ github.workspace }}/patches/device-specific
+          echo "WORKSPACE=${{ github.workspace }}" >> $GITHUB_ENV
+          echo "WORKSPACE=${{ github.workspace }}" >> $GITHUB_OUTPUT
+          
+      - name: Select optimal Mesa source
+        id: select-source
+        shell: bash
+        run: |
+          # Convert YAML array to Bash array
+          SOURCES=("https://gitlab.freedesktop.org/mesa/mesa.git" "https://github.com/K11MCH1/mesa.git" "https://gitlab.freedesktop.org/robclark/mesa.git")
+          FASTEST_SOURCE=""
+          FASTEST_TIME=999999
+          
+          for SOURCE in "${SOURCES[@]}"; do
+            echo "Testing: $SOURCE"
+            START_TIME=$(date +%s%N)
+            # Use git ls-remote to test connectivity without full clone
+            if git ls-remote --heads "$SOURCE" "main" >/dev/null 2>&1; then
+              END_TIME=$(date +%s%N)
+              TIME_MS=$(( (END_TIME - START_TIME) / 1000000 ))
+              echo "Response time: ${TIME_MS}ms"
+              
+              if [ $TIME_MS -lt $FASTEST_TIME ]; then
+                FASTEST_TIME=$TIME_MS
+                FASTEST_SOURCE="$SOURCE"
+              fi
+            fi
+          done
+          
+          # Fallback if all fail
+          if [ -z "$FASTEST_SOURCE" ]; then
+             FASTEST_SOURCE="https://gitlab.freedesktop.org/mesa/mesa.git"
+          fi
+
+          echo "Selected fastest source: $FASTEST_SOURCE (${FASTEST_TIME}ms)"
+          echo "selected_source=$FASTEST_SOURCE" >> $GITHUB_OUTPUT
+          
+      - name: Device-specific configuration
+        id: device-config
+        run: |
+          DEVICE="${{ github.event.inputs.target_device }}"
+          
+          case $DEVICE in
+            "adreno-730")
+              CONFIG='{
+                "gpu_id": "730",
+                "arch": "a6xx",
+                "kmds": ["kgsl"],
+                "patches": ["tu6-optimizations", "memory-tiling"],
+                "features": ["VK_EXT_subgroup_size_control"],
+                "min_api": 31
+              }'
+              ;;
+            "adreno-740")
+              CONFIG='{
+                "gpu_id": "740",
+                "arch": "a7xx",
+                "kmds": ["kgsl"],
+                "patches": ["gen7-support", "lrz-fix"],
+                "features": ["VK_KHR_fragment_shading_rate"],
+                "min_api": 33
+              }'
+              ;;
+            "adreno-750")
+              CONFIG='{
+                "gpu_id": "750",
+                "arch": "a7xx",
+                "kmds": ["msm", "kgsl"],
+                "patches": ["gen8-support", "lrz-layout-fix", "glymur-support"],
+                "features": ["VK_KHR_acceleration_structure", "VK_KHR_ray_tracing_pipeline"],
+                "min_api": 34,
+                "experimental": true
+              }'
+              ;;
+            *)
+              CONFIG='{
+                "gpu_id": "generic",
+                "arch": "a6xx",
+                "kmds": ["kgsl"],
+                "patches": [],
+                "min_api": 27
+              }'
+              ;;
+          esac
+          
+          echo "$CONFIG" | jq .
+          echo "config=$(echo "$CONFIG" | jq -c .)" >> $GITHUB_OUTPUT
+          
+      - name: Scan and categorize patches
+        id: scan-patches
+        run: |
+          PATCHES_DIR="${{ github.workspace }}/source/patches"
+          PATCH_DB="{}"
+          
+          # Create patches dir if it doesn't exist to avoid errors
+          mkdir -p "$PATCHES_DIR"
+          
+          if [ -d "$PATCHES_DIR" ]; then
+            declare -A PATCH_CATEGORIES
+            
+            # Enable nullglob to handle empty directories
+            shopt -s nullglob
+            for PATCH in "$PATCHES_DIR"/*.patch "$PATCHES_DIR"/device-specific/*.patch; do
+              [ -f "$PATCH" ] || continue
+              
+              PATCH_NAME=$(basename "$PATCH")
+              
+              if grep -q "sysmem\|memory" "$PATCH"; then
+                CATEGORY="memory"
+              elif grep -q "gen8\|glymur\|kaanapali" "$PATCH"; then
+                CATEGORY="gen8"
+              elif grep -q "perf\|optimiz" "$PATCH"; then
+                CATEGORY="performance"
+              elif grep -q "fix\|bug" "$PATCH"; then
+                CATEGORY="bugfix"
+              else
+                CATEGORY="misc"
+              fi
+              
+              COMPATIBLE_WITH="all"
+              if grep -q "730\|a730" "$PATCH"; then
+                COMPATIBLE_WITH="adreno-730"
+              elif grep -q "740\|a740" "$PATCH"; then
+                COMPATIBLE_WITH="adreno-740"
+              elif grep -q "750\|a750\|gen8" "$PATCH"; then
+                COMPATIBLE_WITH="adreno-750"
+              fi
+              
+              # Using jq -c for compact JSON output
+              PATCH_INFO=$(jq -n -c \
+                --arg name "$PATCH_NAME" \
+                --arg category "$CATEGORY" \
+                --arg compatible "$COMPATIBLE_WITH" \
+                --arg path "$PATCH" \
+                '{name: $name, category: $category, compatible: $compatible, path: $path}')
+              
+              PATCH_CATEGORIES["$PATCH_NAME"]=$PATCH_INFO
+            done
+            shopt -u nullglob
+            
+            if [ ${#PATCH_CATEGORIES[@]} -gt 0 ]; then
+                PATCH_DB=$(printf '%s\n' "${PATCH_CATEGORIES[@]}" | jq -s -c 'map({key: .name, value: .}) | from_entries')
+            fi
+          fi
+          
+          echo "patches_json=$PATCH_DB" >> $GITHUB_OUTPUT
+          
+      - name: Automatic patch discovery and update
+        if: ${{ github.event.inputs.enable_auto_patches == 'true' }}
+        run: |
+          AUTO_PATCH_DIR="${{ github.workspace }}/cache/auto-patches"
+          mkdir -p "$AUTO_PATCH_DIR"
+          
+          PATCH_SOURCES=(
+            "https://raw.githubusercontent.com/K11MCH1/AdrenoToolsDrivers/v26.0.0/patches/"
+            "https://gitlab.freedesktop.org/mesa/mesa/-/raw/main/.gitlab-ci/patch.d/"
+          )
+          
+          # Fetch prefer_sysmem patch
+          for SOURCE in "${PATCH_SOURCES[@]}"; do
+            echo "Checking: ${SOURCE}prefer_sysmem.patch"
+            if curl -s -f -L "${SOURCE}prefer_sysmem.patch" -o "$AUTO_PATCH_DIR/prefer_sysmem.patch.tmp"; then
+              if [ -s "$AUTO_PATCH_DIR/prefer_sysmem.patch.tmp" ]; then
+                mv "$AUTO_PATCH_DIR/prefer_sysmem.patch.tmp" "$AUTO_PATCH_DIR/prefer_sysmem.patch"
+                echo "✓ Updated prefer_sysmem.patch from ${SOURCE}"
+                break
+              fi
+            fi
+          done
+          
+          DEVICE="${{ github.event.inputs.target_device }}"
+          if [ "$DEVICE" = "adreno-750" ]; then
+            echo "Fetching Gen8-specific patches..."
+            # Note: Hardcoded specific patches might expire, using generic fetch logic is safer
+            curl -s -f -L "https://gitlab.freedesktop.org/robclark/mesa/-/raw/tu/gen8/patches/gen8_support.patch" -o "$AUTO_PATCH_DIR/gen8_support.patch" || true
+          fi
+          
+          # Ensure patch directory exists before copy
+          mkdir -p "${{ github.workspace }}/source/patches/"
+          cp "$AUTO_PATCH_DIR"/*.patch "${{ github.workspace }}/source/patches/" 2>/dev/null || true
+
+  build-turnip:
+    needs: setup-environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Restore workspace and patches
+        run: |
+          # Copy patches from setup job if they were downloaded
+          mkdir -p ${{ github.workspace }}/source
+          if [ -d "${{ needs.setup-environment.outputs.WORKSPACE }}/source/patches" ]; then
+            cp -r ${{ needs.setup-environment.outputs.WORKSPACE }}/source/patches ${{ github.workspace }}/source/
+          fi
+          
+      - name: Install dependencies (optimized)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build \
+            python3-pip python3-mako \
+            flex bison \
+            patchelf curl unzip \
+            clang lld llvm \
+            libclang-dev \
+            pkg-config \
+            jq
+          
+          # Fix for Ubuntu 24.04 PEP 668: Use --break-system-packages
+          pip3 install --break-system-packages --upgrade meson mako
+          
+      - name: Cache Android NDK and build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            ${{ github.workspace }}/android-ndk-${{ env.ANDROID_NDK_VERSION }}
+            ${{ github.workspace }}/build/mesa-cache
+          key: ${{ runner.os }}-ndk-${{ env.ANDROID_NDK_VERSION }}-mesa-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ndk-${{ env.ANDROID_NDK_VERSION }}
+            
+      - name: Setup Android NDK
+        run: |
+          if [ ! -d "android-ndk-${{ env.ANDROID_NDK_VERSION }}" ]; then
+            NDK_ZIP="android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip"
+            echo "Downloading NDK..."
+            curl -L -o "$NDK_ZIP" \
+              "https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip"
+            unzip -q "$NDK_ZIP"
+            rm "$NDK_ZIP"
+          fi
+          
+          NDK_PATH="$PWD/android-ndk-${{ env.ANDROID_NDK_VERSION }}"
+          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
+          echo "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          
+      - name: Clone Mesa from selected source
+        run: |
+          MESA_SOURCE="${{ needs.setup-environment.outputs.mesa_source }}"
+          MESA_BRANCH="${{ github.event.inputs.mesa_branch }}"
+          DEVICE="${{ github.event.inputs.target_device }}"
+          
+          echo "Cloning from: $MESA_SOURCE"
+          
+          if [ "$DEVICE" = "adreno-750" ]; then
+            echo "Using specialized branch for Adreno 750"
+            git clone --depth 1 --branch tu/gen8 \
+              "https://gitlab.freedesktop.org/robclark/mesa.git" \
+              mesa-source || git clone --depth 1 --branch main "$MESA_SOURCE" mesa-source
+          else
+            git clone --depth 1 --branch "$MESA_BRANCH" \
+              "$MESA_SOURCE" \
+              mesa-source
+          fi
+          
+          cd mesa-source
+          MESA_COMMIT=$(git rev-parse --short HEAD)
+          echo "MESA_COMMIT=$MESA_COMMIT" >> $GITHUB_ENV
+          
+      - name: Smart patch application system
+        run: |
+          cd mesa-source
+          
+          DEVICE_CONFIG='${{ needs.setup-environment.outputs.device_config }}'
+          
+          GPU_ID=$(echo "$DEVICE_CONFIG" | jq -r '.gpu_id')
+          REQUIRED_PATCHES=$(echo "$DEVICE_CONFIG" | jq -r '.patches[]?' | tr '\n' ' ')
+          ARCH=$(echo "$DEVICE_CONFIG" | jq -r '.arch')
+          
+          echo "Applying patches for $GPU_ID ($ARCH)"
+          
+          smart_apply_patch() {
+            local patch_name="$1"
+            local found_path=""
+            
+            # Search order
+            PATHS=(
+              "${{ github.workspace }}/source/patches/$patch_name"
+              "${{ github.workspace }}/source/patches/device-specific/$patch_name"
+            )
+            
+            for p in "${PATHS[@]}"; do
+              if [ -f "$p" ]; then
+                found_path="$p"
+                break
+              fi
+            done
+            
+            if [ -z "$found_path" ]; then
+               echo "ℹ Patch $patch_name not found locally, skipping."
+               return 0
+            fi
+            
+            echo "Applying $patch_name..."
+            if git apply --check "$found_path" 2>/dev/null; then
+              git apply "$found_path"
+              echo "✓ Applied $patch_name"
+              echo "$patch_name" >> applied_patches.log
+            elif git apply --reject "$found_path" 2>/dev/null; then
+              echo "⚠ Partially applied $patch_name"
+              echo "$patch_name (partial)" >> applied_patches.log
+            else
+              echo "✗ Failed to apply $patch_name"
+            fi
+          }
+          
+          for PATCH in $REQUIRED_PATCHES; do
+            smart_apply_patch "$PATCH.patch"
+          done
+          
+          if [ "${{ github.event.inputs.enable_auto_patches }}" == "true" ]; then
+             smart_apply_patch "prefer_sysmem.patch"
+          fi
+          
+          if [ -f applied_patches.log ]; then
+            echo "APPLIED_PATCHES_COUNT=$(wc -l < applied_patches.log)" >> $GITHUB_ENV
+          else
+            echo "APPLIED_PATCHES_COUNT=0" >> $GITHUB_ENV
+          fi
+          
+      - name: Configure build with device optimizations
+        run: |
+          cd mesa-source
+          
+          DEVICE_CONFIG='${{ needs.setup-environment.outputs.device_config }}'
+          GPU_ID=$(echo "$DEVICE_CONFIG" | jq -r '.gpu_id')
+          KMD_LIST=$(echo "$DEVICE_CONFIG" | jq -r '.kmds | join(",")')
+          
+          # Optimization Flags
+          OPT_FLAGS="-O2"
+          if [ "${{ github.event.inputs.optimization_level }}" == "aggressive" ]; then
+            OPT_FLAGS="-O3 -flto=thin"
+            if [ "$GPU_ID" == "750" ]; then OPT_FLAGS="$OPT_FLAGS -march=armv8.5-a -Dtu-max-vertices=2147483647"; fi
+            if [ "$GPU_ID" == "740" ]; then OPT_FLAGS="$OPT_FLAGS -march=armv8.4-a"; fi
+          elif [ "${{ github.event.inputs.optimization_level }}" == "size-optimized" ]; then
+            OPT_FLAGS="-Oz"
+          fi
+          
+          # Cross file generation
+          cat > android_cross.ini << EOF
+          [binaries]
+          c = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang'
+          cpp = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++'
+          ar = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          ld = 'lld'
+          pkgconfig = 'pkg-config'
+          
+          [properties]
+          c_args = ['$OPT_FLAGS']
+          cpp_args = ['$OPT_FLAGS']
+          c_link_args = ['$OPT_FLAGS', '-fuse-ld=lld']
+          cpp_link_args = ['$OPT_FLAGS', '-fuse-ld=lld']
+          needs_exe_wrapper = true
+          
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          EOF
+          
+          meson setup build-android \
+            --cross-file android_cross.ini \
+            --buildtype release \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=${{ env.ANDROID_API_LEVEL }} \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=$KMD_LIST \
+            -Dgallium-drivers= \
+            -Dstrip=true \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dopengl=false \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dshared-glapi=disabled \
+            -Dtools=
+          
+      - name: Build
+        run: |
+          cd mesa-source/build-android
+          ninja src/freedreno/vulkan/libvulkan_freedreno.so
+          
+      - name: Package
+        run: |
+          mkdir -p output
+          DEVICE="${{ github.event.inputs.target_device }}"
+          MESA_COMMIT="${{ env.MESA_COMMIT }}"
+          LIB_NAME="vulkan.${DEVICE}.${MESA_COMMIT}.so"
+          
+          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so \
+             "output/$LIB_NAME"
+          
+          # Create Metadata
+          cat > "output/metadata.json" << EOF
+          {
+            "device": "${DEVICE}",
+            "commit": "${MESA_COMMIT}",
+            "timestamp": "$(date -Iseconds)",
+            "optimization": "${{ github.event.inputs.optimization_level }}",
+            "patches_applied": ${{ env.APPLIED_PATCHES_COUNT }}
+          }
+          EOF
+          
+          # Zip it
+          cd output
+          zip -9 "turnip-${DEVICE}-${MESA_COMMIT}.zip" *
+          sha256sum "turnip-${DEVICE}-${MESA_COMMIT}.zip" > "turnip-${DEVICE}-${MESA_COMMIT}.sha256"
+          
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-${{ github.event.inputs.target_device }}-${{ env.MESA_COMMIT }}
+          path: |
+            output/*.zip
+            output/*.sha256
+            output/metadata.json
+
+      - name: Create GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: turnip-${{ github.event.inputs.target_device }}-${{ env.MESA_COMMIT }}
+          name: "Turnip ${{ github.event.inputs.target_device }} (${{ env.MESA_COMMIT }})"
+          files: |
+            output/*.zip
+            output/*.sha256

@@ -1,1 +1,222 @@
+name: Build Turnip v26.0.0 R8
 
+on:
+  workflow_dispatch:
+    inputs:
+      build_variant:
+        description: 'Build Variant'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - regular
+          - gmem
+          - sysmem
+          - a8xx
+          - autotuner
+      enable_lrz:
+        description: 'Enable LRZ'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  MESA_COMMIT: "e9a83d530cce"
+  MESA_VERSION: "26.0.0"
+  REVISION: "R8"
+  NDK_VERSION: "r29"
+  API_LEVEL: "34"
+  VULKAN_VERSION: "1.4.335"
+
+jobs:
+  build-turnip:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: regular
+            suffix: ""
+            c_args: ""
+          - variant: gmem
+            suffix: "_Gmem"
+            c_args: "-DTU_DEFAULT_GMEM=1"
+          - variant: sysmem
+            suffix: "_Sysmem"
+            c_args: "-DTU_DEFAULT_SYSMEM=1"
+          - variant: a8xx
+            suffix: "_a8xx"
+            c_args: "-DEXPERIMENTAL_A8XX=1"
+          - variant: autotuner
+            suffix: "_Autotuner"
+            c_args: ""
+    steps:
+      - name: Check Build Selection
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.build_variant }}" = "all" ] || \
+             [ "${{ github.event.inputs.build_variant }}" = "${{ matrix.variant }}" ]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout
+        if: steps.check.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        if: steps.check.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build python3-pip python3-mako \
+            flex bison patchelf curl unzip clang lld llvm cmake pkg-config
+
+      - name: Build Glslang
+        if: steps.check.outputs.run == 'true'
+        run: |
+          git clone --depth 1 --branch 15.1.0 https://github.com/KhronosGroup/glslang.git
+          cmake -S glslang -B glslang/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/glslang \
+            -DENABLE_OPT=0
+          cmake --build glslang/build -j$(nproc)
+          cmake --install glslang/build
+          echo "$HOME/glslang/bin" >> $GITHUB_PATH
+
+      - name: Setup Meson
+        if: steps.check.outputs.run == 'true'
+        run: pip3 install --upgrade meson
+
+      - name: Setup NDK
+        if: steps.check.outputs.run == 'true'
+        run: |
+          curl -sL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip"
+          unzip -q ndk.zip
+          echo "NDK=$PWD/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Clone Mesa
+        if: steps.check.outputs.run == 'true'
+        run: |
+          git clone --depth 100 https://gitlab.freedesktop.org/mesa/mesa.git
+          cd mesa && git checkout ${{ env.MESA_COMMIT }}
+
+      - name: Apply a8xx Patches
+        if: steps.check.outputs.run == 'true' && matrix.variant == 'a8xx'
+        run: |
+          cd mesa
+          git remote add robclark https://gitlab.freedesktop.org/robclark/mesa.git
+          git fetch robclark tu/gen8
+          git merge --no-commit --no-ff FETCH_HEAD || true
+
+      - name: Configure
+        if: steps.check.outputs.run == 'true'
+        run: |
+          cd mesa
+          
+          cat > cross.ini << 'EOF'
+          [binaries]
+          c = ['aarch64-linux-android${{ env.API_LEVEL }}-clang']
+          cpp = ['aarch64-linux-android${{ env.API_LEVEL }}-clang++']
+          ar = ['llvm-ar']
+          strip = ['llvm-strip']
+          ld = ['lld']
+          
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv9-a'
+          endian = 'little'
+          EOF
+          
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
+          meson setup build --cross-file cross.ini \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=${{ env.API_LEVEL }} \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
+            -Dbuildtype=release \
+            -Dstrip=true \
+            -Dgallium-drivers= \
+            -Dopengl=false \
+            -Degl=disabled \
+            -Dshader-cache=disabled \
+            -Dc_args="-I$SYSROOT/usr/include -O3 -march=armv9-a+crypto -g0 ${{ matrix.c_args }}" \
+            -Dcpp_args="-I$SYSROOT/usr/include -O3 -march=armv9-a+crypto -g0 ${{ matrix.c_args }}" \
+            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz" \
+            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz"
+
+      - name: Build
+        if: steps.check.outputs.run == 'true'
+        run: |
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
+
+      - name: Package
+        if: steps.check.outputs.run == 'true'
+        run: |
+          mkdir -p out/lib64
+          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so out/lib64/vulkan.adreno.so
+          
+          LRZ="${{ github.event.inputs.enable_lrz }}"
+          TU_DEBUG=""
+          [ "$LRZ" = "false" ] && TU_DEBUG="nolrz"
+          [ "${{ matrix.variant }}" = "gmem" ] && TU_DEBUG="${TU_DEBUG:+$TU_DEBUG,}gmem"
+          [ "${{ matrix.variant }}" = "sysmem" ] && TU_DEBUG="${TU_DEBUG:+$TU_DEBUG,}sysmem"
+          
+          cat > out/meta.json << EOF
+          {
+            "schemaVersion": 1,
+            "name": "Turnip v${{ env.MESA_VERSION }} ${{ env.REVISION }}${{ matrix.suffix }}",
+            "packageVersion": "${{ env.MESA_VERSION }}-${{ env.REVISION }}",
+            "driverVersion": "${{ env.MESA_VERSION }}",
+            "vulkanVersion": "${{ env.VULKAN_VERSION }}",
+            "minApi": ${{ env.API_LEVEL }},
+            "libraryName": "vulkan.adreno.so",
+            "tuDebug": "$TU_DEBUG",
+            "baseCommit": "${{ env.MESA_COMMIT }}"
+          }
+          EOF
+          
+          cd out && zip -r ../Turnip_v${{ env.MESA_VERSION }}_${{ env.REVISION }}${{ matrix.suffix }}.zip .
+
+      - name: Upload
+        if: steps.check.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-${{ matrix.variant }}
+          path: "*.zip"
+
+  release:
+    needs: build-turnip
+    runs-on: ubuntu-24.04
+    if: github.event.inputs.build_variant == 'all'
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ env.MESA_VERSION }}-${{ env.REVISION }}
+          name: "v${{ env.MESA_VERSION }} - Revision 8"
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

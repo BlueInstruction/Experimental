@@ -1,1 +1,1 @@
-# Mesa Turnip Driver - Adreno Optimized Build
+# Mesa Turnip Driver for Android Adreno GPUs

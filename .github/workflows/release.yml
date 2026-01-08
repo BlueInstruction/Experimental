@@ -1,190 +1,115 @@
-name: Release Turnip Driver (Improved)
+name: Build Turnip Driver for Android Emulator
 
 on:
   workflow_dispatch:
-    inputs:
-      mesa_branch:
-        description: 'Mesa branch/tag'
-        required: false
-        default: 'mesa-26.1.8'
-      target_device:
-        description: 'Target Device'
-        required: false
-        default: 'adreno-750'
-        type: choice
-        options:
-          - adreno-730
-          - adreno-740
-          - adreno-750
   push:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-24.04
+    
     env:
-      MESA_BRANCH: ${{ github.event.inputs.mesa_branch || 'mesa-26.1.8' }}
-      TARGET_DEVICE: ${{ github.event.inputs.target_device || 'adreno-750' }}
-      MESA_SHADER_CACHE_MAX_SIZE: "10G"
-      MESA_SHADER_CACHE_DIR: "/data/local/tmp/mesa_cache"
-      TU_DEBUG: "noconform"
-      FREEDRENO_TURBO: "1"
-      TU_ASYNC_COMPUTE: "1"
-      MESA_VK_WSI_PRESENT_MODE: "mailbox"
-      MESA_NO_ERROR: "1"
-      MESA_GL_VERSION_OVERRIDE: "4.6"
-      MESA_GLSL_VERSION_OVERRIDE: "460"
-
+      MESA_VERSION: "26.0.0"
+      ANDROID_NDK_VERSION: "r27"
+      ANDROID_API_LEVEL: "34"
+      
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            ninja-build python3-pip python3-mako flex bison \
-            patchelf curl unzip clang lld llvm cmake zlib1g-dev \
-            libexpat1-dev libdrm-dev libwayland-dev wayland-protocols
+            meson ninja-build python3-pip python3-mako \
+            libdrm-dev libxcb1-dev libx11-xcb-dev libxshmfence-dev \
+            libxxf86vm-dev libxrandr-dev zlib1g-dev libexpat1-dev \
+            libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            glslang-tools spirv-tools llvm clang lld \
+            flex bison pkg-config cmake git wget unzip
 
-      - name: Build glslang from Source
+      - name: Setup Android NDK
         run: |
-          git clone --depth 1 --branch 15.1.0 https://github.com/KhronosGroup/glslang.git
-          cmake -S glslang -B glslang/build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=$HOME/glslang_install \
-            -DENABLE_OPT=0
-          cmake --build glslang/build -j$(nproc)
-          cmake --install glslang/build
-          echo "$HOME/glslang_install/bin" >> $GITHUB_PATH
+          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip
+          unzip -q android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
 
-      - name: Install Meson
+      - name: Clone Mesa source
         run: |
-          pip3 install --upgrade pip --break-system-packages
-          pip3 install "meson>=1.4" --break-system-packages
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          git clone --depth 1 --branch mesa-${{ env.MESA_VERSION }} \
+            https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
 
-      - name: Setup Android NDK r29
+      - name: Create cross-compilation file
         run: |
-          curl -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-          unzip -q ndk.zip
-          echo "NDK_PATH=$PWD/android-ndk-r29" >> $GITHUB_ENV
-
-      - name: Clone Mesa
-        run: git clone --depth 1 --branch ${{ env.MESA_BRANCH }} https://gitlab.freedesktop.org/mesa/mesa.git mesa-source
-
-      - name: Apply Performance Patches
-        run: |
-          cd mesa-source
-          cat > emulator_perf.patch << 'PATCH_EOF'
-          --- a/src/freedreno/vulkan/tu_device.c
-          +++ b/src/freedreno/vulkan/tu_device.c
-          @@ -1,3 +1,8 @@
-          +#ifndef TU_SHADER_CACHE_SIZE
-          +#define TU_SHADER_CACHE_SIZE (10ULL * 1024 * 1024 * 1024)
-          +#endif
-          +#define TU_MAX_DESCRIPTOR_SETS 32
-          +#define TU_ENABLE_ASYNC_COMPUTE 1
-          +#define TU_EMULATOR_OPTIMIZATIONS 1
-          PATCH_EOF
-          git apply emulator_perf.patch || echo "Patch applied or already exists"
-
-      - name: Build Turnip
-        run: |
-          cd mesa-source
-          NDK_SYSROOT="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          
-          cat > android_cross.ini << EOF
+          cat > android_cross.ini << 'EOF'
           [binaries]
-          c = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang'
-          cpp = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang++'
-          ar = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-          strip = '${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-          
+          c = 'aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang'
+          cpp = 'aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++'
+          ar = 'llvm-ar'
+          strip = 'llvm-strip'
+          pkgconfig = 'pkg-config'
+
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
           cpu = 'armv8'
           endian = 'little'
-          
-          [properties]
-          sys_root = '${NDK_SYSROOT}'
-          
+
           [built-in options]
-          c_args = ['-O3', '-march=armv8.2-a+dotprod+fp16', '-mtune=cortex-a78', '-ffast-math', '-flto=thin', '-DNDEBUG', '-DTU_SHADER_CACHE_SIZE=10737418240']
-          cpp_args = ['-O3', '-march=armv8.2-a+dotprod+fp16', '-mtune=cortex-a78', '-ffast-math', '-flto=thin', '-DNDEBUG', '-DTU_SHADER_CACHE_SIZE=10737418240']
-          c_link_args = ['-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/34', '-lz', '-flto=thin', '-fuse-ld=lld']
-          cpp_link_args = ['-L${NDK_SYSROOT}/usr/lib/aarch64-linux-android/34', '-lz', '-flto=thin', '-fuse-ld=lld']
+          c_args = ['-march=armv8.2-a', '-O3', '-flto=thin', '-fuse-ld=lld', '-DTU_SHADER_CACHE_SIZE=536870912']
+          cpp_args = ['-march=armv8.2-a', '-O3', '-flto=thin', '-fuse-ld=lld', '-DTU_SHADER_CACHE_SIZE=536870912']
+          c_link_args = ['-fuse-ld=lld', '-flto=thin']
+          cpp_link_args = ['-fuse-ld=lld', '-flto=thin']
           EOF
+
+      - name: Build Mesa Turnip
+        run: |
+          export PATH="${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           
-          meson setup build-android --cross-file android_cross.ini \
-            -Dplatforms=android \
-            -Dplatform-sdk-version=34 \
+          cd mesa-source
+          meson setup build-android \
+            --cross-file ../android_cross.ini \
+            --prefix=/usr \
+            -Dplatforms= \
+            -Dplatform-sdk-version=${{ env.ANDROID_API_LEVEL }} \
             -Dandroid-stub=true \
+            -Dgallium-drivers= \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=kgsl \
             -Dbuildtype=release \
-            -Dstrip=true \
-            -Db_ndebug=true \
             -Db_lto=true \
-            -Dshader-cache=true \
-            -Dzstd=enabled \
-            -Dgallium-drivers= \
-            -Dopengl=false \
-            -Degl=disabled \
-            -Dgles1=disabled \
-            -Dgles2=disabled \
-            -Dglx=disabled \
-            -Dgbm=disabled \
-            -Dvalgrind=disabled \
-            -Dlibunwind=disabled
+            -Db_ndebug=true \
+            -Dcpp_rtti=false \
+            -Dshader-cache=enabled \
+            -Dshader-cache-default=true
           
-          ninja -C build-android src/freedreno/vulkan/libvulkan_freedreno.so
+          ninja -C build-android
 
-      - name: Package and Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package artifacts
         run: |
-          VERSION="${MESA_BRANCH#mesa-}"
-          TAG="v${VERSION}-${TARGET_DEVICE}-emulator"
+          mkdir -p release
+          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so release/
           
-          mkdir -p turnip
-          cp mesa-source/build-android/src/freedreno/vulkan/libvulkan_freedreno.so turnip/
-          
-          cat > turnip/meta.json << EOF
-          {
-            "schemaVersion": 1,
-            "name": "Mesa v${VERSION} Emulator Optimized",
-            "description": "Turnip for ${TARGET_DEVICE} - WinLator/Emulator Build",
-            "author": "Mesa Project",
-            "packageVersion": "${VERSION}",
-            "vendor": "Mesa",
-            "driverVersion": "${VERSION}",
-            "minApi": 30,
-            "libraryName": "libvulkan_freedreno.so",
-            "features": ["10GB_SHADER_CACHE", "LTO", "ASYNC_COMPUTE", "EMULATOR_OPTIMIZED"]
-          }
-          EOF
-          
-          cat > turnip/env_config.sh << 'EOF'
-          export MESA_SHADER_CACHE_MAX_SIZE=10G
-          export MESA_SHADER_CACHE_DIR=/data/local/tmp/mesa_cache
+          cat > release/env_config.sh << 'EOF'
+          export MESA_VK_WSI_PRESENT_MODE=fifo
           export TU_DEBUG=noconform
-          export FREEDRENO_TURBO=1
-          export TU_ASYNC_COMPUTE=1
-          export MESA_VK_WSI_PRESENT_MODE=mailbox
-          export MESA_NO_ERROR=1
+          export MESA_SHADER_CACHE_MAX_SIZE=512M
+          export MESA_GLSL_CACHE_DISABLE=0
           EOF
           
-          cd turnip && zip -r ../turnip_${TAG}.zip . && cd ..
-          
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            gh release create "${TAG}" \
-              --title "Turnip ${TAG}" \
-              --notes "High-performance Turnip build for ${TARGET_DEVICE} optimized for Android emulators (WinLator). Features: 10GB shader cache, LTO, async compute." \
-              turnip_${TAG}.zip
-          fi
+          echo "Mesa 26.0.0 Turnip - Emulator Optimized Build" > release/README.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-adreno-750-emulator-v26.0.0
+          path: release/
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          tag_name: v26.0.0-adreno-750-emulator

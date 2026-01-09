@@ -797,7 +797,7 @@ jobs:
             "commit": "$ACTUAL_COMMIT",
             "commitDate": "$COMMIT_DATE",
             "tuDebug": "${{ matrix.tu_debug }}",
-            "targetGPU": "Adreno 7xx (702/710/720/725/730/740/750)",
+            "targetGPU": "Adreno 7xx",
             "perfLevel": "${{ matrix.perf_level }}"
           }
           EOF

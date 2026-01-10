@@ -1,4 +1,4 @@
-name: Build Turnip
+name: Build Turnip - Adreno 8XX (A8XX)
 
 on:
   workflow_dispatch:

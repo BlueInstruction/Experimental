@@ -8,7 +8,7 @@ permissions:
 
 env:
   MESA_VERSION: "26.0.0"
-  BUILD_TAG: "devel"
+  BUILD_TAG: "devel-a8xx"
   NDK_VERSION: "r29"
   API_LEVEL: "34"
 
@@ -36,14 +36,6 @@ jobs:
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "date=$DATE" >> $GITHUB_OUTPUT
           echo "vulkan=$VK_VERSION" >> $GITHUB_OUTPUT
-          
-          echo "=========================================="
-          echo "  Mesa Gen8 Branch Info"
-          echo "=========================================="
-          echo "Commit: $SHA"
-          echo "Date: $DATE"
-          echo "Vulkan: $VK_VERSION"
-          echo "=========================================="
 
   build-turnip:
     needs: get-mesa-info
@@ -74,13 +66,11 @@ jobs:
 
       - name: Clone Mesa
         run: |
-          echo "Cloning Mesa from Gen8 branch..."
           git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
           cd mesa
           git remote add robclark https://gitlab.freedesktop.org/robclark/mesa.git
           git fetch robclark tu/gen8 --depth 1
           git checkout FETCH_HEAD
-          echo "Commit: $(git rev-parse --short HEAD)"
 
       - name: Configure Meson
         run: |
@@ -106,9 +96,8 @@ jobs:
           SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           
           PERF_FLAGS="-O3 -flto=full -ffast-math -fno-signed-zeros -fno-trapping-math -fomit-frame-pointer -funroll-loops -ftree-vectorize -fno-stack-protector -march=armv8.5-a"
-          LTO_MODE="full"
           
-          C_ARGS="-DA8XX_ENABLED=1 -DENABLE_GEN8=1 -DTU_DEFAULT_GMEM=1 -DTU_AGGRESSIVE_PREFETCH=1 -DNDEBUG"
+          C_ARGS="-DTU_DEBUG_DEFAULT=\"gmem,nolrz\" -DNDEBUG"
           
           meson setup build --cross-file cross.ini \
             -Dplatforms=android \
@@ -122,70 +111,71 @@ jobs:
             -Dglvnd=false \
             -Dc_args="-I$SYSROOT/usr/include $PERF_FLAGS -g0 $C_ARGS" \
             -Dcpp_args="-I$SYSROOT/usr/include $PERF_FLAGS -g0 $C_ARGS" \
-            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=$LTO_MODE" \
-            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=$LTO_MODE"
+            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=full" \
+            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=full"
 
       - name: Build
         run: |
           export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
 
-      - name: Check and Reduce Library Size
+      - name: Check Library Size
         run: |
           LIB_PATH="mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so"
-          
-          echo "=== Original File Size ==="
+          echo "=== Before Strip ==="
           ls -lh "$LIB_PATH"
           
-          echo "=== Stripping Debug Symbols ==="
           $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded "$LIB_PATH"
           
-          echo "=== File Size After Strip ==="
+          echo "=== After Strip ==="
           ls -lh "$LIB_PATH"
           
-          MIN_SIZE_MB=16
-          ACTUAL_SIZE_BYTES=$(stat -c%s "$LIB_PATH")
-          ACTUAL_SIZE_MB=$((ACTUAL_SIZE_BYTES / 1024 / 1024))
-          
-          echo "Minimum required size: ${MIN_SIZE_MB}MB"
-          echo "Actual size after strip: ${ACTUAL_SIZE_MB}MB"
-          
-          if [ $ACTUAL_SIZE_MB -ge $MIN_SIZE_MB ]; then
-            echo "SUCCESS: Library meets the minimum size requirement."
+          ACTUAL_SIZE_MB=$(stat -c%s "$LIB_PATH" | awk '{printf "%.0f", $1/1024/1024}')
+          if [ "$ACTUAL_SIZE_MB" -lt 16 ]; then
+            echo "::warning::Library size (${ACTUAL_SIZE_MB}MB) below expected 16MB"
           else
-            echo "WARNING: Library size (${ACTUAL_SIZE_MB}MB) is below the minimum (${MIN_SIZE_MB}MB)."
-            echo "This may indicate an incomplete or failed build. Consider checking the build logs."
+            echo "Library size OK: ${ACTUAL_SIZE_MB}MB"
           fi
 
       - name: Package
+        id: package
         run: |
           mkdir -p release/out
-          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/vulkan.ad08XX.so
+          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/vulkan.ad8xx.so
           
-          CURRENT_DATE=$(date +'%b-%d-%Y' | tr '[:upper:]' '[:lower:]')
-          ARCHIVE_NAME="turnip_v${{ env.MESA_VERSION }}_${{ env.BUILD_TAG }}_$CURRENT_DATE.zip"
+          cd mesa
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_DATE=$(git log -1 --format=%cd --date=short)
+          cd ..
+          
+          BUILD_DATE=$(date +'%b-%d-%Y' | tr '[:upper:]' '[:lower:]')
+          ARCHIVE_NAME="turnip_v${{ env.MESA_VERSION }}_${{ env.BUILD_TAG }}_${BUILD_DATE}.zip"
           
           cat > release/out/meta.json << EOF
           {
             "schemaVersion": 1,
             "name": "$ARCHIVE_NAME",
-            "description": "",
-            "author": "Mesa",
+            "description": "Turnip Adreno 8xx - GMEM + NoLRZ",
+            "author": "Mesa/Freedreno",
             "packageVersion": "${{ env.MESA_VERSION }}",
             "vendor": "Mesa",
             "driverVersion": "Vulkan ${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
-            "libraryName": "vulkan.ad08XX.so"
+            "libraryName": "vulkan.ad8xx.so",
+            "buildCommit": "$COMMIT_SHA",
+            "buildDate": "$COMMIT_DATE",
+            "tuDebug": "gmem,nolrz"
           }
           EOF
           
           cd release/out && zip -r "../$ARCHIVE_NAME" .
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BUILD_TAG }}-${{ github.run_id }}
-          path: release/turnip_v${{ env.MESA_VERSION }}_${{ env.BUILD_TAG }}_*.zip
+          name: turnip-a8xx-${{ github.run_id }}
+          path: release/*.zip
           retention-days: 5
 
   release:
@@ -195,37 +185,37 @@ jobs:
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.BUILD_TAG }}-${{ github.run_id }}
+          name: turnip-a8xx-${{ github.run_id }}
           path: dist
 
       - name: Generate Checksum
         run: |
           cd dist
-          ARCHIVE_NAME=$(ls *.zip)
-          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          sha256sum *.zip > SHA256SUMS.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: build-${{ github.run_id }}
-          name: "Build ${{ github.run_id }}"
+          tag_name: v${{ env.MESA_VERSION }}-${{ github.run_id }}
+          name: "Turnip v${{ env.MESA_VERSION }} - Adreno 8xx"
           body: |
-            Automated Turnip Build from Gen8 Branch
+            ## Turnip Driver for Adreno 8xx (Gen8)
             
-            Build Information:
-            - Build ID: ${{ github.run_id }}
-            - Mesa Branch: robclark/tu/gen8
-            - Mesa Commit: ${{ needs.get-mesa-info.outputs.commit_sha }}
-            - Vulkan Version: ${{ needs.get-mesa-info.outputs.vulkan_version }}
-            - API Level: ${{ env.API_LEVEL }}
-            - Build Date: ${{ needs.build-turnip.outputs.build_date }}
-            
-            File Information:
-            Check meta.json inside the archive for details.
+            ### Build Info
+            | Item | Value |
+            |------|-------|
+            | Mesa Commit | `${{ needs.get-mesa-info.outputs.commit_sha }}` |
+            | Commit Date | ${{ needs.get-mesa-info.outputs.commit_date }} |
+            | Vulkan | ${{ needs.get-mesa-info.outputs.vulkan_version }} |
+            | NDK | ${{ env.NDK_VERSION }} |
+            | API Level | ${{ env.API_LEVEL }} |
+            | TU_DEBUG | `gmem,nolrz` |
+            | Branch | robclark/tu/gen8 |
+            | Build Date | ${{ needs.build-turnip.outputs.build_date }} |
             
           files: |
             dist/*.zip
-            dist/*.sha256
+            dist/SHA256SUMS.txt
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

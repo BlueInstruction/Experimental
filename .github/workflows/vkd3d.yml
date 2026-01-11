@@ -14,34 +14,27 @@ jobs:
         uses: Joshua-Ashton/arch-mingw-github-action@v8
         with:
           command: |
-            # Install zip
             sudo pacman -S --noconfirm zip
             
-            # Get latest release tag
             LATEST_TAG=$(curl -s https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
             
-            # Clone repository
             git clone --recursive --branch "$LATEST_TAG" https://github.com/HansKristian-Work/vkd3d-proton.git
             cd vkd3d-proton
             
-            # Build
-            ./package-release.sh "$LATEST_TAG" build --no-package
+            # Build without strip for full size
+            ./package-release.sh "$LATEST_TAG" build --no-package --dev-build
             
-            # Set variables
             VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
             SHA=$(git rev-parse --short HEAD)
             BUILD_DIR=$(find build -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
             VERSION_CODE=$((RANDOM % 3))
             
-            # Create package structure
             mkdir -p /tmp/pkg/system32
             mkdir -p /tmp/pkg/syswow64
             
-            # Copy files
             cp "$BUILD_DIR/x64/"*.dll /tmp/pkg/system32/
             cp "$BUILD_DIR/x86/"*.dll /tmp/pkg/syswow64/
             
-            # Create profile.json
             cat > /tmp/pkg/profile.json << EOF
             {
               "type": "VKD3D",
@@ -69,13 +62,24 @@ jobs:
             }
             EOF
             
-            # Create wcp package
             cd /tmp/pkg
             zip -r "/github/workspace/vkd3d-proton-${VERSION}-${SHA}.wcp" .
+            
+            echo "VERSION=${VERSION}" >> /github/workspace/build.env
+            echo "SHA=${SHA}" >> /github/workspace/build.env
 
-      - name: Upload WCP
-        uses: actions/upload-artifact@v4
+      - name: Load build info
+        run: |
+          cat build.env >> $GITHUB_ENV
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: vkd3d-proton-winlator
-          path: "*.wcp"
-          if-no-files-found: error
+          tag_name: vkd3d-${{ env.VERSION }}-${{ github.run_number }}
+          name: VKD3D-Proton ${{ env.VERSION }}
+          files: "*.wcp"
+          body: |
+            VKD3D-Proton build for Winlator
+            Version: ${{ env.VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,252 @@
+name: Build Turnip A7xx
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  MESA_VERSION: "26.0.0"
+  BUILD_TAG: "devel-a7xx"
+  NDK_VERSION: "r29"
+  API_LEVEL: "35"
+
+jobs:
+  get-mesa-info:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit_sha: ${{ steps.mesa.outputs.sha }}
+      commit_date: ${{ steps.mesa.outputs.date }}
+      vulkan_version: ${{ steps.mesa.outputs.vulkan }}
+    steps:
+      - name: Get Mesa Info
+        id: mesa
+        run: |
+          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
+          cd mesa
+          
+          SHA=$(git rev-parse --short HEAD)
+          DATE=$(git log -1 --format=%cd --date=short)
+          
+          version=$(awk -F'COMPLETE VK_MAKE_API_VERSION\\(|\\)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+          major=$(echo $version | cut -d "," -f 2 | xargs)
+          minor=$(echo $version | cut -d "," -f 3 | xargs)
+          patch=$(awk -F'VK_HEADER_VERSION |\\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+          VK_VERSION="$major.$minor.$patch"
+          
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "vulkan=$VK_VERSION" >> $GITHUB_OUTPUT
+
+  build-turnip:
+    needs: get-mesa-info
+    runs-on: ubuntu-24.04
+    outputs:
+      build_date: ${{ steps.set-date.outputs.build_date }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Build Date
+        id: set-date
+        run: echo "build_date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build python3-pip python3-mako \
+            flex bison patchelf curl unzip clang lld llvm cmake pkg-config \
+            glslang-tools libglvnd-dev ccache
+          pip install meson mako
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: turnip-a7xx-${{ github.run_id }}
+          max-size: 1G
+
+      - name: Setup NDK
+        run: |
+          curl -sL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip"
+          unzip -q ndk.zip
+          echo "NDK=$(pwd)/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Build SPIRV-Tools for Android
+        run: |
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Tools.git
+          cd SPIRV-Tools
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git external/spirv-headers
+          
+          mkdir build && cd build
+          
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/spirv-tools-android \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DCMAKE_ANDROID_NDK=$NDK \
+            -DCMAKE_ANDROID_API=${{ env.API_LEVEL }} \
+            -DSPIRV_SKIP_TESTS=ON \
+            -DSPIRV_SKIP_EXECUTABLES=ON \
+            -DBUILD_SHARED_LIBS=OFF
+          
+          make -j$(nproc)
+          make install
+          
+          echo "SPIRV_TOOLS_PATH=$HOME/spirv-tools-android" >> $GITHUB_ENV
+
+      - name: Clone Mesa
+        run: |
+          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
+
+      - name: Configure Meson
+        run: |
+          cd mesa
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          
+          cat > cross.ini << EOF
+          [binaries]
+          ar = '$NDK_BIN/llvm-ar'
+          c = ['ccache', '$NDK_BIN/aarch64-linux-android${{ env.API_LEVEL }}-clang']
+          cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${{ env.API_LEVEL }}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+          c_ld = 'lld'
+          cpp_ld = 'lld'
+          strip = '$NDK_BIN/llvm-strip'
+          pkg-config = ['pkg-config']
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          [properties]
+          sys_root = '$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
+          [built-in options]
+          pkg_config_path = ['${{ env.SPIRV_TOOLS_PATH }}/lib/pkgconfig']
+          EOF
+          
+          export PATH="$NDK_BIN:$PATH"
+          export PKG_CONFIG_PATH="$SPIRV_TOOLS_PATH/lib/pkgconfig:$PKG_CONFIG_PATH"
+          SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          
+          PERF_FLAGS="-O2 -flto=thin -fomit-frame-pointer -ffunction-sections -fdata-sections -fno-math-errno -fno-stack-protector"
+          
+          meson setup build --cross-file cross.ini \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=${{ env.API_LEVEL }} \
+            -Dandroid-stub=true \
+            -Dvulkan-drivers=freedreno \
+            -Dvulkan-beta=true \
+            -Dfreedreno-kmds=kgsl \
+            -Dbuildtype=release \
+            -Dstrip=true \
+            -Db_lto=true \
+            -Db_ndebug=true \
+            -Dgallium-drivers= \
+            -Dllvm=disabled \
+            -Dglvnd=disabled \
+            -Degl=disabled \
+            -Dgbm=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dopengl=false \
+            -Dglx=disabled \
+            -Dlibunwind=disabled \
+            -Dlmsensors=disabled \
+            -Dvalgrind=disabled \
+            -Dzstd=disabled \
+            -Dtools= \
+            -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 -DNDEBUG" \
+            -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 -DNDEBUG" \
+            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O2 -Wl,--gc-sections -Wl,--as-needed" \
+            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O2 -Wl,--gc-sections -Wl,--as-needed"
+
+      - name: Build
+        run: |
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
+
+      - name: Process Library
+        run: |
+          LIB_PATH="mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so"
+          NDK_BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          
+          $NDK_BIN/llvm-strip --strip-unneeded "$LIB_PATH"
+          patchelf --set-soname vulkan.adreno.so "$LIB_PATH"
+
+      - name: Package
+        id: package
+        run: |
+          mkdir -p release/out
+          cp mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so release/out/vulkan.ad07XX.so
+          
+          cd mesa
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          cd ..
+          
+          BUILD_DATE=$(date +'%b-%d-%Y' | tr '[:upper:]' '[:lower:]')
+          ARCHIVE_NAME="turnip_v${{ env.MESA_VERSION }}_${{ env.BUILD_TAG }}_${BUILD_DATE}.zip"
+          
+          cat > release/out/meta.json << EOF
+          {
+            "schemaVersion": 1,
+            "name": "Turnip - $(date +'%b %d, %Y') - ${COMMIT_SHA}",
+            "description": "Turnip Adreno 7xx",
+            "author": "Mesa/Freedreno",
+            "packageVersion": "${{ env.MESA_VERSION }}",
+            "vendor": "Mesa",
+            "driverVersion": "${{ env.MESA_VERSION }}/vk${{ needs.get-mesa-info.outputs.vulkan_version }}",
+            "minApi": 27,
+            "libraryName": "vulkan.ad07XX.so"
+          }
+          EOF
+          
+          cd release/out && zip -9 "../$ARCHIVE_NAME" ./*
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-a7xx-${{ github.run_id }}
+          path: release/*.zip
+          retention-days: 5
+
+  release:
+    needs: [get-mesa-info, build-turnip]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: turnip-a7xx-${{ github.run_id }}
+          path: dist
+
+      - name: Generate Checksum
+        run: |
+          cd dist
+          sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ env.MESA_VERSION }}-a7xx-${{ github.run_id }}
+          name: "Turnip v${{ env.MESA_VERSION }} - Adreno 7xx"
+          body: |
+            ## Build Info
+            | Info | Value |
+            |------|-------|
+            | Mesa Commit | `${{ needs.get-mesa-info.outputs.commit_sha }}` |
+            | Commit Date | ${{ needs.get-mesa-info.outputs.commit_date }} |
+            | Vulkan | ${{ needs.get-mesa-info.outputs.vulkan_version }} |
+            | NDK | ${{ env.NDK_VERSION }} |
+            | API Level | ${{ env.API_LEVEL }} |
+            | Build Date | ${{ needs.build-turnip.outputs.build_date }} |
+            
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 defaults:
   run:
@@ -157,14 +158,15 @@ jobs:
         run: |
           set -e
           cd staging && zip -r "../vkd3d-proton-${{ env.VER }}-${{ env.COMMIT }}.wcp" ./*
+          echo "WCP_FILE=vkd3d-proton-${{ env.VER }}-${{ env.COMMIT }}.wcp" >> $GITHUB_ENV
 
       - name: DEPLOY_RELEASE
         if: steps.check.outputs.SKIP_RUN == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ env.VER }}
           name: VKD3D-Proton ${{ env.VER }}
-          files: "*.wcp"
+          files: ${{ env.WCP_FILE }}
           body: |
             ## VKD3D-Proton ${{ env.VER }}
             
@@ -178,5 +180,3 @@ jobs:
             ### Files Included
             - d3d12.dll (~100KB - wrapper)
             - d3d12core.dll (~5MB - main library)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

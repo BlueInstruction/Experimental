@@ -30,7 +30,7 @@ jobs:
 
   build-vkd3d:
     needs: get-vkd3d-info
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     outputs:
       build_date: ${{ steps.set-date.outputs.build_date }}
     steps:
@@ -41,11 +41,15 @@ jobs:
         id: set-date
         run: echo "build_date=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
+      - name: Enable 32-bit Architecture
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+
       - name: Install Dependencies
         run: |
-          sudo apt-get update
           sudo apt-get install -y gcc-mingw-w64 g++-mingw-w64 \
-            meson ninja-build glslang-tools wine64 wine32 \
+            meson ninja-build glslang-tools \
             curl unzip zip git ccache
 
       - name: Setup ccache

@@ -1,4 +1,4 @@
-name: Build Turnip - Adreno 8XX (A8XX)
+name: Build Turnip
 
 on:
   workflow_dispatch:
@@ -191,17 +191,13 @@ jobs:
           {
             "schemaVersion": 1,
             "name": "$ARCHIVE_NAME",
-            "description": "Turnip Adreno 8xx - Performance Build",
+            "description": "Turnip Adreno 8xx",
             "author": "Mesa/Freedreno",
             "packageVersion": "${{ env.MESA_VERSION }}",
             "vendor": "Mesa",
             "driverVersion": "Vulkan ${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
             "libraryName": "vulkan.ad8xx.so",
-            "buildCommit": "$COMMIT_SHA",
-            "buildDate": "$COMMIT_DATE",
-            "tuDebug": "gmem,nolrz",
-            "optimizations": "LTO, O3, Loop-Unroll, Vectorize"
           }
           EOF
           
@@ -246,29 +242,12 @@ jobs:
             | Vulkan | ${{ needs.get-mesa-info.outputs.vulkan_version }} |
             | NDK | ${{ env.NDK_VERSION }} |
             | API Level | ${{ env.API_LEVEL }} |
-            | Branch | robclark/tu/gen8 |
+            | Branch | robclark/tu-gen8 |
             | Build Date | ${{ needs.build-turnip.outputs.build_date }} |
             
-            ### Performance Optimizations
-            | Optimization | Description |
-            |--------------|-------------|
-            | LTO Full | Link-Time Optimization |
-            | O3 | Maximum compiler optimizations |
-            | Loop Unrolling | Faster loop execution |
-            | Vectorization | SIMD optimizations |
-            | GC Sections | Remove unused code |
-            
-            ### Recommended Settings (Winlator/Emulators)
+            ### Recommended Settings
             ```
             TU_DEBUG=gmem,nolrz
-            ```
-            
-            ### For Performance
-            ```
-            TU_DEBUG=gmem,nolrz,nobin
-            ```
-            
-            ### For Stability Issues
             ```
             TU_DEBUG=sysmem,nolrz
             ```

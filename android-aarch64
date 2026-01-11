@@ -8,5 +8,5 @@ pkgconfig = 'pkg-config'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
-cpu = 'aarch64'
+cpu = 'armv8'
 endian = 'little'

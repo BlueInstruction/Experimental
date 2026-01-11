@@ -64,6 +64,32 @@ jobs:
           unzip -q ndk.zip
           echo "NDK=$(pwd)/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
+      - name: Build SPIRV-Tools for Android
+        run: |
+          export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Tools.git
+          cd SPIRV-Tools
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git external/spirv-headers
+          
+          mkdir build && cd build
+          
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=$HOME/spirv-tools-android \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DCMAKE_ANDROID_NDK=$NDK \
+            -DCMAKE_ANDROID_API=${{ env.API_LEVEL }} \
+            -DSPIRV_SKIP_TESTS=ON \
+            -DSPIRV_SKIP_EXECUTABLES=ON \
+            -DBUILD_SHARED_LIBS=OFF
+          
+          make -j$(nproc)
+          make install
+          
+          echo "SPIRV_TOOLS_PATH=$HOME/spirv-tools-android" >> $GITHUB_ENV
+
       - name: Clone Mesa
         run: |
           git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
@@ -71,55 +97,6 @@ jobs:
           git remote add robclark https://gitlab.freedesktop.org/robclark/mesa.git
           git fetch robclark tu/gen8 --depth 1
           git checkout FETCH_HEAD
-
-      - name: Patch Mesa to disable SPIRV-Tools
-        run: |
-          cd mesa
-          
-          # 1. Replace vtn_debug.c with stub
-          cat > src/compiler/spirv/vtn_debug.c << 'STUBEOF'
-          /*
-           * Stub implementation - SPIRV-Tools disabled for Android build
-           */
-          
-          #include "vtn_private.h"
-          #include <stdio.h>
-          #include <stdint.h>
-          #include <stddef.h>
-          
-          typedef void* spv_diagnostic;
-          
-          void vtn_print_spirv(struct vtn_builder *b, FILE *fp, const uint32_t *words,
-                               size_t word_count, spv_diagnostic *diagnostic);
-          
-          void
-          vtn_print_spirv(struct vtn_builder *b, FILE *fp, const uint32_t *words,
-                          size_t word_count, spv_diagnostic *diagnostic)
-          {
-             (void)b;
-             (void)diagnostic;
-             fprintf(fp, "SPIRV disassembly disabled\n");
-             fprintf(fp, "Binary: %zu words\n", word_count);
-          }
-          STUBEOF
-          
-          # 2. Disable SPIRV-Tools in meson.build
-          sed -i "s/dep_spirv_tools.found()/false/g" meson.build
-          sed -i "s/with_spirv_tools = true/with_spirv_tools = false/g" meson.build
-          sed -i "s/idep_spirv_tools,//g" src/compiler/spirv/meson.build || true
-          sed -i "s/dep_spirv_tools,//g" src/compiler/spirv/meson.build || true
-          
-          # 3. Remove SPIRV-Tools from link dependencies in spirv meson.build
-          sed -i "/SPIRV-Tools/d" src/compiler/spirv/meson.build || true
-          sed -i "/spirv_tools/d" src/compiler/spirv/meson.build || true
-          
-          # 4. Patch the main meson.build to not require SPIRV-Tools
-          sed -i "s/dependency('SPIRV-Tools-opt'/dependency('SPIRV-Tools-opt', required: false/g" meson.build
-          sed -i "s/dependency('SPIRV-Tools'/dependency('SPIRV-Tools', required: false/g" meson.build
-          sed -i "s/dependency('SPIRV-Tools-link'/dependency('SPIRV-Tools-link', required: false/g" meson.build
-          
-          # 5. Create null dependency for spirv tools
-          sed -i "s/idep_spirv_tools = .*/idep_spirv_tools = null_dep/g" src/compiler/spirv/meson.build || true
 
       - name: Configure Meson
         run: |
@@ -141,10 +118,11 @@ jobs:
           [properties]
           sys_root = '${{ env.NDK }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot'
           [built-in options]
-          pkg_config_path = []
+          pkg_config_path = ['${{ env.SPIRV_TOOLS_PATH }}/lib/pkgconfig']
           EOF
           
           export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          export PKG_CONFIG_PATH="$SPIRV_TOOLS_PATH/lib/pkgconfig:$PKG_CONFIG_PATH"
           SYSROOT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           
           PERF_FLAGS="-O3 -flto=full -fomit-frame-pointer -funroll-loops -ftree-vectorize -fno-stack-protector"
@@ -172,21 +150,10 @@ jobs:
             -Dvalgrind=disabled \
             -Dzstd=disabled \
             -Dtools= \
-            -Dc_args="-I$SYSROOT/usr/include $PERF_FLAGS -g0 -DNDEBUG" \
-            -Dcpp_args="-I$SYSROOT/usr/include $PERF_FLAGS -g0 -DNDEBUG" \
-            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=full" \
-            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -lz -flto=full"
-
-      - name: Fix SPIRV-Tools linking
-        run: |
-          cd mesa/build
-          
-          # Remove SPIRV-Tools from ninja build file
-          if [ -f "build.ninja" ]; then
-            sed -i 's/-lSPIRV-Tools-opt//g' build.ninja
-            sed -i 's/-lSPIRV-Tools-link//g' build.ninja
-            sed -i 's/-lSPIRV-Tools//g' build.ninja
-          fi
+            -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 -DNDEBUG" \
+            -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 -DNDEBUG" \
+            -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=full" \
+            -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=full"
 
       - name: Build
         run: |

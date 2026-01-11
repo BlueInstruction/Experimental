@@ -19,8 +19,12 @@ jobs:
     steps:
       - name: SYNC_DEPS
         run: |
+          echo -e "[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git meson ninja mingw-w64-gcc lib32-mingw-w64-gcc zip curl jq
+          pacman -S --noconfirm git meson ninja mingw-w64-gcc lib32-mingw-w64-gcc zip curl jq github-cli
+
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: FETCH_TAG
         id: info

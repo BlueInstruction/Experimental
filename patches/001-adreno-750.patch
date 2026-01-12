@@ -1,0 +1,22 @@
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index 1234567..abcdefg 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -150,6 +150,18 @@ tu_physical_device_init(struct tu_physical_device *device,
+    device->has_cached_coherent_memory = true;
+    device->has_cached_non_coherent_memory = true;
+ 
++   /* Adreno 750 (SM8650) optimizations */
++   if (device->dev_id.chip_id == 0x43050a01 ||
++       device->dev_id.chip_id == 0x43050a00) {
++      /* Enable aggressive prefetching for 750 */
++      device->a7xx.enable_lrz_fast_clear = true;
++      device->a7xx.has_gmem_fast_clear = true;
++      
++      /* Optimize for 6 compute units */
++      device->a7xx.max_waves_per_cu = 32;
++      device->a7xx.preferred_subgroup_size = 64;
++   }
++
+    return VK_SUCCESS;
+ }

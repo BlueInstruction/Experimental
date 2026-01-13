@@ -134,21 +134,21 @@ forge_dragon() {
     local CROSS_FILE="$CHAMBER/cross_dragon"
     
     cat <<EOF > "$CROSS_FILE"
-[binaries]
-ar = '$NDK_BIN/llvm-ar'
-c = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang', '-Wno-error', '-Wno-array-bounds']
-cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++', '-Wno-error', '-Wno-array-bounds']
-c_ld = 'lld'
-cpp_ld = 'lld'
-strip = '$NDK_BIN/llvm-strip'
-pkg-config = '/usr/bin/pkg-config'
+    [binaries]
+    ar = '$NDK_BIN/llvm-ar'
+    c = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang', '-Wno-error', '-Wno-array-bounds', '-Wno-c99-designator']
+    cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++', '-Wno-error', '-Wno-array-bounds', '-Wno-c++11-narrowing', '-Wno-vla-cxx-extension', '-Wno-c99-designator']
+    c_ld = 'lld'
+    cpp_ld = 'lld'
+    strip = '$NDK_BIN/llvm-strip'
+    pkg-config = '/usr/bin/pkg-config'
 
-[host_machine]
-system = 'android'
-cpu_family = 'aarch64'
-cpu = 'armv8'
-endian = 'little'
-EOF
+    [host_machine]
+    system = 'android'
+    cpu_family = 'aarch64'
+    cpu = 'armv8'
+    endian = 'little'
+    EOF
 
     rm -rf build-dragon
     

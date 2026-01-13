@@ -7,8 +7,8 @@ index 1234567..abcdefg 100644
     device->has_cached_non_coherent_memory = true;
  
 +   /* Adreno 750 (SM8650) optimizations */
-+   if (device->dev_id.chip_id == 0x43050a01 ||
-+       device->dev_id.chip_id == 0x43050a00) {
++   if (device->dev_id.chip_id == 0x43051401 ||
++       device->dev_id.chip_id == 0x43051401) {
 +      /* Enable aggressive prefetching for 750 */
 +      device->a7xx.enable_lrz_fast_clear = true;
 +      device->a7xx.has_gmem_fast_clear = true;

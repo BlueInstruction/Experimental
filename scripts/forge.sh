@@ -1,10 +1,8 @@
 #!/bin/bash -e
-
 # ╔═══════════════════════════════════════════════════════════════╗
 # ║                  🐉 DRAGON FORGE v3.0 🐉                      ║
 # ║              Professional Build System                        ║
 # ╚═══════════════════════════════════════════════════════════════╝
-
 # === COLORS ===
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -271,16 +269,15 @@ c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$NDK_BIN/llvm-strip'
 pkg-config = '/usr/bin/pkg-config'
-
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
 cpu = 'armv8'
 endian = 'little'
-
 [built-in options]
 c_args = ['-w', '-Wno-error']
-cpp_args = ['-w', '-Wno-error']
+cpp_args = ['-w', '-Wno-error']  
+
 EOF
     
     info "Cross-compilation file created"
@@ -397,14 +394,14 @@ reset_mesa() {
 }
 
 build_tiger() {
-    log "🐯 === TIGER BUILD ==="
+    log "=== TIGER BUILD ==="
     reset_mesa
     spell_tiger_velocity
     forge_dragon "Tiger"
 }
 
 build_tiger_phoenix() {
-    log "🐯🔥 === TIGER-PHOENIX BUILD ==="
+    log "=== TIGER-PHOENIX BUILD ==="
     reset_mesa
     spell_tiger_velocity
     apply_spell_file "phoenix/wings_boost"
@@ -412,7 +409,7 @@ build_tiger_phoenix() {
 }
 
 build_falcon() {
-    log "🦅 === FALCON BUILD ==="
+    log "=== FALCON BUILD ==="
     reset_mesa
     spell_falcon_memory
     spell_tiger_velocity
@@ -420,14 +417,14 @@ build_falcon() {
 }
 
 build_shadow() {
-    log "👤 === SHADOW BUILD ==="
+    log "=== SHADOW BUILD ==="
     reset_mesa
     apply_merge_request "37802"
     forge_dragon "Shadow"
 }
 
 build_hawk() {
-    log "🦅 === HAWK BUILD (Full Power) ==="
+    log "=== HAWK BUILD (Full Power) ==="
     reset_mesa
     spell_tiger_velocity
     spell_falcon_memory
@@ -437,7 +434,7 @@ build_hawk() {
 }
 
 build_all() {
-    log "🔥 === BUILDING ALL VARIANTS ==="
+    log "=== BUILDING ALL VARIANTS ==="
     local variants=("tiger" "tiger_phoenix" "falcon" "shadow" "hawk")
     local success_count=0
     local failed=()

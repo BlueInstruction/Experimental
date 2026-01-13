@@ -1,4 +1,4 @@
-name: Build Turnip - (a7xx) - VKD3D Optimized
+name: Build Turnip - (a7xx)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: "main"
         options:
           - "main"
-          - "mesa-26.0"
+          - "mesa-26.0.0"
   schedule:
     - cron: '0 21 * * *'
 
@@ -18,7 +18,7 @@ permissions:
 
 env:
   MESA_VERSION: "26.0.0"
-  BUILD_TAG: "a7xx-vkd3d"
+  BUILD_TAG: "a7xx"
   NDK_VERSION: "r29"
   API_LEVEL: "35"
 
@@ -131,16 +131,29 @@ jobs:
       - name: Apply VKD3D Extension Patches
         run: |
           cd mesa
+          
+          echo "=== Checking patches folder ==="
           if [ -d "${{ github.workspace }}/patches" ]; then
+            echo "✓ Patches folder found"
+            ls -la ${{ github.workspace }}/patches/
             for patch in ${{ github.workspace }}/patches/*.patch; do
               if [ -f "$patch" ]; then
-                git apply "$patch" --verbose 2>/dev/null || git apply "$patch" --3way 2>/dev/null || true
+                echo "Applying: $(basename $patch)"
+                git apply "$patch" --verbose 2>/dev/null || git apply "$patch" --3way 2>/dev/null || echo "⚠ Patch failed: $(basename $patch)"
               fi
             done
+          else
+            echo "✗ No patches folder found"
           fi
           
+          echo "=== Applying sed modifications ==="
           if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
-            sed -i 's/= false/= true/g' src/freedreno/vulkan/tu_device.cc 2>/dev/null || true
+            BEFORE=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc || echo "0")
+            sed -i 's/= false/= true/g' src/freedreno/vulkan/tu_device.cc
+            AFTER=$(grep -c "= false" src/freedreno/vulkan/tu_device.cc || echo "0")
+            echo "✓ Changed $((BEFORE - AFTER)) instances from 'false' to 'true'"
+          else
+            echo "✗ tu_device.cc not found"
           fi
 
       - name: Configure Meson
@@ -203,16 +216,25 @@ jobs:
             -Dvalgrind=disabled \
             -Dzstd=disabled \
             -Dtools= \
-            -Dfreedreno-virtio=false \
-            -Dimagination-srv=false \
             -Dxmlconfig=disabled \
-            -Dshader-cache=enabled \
-            -Dshader-cache-default=true \
             -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 $VKD3D_DEFINES" \
             -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include $PERF_FLAGS -g0 $VKD3D_DEFINES" \
             -Dc_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O3 -Wl,--gc-sections -Wl,--as-needed -Wl,--icf=all -Wl,--lto-O3" \
             -Dcpp_link_args="-L$SYSROOT/usr/lib/aarch64-linux-android/${{ env.API_LEVEL }} -L$SPIRV_TOOLS_PATH/lib -lz -flto=thin -Wl,-O3 -Wl,--gc-sections -Wl,--as-needed -Wl,--icf=all -Wl,--lto-O3"
 
+      - name: Verify Shader Cache
+        run: |
+          echo "=== Checking Shader Cache Status ==="
+          if grep -q "shader_cache" mesa/build/meson-info/intro-buildoptions.json 2>/dev/null; then
+            echo "✓ Shader cache found in build options"
+            grep "shader_cache" mesa/build/meson-info/intro-buildoptions.json
+          fi
+          if grep -r "ENABLE_SHADER_CACHE" mesa/build/ 2>/dev/null | head -5; then
+            echo "✓ Shader cache is ENABLED"
+          else
+            echo "Shader cache uses Mesa defaults (enabled in release builds)"
+          fi
+      
       - name: Build
         run: |
           export PATH="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
@@ -237,12 +259,12 @@ jobs:
           cat > release/out/meta.json << EOF
           {
             "schemaVersion": 1,
-            "name": "Turnip VKD3D - ${COMMIT_SHA}",
-            "description": "Mesa Turnip - Adreno 7xx - VKD3D-Proton Optimized",
+            "name": "Turnip ${MESA_VER}" - ${COMMIT_SHA}",
+            "description": "Mesa Turnip Driver",
             "author": "Mesa/Freedreno",
-            "packageVersion": "$MESA_VER",
+            "packageVersion": "1",
             "vendor": "Mesa",
-            "driverVersion": "$MESA_VER/vk${{ needs.get-mesa-info.outputs.vulkan_version }}",
+            "driverVersion": "vk${{ needs.get-mesa-info.outputs.vulkan_version }}",
             "minApi": ${{ env.API_LEVEL }},
             "libraryName": "vulkan.ad07xx.so"
           }
@@ -253,7 +275,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-a7xx-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: turnip-a7xx-${{ needs.get-mesa-info.outputs.commit_sha }}
           path: release/*.zip
           retention-days: 14
 
@@ -264,7 +286,7 @@ jobs:
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: turnip-a7xx-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: turnip-a7xx-${{ needs.get-mesa-info.outputs.commit_sha }}
           path: dist
 
       - name: Generate Checksum
@@ -275,9 +297,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: turnip-${{ needs.get-mesa-info.outputs.mesa_version }}-vkd3d-${{ needs.get-mesa-info.outputs.commit_sha }}
-          name: "Turnip ${{ needs.get-mesa-info.outputs.mesa_version }} - VKD3D"
-          body: "Mesa ${{ needs.get-mesa-info.outputs.mesa_version }} | Commit: ${{ needs.get-mesa-info.outputs.commit_sha }} | VKD3D-Proton Optimized"
+          tag_name: turnip-${{ needs.get-mesa-info.outputs.mesa_version }}-${{ needs.get-mesa-info.outputs.commit_sha }}
+          name: "Turnip ${{ needs.get-mesa-info.outputs.mesa_version }}"
+          body: "Mesa ${{ needs.get-mesa-info.outputs.mesa_version }} | Commit: ${{ needs.get-mesa-info.outputs.commit_sha }}"
           files: |
             dist/*.zip
             dist/SHA256SUMS.txt

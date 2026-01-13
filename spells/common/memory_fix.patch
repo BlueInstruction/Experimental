@@ -1,0 +1,6 @@
+diff --git a/src/freedreno/vulkan/tu_query.cc b/src/freedreno/vulkan/tu_query.cc
+--- a/src/freedreno/vulkan/tu_query.cc
++++ b/src/freedreno/vulkan/tu_query.cc
+@@ -1,4 +1,4 @@
+-tu_bo_init_new_cached
++tu_bo_init_new

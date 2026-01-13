@@ -174,6 +174,7 @@ EOF
         -Dlibunwind=disabled \
         -Dzstd=disabled \
         -Dspirv-tools=disabled \
+        -Dwerror=false \
         &> "$CHAMBER/meson_${variant_name}.log" || { cat "$CHAMBER/meson_${variant_name}.log"; error "Meson failed"; }
 
     log "Building with ninja..."

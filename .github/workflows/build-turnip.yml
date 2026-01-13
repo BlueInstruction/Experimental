@@ -180,7 +180,8 @@ jobs:
             -Dlibunwind=disabled \
             -Dlmsensors=disabled \
             -Dvalgrind=disabled \
-            -Dzstd=disabled \
+            -Dzstd=enabled \
+            -Drelocatable=true \
             -Dtools= \
             -Dc_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include -O2 -g0 -DNDEBUG" \
             -Dcpp_args="-I$SYSROOT/usr/include -I$SPIRV_TOOLS_PATH/include -O2 -g0 -DNDEBUG" \
@@ -219,7 +220,7 @@ jobs:
             "name": "$ARCHIVE_NAME",
             "description": "Mesa Turnip Driver",
             "packageVersion": "1",
-            "vendor": "Mesa"
+            "vendor": "Mesa",
             "driverVersion": "$MESA_VER",
             "minApi": ${{ env.API_LEVEL }},
             "libraryName": "vulkan.ad07xx.so"

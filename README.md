@@ -20,11 +20,11 @@
 
 ### Local Build
 ```bash
-# Single variant
+
 ./scripts/forge.sh tiger
 
-# All variants
+
 ./scripts/forge.sh all
 
-# Custom commit
+
 ./scripts/forge.sh tiger abc123f

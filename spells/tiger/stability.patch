@@ -1,0 +1,6 @@
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@
+ if (TU_DEBUG(SYSMEM)) {
+     cmd->state.rp.gmem_disable_reason = "TU_DEBUG(SYSMEM)";
+     return true;
+ }

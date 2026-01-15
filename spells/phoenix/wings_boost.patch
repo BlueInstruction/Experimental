@@ -1,0 +1,3 @@
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+@@
+ /* No forced extension disable */

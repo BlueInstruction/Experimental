@@ -424,6 +424,7 @@ build_falcon() {
     reset_mesa
     spell_falcon_memory
     spell_tiger_velocity
+    apply_spell_file "falcon/fix_vb_size"
     driver_dragon "Falcon"
 }
 

@@ -1,0 +1,53 @@
+From 1200ab21e9c9fe0318105a67631ce04f83309375 Mon Sep 17 00:00:00 2001
+From: Rob Clark <rob.clark@oss.qualcomm.com>
+Date: Sat, 10 Jan 2026 11:17:00 -0800
+Subject: [PATCH] tu: Fix TU_DRAW_STATE_VB size
+
+vi_bindings_valid doesn't necessarily match the # of VBOs emitted,
+resulting an invalid size in the CP_SET_DRAW_STATE packet. Somehow
+this didn't seem to cause problems prior to Dxx (although may
+potentially have been a source of flakes, depending on what random
+cmds followed in memory). But caused hangs on Dxx.
+
+See, for example, dEQP-VK.pipeline.fast_linked_library.vertex_input.misc.unused_binding
+
+Fixes: 97da0a773418 ("tu: Rewrite to use common Vulkan dynamic state")
+Signed-off-by: Rob Clark <rob.clark@oss.qualcomm.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/39254>
+(cherry picked from commit 63243bcc3ea603ab4ae2f00653e50280ca3448e1)
+
+---
+ src/freedreno/vulkan/tu_cmd_buffer.cc | 10 ++--------
+ 1 file changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 3a7dc412c71..4b550c38bbe 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -3725,8 +3725,9 @@ tu_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer,
+                                         pStrides);
+    }
+ 
++   cmd->state.vertex_buffers.size = 4 * cmd->state.max_vbs_bound;
+    cmd->state.vertex_buffers.iova =
+-      tu_cs_draw_state(&cmd->sub_cs, &cs, 4 * cmd->state.max_vbs_bound).iova;
++      tu_cs_draw_state(&cmd->sub_cs, &cs, cmd->state.vertex_buffers.size).iova;
+ 
+    for (uint32_t i = 0; i < bindingCount; i++) {
+       if (pBuffers[i] == VK_NULL_HANDLE) {
+@@ -7028,13 +7029,6 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
+       }
+    }
+ 
+-   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
+-                   MESA_VK_DYNAMIC_VI_BINDINGS_VALID)) {
+-      cmd->state.vertex_buffers.size =
+-         util_last_bit(cmd->vk.dynamic_graphics_state.vi_bindings_valid) * 4;
+-      dirty |= TU_CMD_DIRTY_VERTEX_BUFFERS;
+-   }
+-
+    if (dirty & TU_CMD_DIRTY_SHADER_CONSTS)
+       cmd->state.shader_const = tu_emit_consts(cmd, false);
+ 
+-- 
+2.34.1

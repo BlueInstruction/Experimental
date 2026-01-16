@@ -1,0 +1,31 @@
+From adbb853b0c540411c7971ee249364f4b61a5e17a Mon Sep 17 00:00:00 2001
+From: Danylo Piliaiev <dpiliaiev@igalia.com>
+Date: Mon, 12 Jan 2026 12:52:45 +0100
+Subject: [PATCH] tu: Fix misleading lrz_disabled_at_draw values for RP
+
+tu_render_pass_state_merge checks if lrz_disable_reason is NULL,
+but it wasn't initialized to NULL.
+
+Fixes: d6684aedf41 ("tu: Track at which draw call LRZ is disabled")
+Signed-off-by: Danylo Piliaiev <dpiliaiev@igalia.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/39263>
+(cherry picked from commit d5199e2d29c516d5884d29b60ff77bb1ae5a9f23)
+
+---
+ src/freedreno/vulkan/tu_lrz.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/freedreno/vulkan/tu_lrz.cc b/src/freedreno/vulkan/tu_lrz.cc
+index 6358e74612f..1dc77557564 100644
+--- a/src/freedreno/vulkan/tu_lrz.cc
++++ b/src/freedreno/vulkan/tu_lrz.cc
+@@ -332,7 +332,7 @@ tu_lrz_begin_renderpass(struct tu_cmd_buffer *cmd)
+    const struct tu_render_pass *pass = cmd->state.pass;
+ 
+-   cmd->state.rp.lrz_disable_reason = "";
++   cmd->state.rp.lrz_disable_reason = NULL;
+    cmd->state.rp.lrz_disabled_at_draw = 0;
+    cmd->state.rp.lrz_write_disabled_at_draw = 0;
+ 
+-- 
+2.34.1

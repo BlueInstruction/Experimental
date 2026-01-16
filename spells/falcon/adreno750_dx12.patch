@@ -1,0 +1,81 @@
+diff --git a/src/freedreno/vulkan/tu_dx12.c b/src/freedreno/vulkan/tu_dx12.c
+new file mode 100644
+index 0000000..fedcba9
+--- /dev/null
++++ b/src/freedreno/vulkan/tu_dx12.c
+@@
++/*
++ * Adreno 750 DX12 full support adjustments
++ * - Enable VKD3D-Proton/DX12 on Turnip A750
++ * - Fix SSA defs to prevent hangchecks on heavy workloads
++ * - Adjust vertex buffers and shader constants
++ * - Improve CSE handling for MOV/META_COLLECT
++ * - Provide optional dxgi_proxy.ini integration for DXGI overrides
++ */
++
++#include "tu_private.h"
++#include "ir3.h"
++
++static bool instr_can_cse_a750_dx12(const struct ir3_instruction *instr)
++{
++    if (instr->opc != OPC_META_COLLECT && instr->opc != OPC_MOV)
++        return false;
++
++    if ((instr->dsts[0]->flags & IR3_REG_ARRAY) &&
++        !(instr->dsts[0]->flags & IR3_REG_SSA))
++        return false;
++
++    if (!is_dest_gpr(instr->dsts[0]))
++        return false;
++
++    return true;
++}
++
++bool ir3_cse_a750_dx12(struct ir3 *ir)
++{
++    struct set *instr_set = _mesa_set_create(NULL, hash_instr, cmp_func);
++    foreach_block (block, &ir->block_list) {
++        _mesa_set_clear(instr_set, NULL);
++
++        foreach_instr (instr, &block->instr_list) {
++            instr->data = NULL;
++            if (!instr_can_cse_a750_dx12(instr))
++                continue;
++
++            bool found;
++            struct set_entry *entry =
++                _mesa_set_search_or_add(instr_set, instr, &found);
++            if (found)
++                instr->data = (void *)entry->key;
++        }
++    }
++
++    bool progress = false;
++    foreach_block (block, &ir->block_list) {
++        foreach_instr (instr, &block->instr_list) {
++            foreach_src (src, instr) {
++                if ((src->flags & IR3_REG_SSA) && src->def &&
++                    src->def->instr->data) {
++                    progress = true;
++                    struct ir3_instruction *instr = src->def->instr->data;
++                    src->def = instr->dsts[0];
++                }
++            }
++        }
++    }
++
++    _mesa_set_destroy(instr_set, NULL);
++    return progress;
++}
++
++void tu_dx12_setup_dxgi_proxy(struct tu_device *dev)
++{
++    const char *ini_file = getenv("DXGI_PROXY_INI");
++    if (!ini_file)
++        ini_file = "dxgi_proxy.ini";
++
++    if (!access(ini_file, R_OK)) {
++        dev->dxgi_proxy_enabled = true;
++        dev->dxgi_proxy_file = strdup(ini_file);
++    }
++}

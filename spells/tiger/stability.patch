@@ -1,12 +1,31 @@
-diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -1,3 +1,4 @@
++/* Dragon: Tiger Stability - Core stability improvements */
+ 
+ /* Stability improvements for consistent rendering */
+ 
+@@ -120,6 +121,12 @@ tu_device_init(struct tu_device *dev)
+    /* Force synchronous operations for stability */
++   dev->sync_mode = TU_SYNC_MODE_STRICT;
++   
++   /* Disable aggressive optimizations that may cause instability */
++   dev->allow_aggressive_tiling = false;
++   
++   /* Enable safe defaults */
++   dev->use_safe_defaults = true;
+ 
+ diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -985,6 +985,8 @@ static bool
- use_sysmem_rendering(struct tu_cmd_buffer *cmd,
-                      struct tu_renderpass_result **autotune_result)
- {
-+   return true;
-+
-    if (TU_DEBUG(SYSMEM)) {
-       cmd->state.rp.gmem_disable_reason = "TU_DEBUG(SYSMEM)";
-       return true;
+@@ -1,3 +1,4 @@
++/* Dragon: Tiger Stability - Command buffer safety */
+ 
+@@ -200,6 +201,10 @@ tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd)
+    /* Initialize command buffer with safe defaults */
++   cmd->state.cache.flush_bits = ~0u;
++   cmd->state.cache.pending_flush_bits = 0;
++   
++   /* Ensure proper synchronization */
++   cmd->state.suspend_resume = TU_SUSPEND_RESUME_NONE;

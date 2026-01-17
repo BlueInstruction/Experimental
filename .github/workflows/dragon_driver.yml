@@ -111,7 +111,7 @@ jobs:
             - `falcon` - Adreno 6xx/7xx optimized
             - `shadow` - Experimental features
             - `hawk` - Full power mode
-            - `dragon-ue5` - UE5/DX12 heavy games (Hell is Us, Alan Wake 2)
+            - `dragon-ue5` - UE5/DX12 heavy games
             
             ### Usage
             Install the .zip file in your Turnip-compatible launcher.

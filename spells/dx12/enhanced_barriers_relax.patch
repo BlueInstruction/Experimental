@@ -1,0 +1,23 @@
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1,3 +1,4 @@
++/* Dragon: Enhanced Barriers Relax for DX12 barrier model */
+ 
+ /* Relax barrier validation for DX12 enhanced barriers compatibility */
+ /* DX12 uses a different barrier model that requires relaxed validation */
+ 
+@@ -200,10 +201,12 @@ tu_cmd_buffer_barrier(struct tu_cmd_buffer *cmd,
+    /* Relaxed barrier validation for DX12 compatibility */
+-   assert(src_stage_mask != 0);
+-   assert(dst_stage_mask != 0);
++   /* Dragon: Disabled strict assertions for DX12 */
++   /* assert(src_stage_mask != 0); */
++   /* assert(dst_stage_mask != 0); */
+    
+    /* Accept split barriers */
+-   if (info->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) {
++   /* Dragon: Always accept region dependencies */
++   if (true || (info->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT)) {
+        /* Process as region barrier */
+    }

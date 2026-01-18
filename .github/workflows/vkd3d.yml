@@ -1,1 +1,406 @@
+name: VKD3D-Proton
 
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      FORCE_MODE:
+        type: boolean
+        default: false
+      VERSION:
+        description: "Specific version to build (leave empty for latest)"
+        required: false
+        default: ""
+      SHADER_MODEL:
+        type: choice
+        description: "Shader Model version"
+        default: "6_6"
+        options:
+          - "6_5"
+          - "6_6"
+          - "6_7"
+          - "6_8"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
+
+jobs:
+  start_build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            meson \
+            ninja-build \
+            curl \
+            jq \
+            python3-venv \
+            glslang-tools \
+            zstd \
+            llvm \
+            gcc-mingw-w64-x86-64 \
+            gcc-mingw-w64-i686 \
+            g++-mingw-w64-x86-64 \
+            g++-mingw-w64-i686 \
+            mingw-w64 \
+            mingw-w64-tools
+
+      - name: Fetch Version
+        run: |
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            LATEST_TAG="${{ inputs.VERSION }}"
+            if [[ ! "$LATEST_TAG" =~ ^v ]]; then
+              LATEST_TAG="v$LATEST_TAG"
+            fi
+          else
+            # Method 1: Try git ls-remote (more reliable)
+            LATEST_TAG=$(git ls-remote --tags --refs --sort=-v:refname \
+              https://github.com/HansKristian-Work/vkd3d-proton.git | \
+              head -1 | sed 's/.*refs\/tags\///')
+            
+            # Method 2: Fallback to API if git fails
+            if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "null" ]]; then
+              LATEST_TAG=$(curl -sL --retry 3 \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name')
+            fi
+          fi
+          
+          if [[ -z "$LATEST_TAG" || "$LATEST_TAG" == "null" ]]; then
+            echo "ERROR: Failed to fetch version"
+            exit 1
+          fi
+          
+          SHADER_MODEL="${{ inputs.SHADER_MODEL || '6_6' }}"
+          
+          echo "TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "VER=${LATEST_TAG#v}" >> $GITHUB_ENV
+          echo "SHADER_MODEL=$SHADER_MODEL" >> $GITHUB_ENV
+          echo "Detected version: $LATEST_TAG"
+          echo "Shader Model: $SHADER_MODEL"
+
+      - name: Check Release Existence
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="vkd3d-${{ env.VER }}-sm${{ env.SHADER_MODEL }}-${{ env.COMMIT }}"
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} > /dev/null 2>&1 && echo "true" || echo "false")
+          if [[ "${{ inputs.FORCE_MODE }}" == "true" ]]; then EXISTS="false"; fi
+          echo "SKIP_RUN=$EXISTS" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "Release exists: $EXISTS" 
+
+      - name: Clone Source
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          echo "Cloning vkd3d-proton ${{ env.TAG }}..."
+          git clone --recursive --branch ${{ env.TAG }} https://github.com/HansKristian-Work/vkd3d-proton.git src
+
+      - name: Get Commit Hash
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          cd src
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          echo "COMMIT=$COMMIT_SHORT" >> $GITHUB_ENV
+          echo "Commit: $COMMIT_SHORT"
+
+      - name: Apply UE5 Patches
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          echo "Applying UE5 patches..."
+          cd src
+          
+          DEVICE_FILE="libs/vkd3d/device.c"
+          SHADER_MODEL="${{ env.SHADER_MODEL }}"
+          
+          # Backup
+          cp "$DEVICE_FILE" "$DEVICE_FILE.orig"
+          
+          # Add header
+          sed -i '1i\/* UE5.5 Compatibility Patch - Dragon Driver Project */' "$DEVICE_FILE"
+          
+          # Use Python for reliable patching
+          python3 << 'PYTHON_SCRIPT'
+          import re
+          
+          with open("libs/vkd3d/device.c", "r") as f:
+              content = f.read()
+          
+          patches_applied = 0
+          shader_model = "${{ env.SHADER_MODEL }}"
+          
+          print("=== Applying UE5 Patches ===")
+          print(f"Target Shader Model: {shader_model}")
+          print("")
+          
+          # Patch 1: WaveOps
+          waveops_pattern = r'(options1->WaveOps\s*=\s*[^;]+;)'
+          waveops_match = re.search(waveops_pattern, content)
+          if waveops_match:
+              waveops_patch = '''options1->WaveOps = TRUE; /* Dragon: Force WaveOps */
+              options1->WaveLaneCountMin = 32;
+              options1->WaveLaneCountMax = 64;'''
+              content = content.replace(waveops_match.group(1), waveops_patch, 1)
+              patches_applied += 1
+              print("[OK] Patch 1: WaveOps enabled")
+          else:
+              print("[FAIL] Patch 1: WaveOps pattern not found")
+          
+          # Patch 2: ShaderModel
+          shader_pattern = r'(data->HighestShaderModel\s*=\s*[^;]+;)'
+          shader_match = re.search(shader_pattern, content)
+          if shader_match:
+              shader_patch = f'''data->HighestShaderModel = D3D_SHADER_MODEL_{shader_model}; /* Dragon: Force SM {shader_model.replace('_', '.')} */'''
+              content = content.replace(shader_match.group(1), shader_patch, 1)
+              patches_applied += 1
+              print(f"[OK] Patch 2: Shader Model {shader_model.replace('_', '.')}")
+          else:
+              print("[FAIL] Patch 2: ShaderModel pattern not found")
+          
+          # Patch 3: MeshShader
+          mesh_patterns = [
+              r'(options7->MeshShaderTier\s*=\s*[^;]+;)',
+              r'(caps->options7\.MeshShaderTier\s*=\s*[^;]+;)',
+              r'(d3d12_caps\.options7\.MeshShaderTier\s*=\s*[^;]+;)',
+          ]
+          
+          mesh_applied = False
+          for pattern in mesh_patterns:
+              mesh_match = re.search(pattern, content)
+              if mesh_match:
+                  mesh_patch = 'options7->MeshShaderTier = D3D12_MESH_SHADER_TIER_1; /* Dragon: Force MeshShader */'
+                  content = content.replace(mesh_match.group(1), mesh_patch, 1)
+                  patches_applied += 1
+                  mesh_applied = True
+                  print("[OK] Patch 3: MeshShader Tier 1")
+                  break
+          
+          if not mesh_applied:
+              options7_pattern = r'(case D3D12_FEATURE_D3D12_OPTIONS7:.*?)(return S_OK;)'
+              options7_match = re.search(options7_pattern, content, re.DOTALL)
+              if options7_match:
+                  mesh_patch = '''/* Dragon: Force MeshShader Tier 1 */
+                      data->MeshShaderTier = D3D12_MESH_SHADER_TIER_1;
+                      '''
+                  new_section = options7_match.group(1) + mesh_patch + options7_match.group(2)
+                  content = content.replace(options7_match.group(0), new_section, 1)
+                  patches_applied += 1
+                  print("[OK] Patch 3: MeshShader Tier 1 (OPTIONS7)")
+              else:
+                  print("[FAIL] Patch 3: MeshShader pattern not found")
+          
+          # Patch 4: Enhanced Barriers
+          barriers_patterns = [
+              r'(options12->EnhancedBarriersSupported\s*=\s*[^;]+;)',
+              r'(d3d12_caps\.options12\.EnhancedBarriersSupported\s*=\s*[^;]+;)',
+          ]
+          
+          barriers_applied = False
+          for pattern in barriers_patterns:
+              barriers_match = re.search(pattern, content)
+              if barriers_match:
+                  content = content.replace(barriers_match.group(1), 
+                      'options12->EnhancedBarriersSupported = TRUE; /* Dragon: Force Enhanced Barriers */', 1)
+                  patches_applied += 1
+                  barriers_applied = True
+                  print("[OK] Patch 4: Enhanced Barriers")
+                  break
+          
+          if not barriers_applied:
+              options12_pattern = r'(case D3D12_FEATURE_D3D12_OPTIONS12:.*?)(return S_OK;)'
+              options12_match = re.search(options12_pattern, content, re.DOTALL)
+              if options12_match:
+                  barriers_patch = '''/* Dragon: Force Enhanced Barriers */
+                      data->EnhancedBarriersSupported = TRUE;
+                      '''
+                  new_section = options12_match.group(1) + barriers_patch + options12_match.group(2)
+                  content = content.replace(options12_match.group(0), new_section, 1)
+                  patches_applied += 1
+                  print("[OK] Patch 4: Enhanced Barriers (OPTIONS12)")
+              else:
+                  print("[SKIP] Patch 4: Enhanced Barriers not found (may not exist in this version)")
+          
+          # Patch 5: Resource Binding Tier
+          binding_patterns = [
+              r'(options->ResourceBindingTier\s*=\s*[^;]+;)',
+              r'(d3d12_caps\.options\.ResourceBindingTier\s*=\s*[^;]+;)',
+          ]
+          
+          binding_applied = False
+          for pattern in binding_patterns:
+              binding_match = re.search(pattern, content)
+              if binding_match:
+                  content = content.replace(binding_match.group(1),
+                      'options->ResourceBindingTier = D3D12_RESOURCE_BINDING_TIER_3; /* Dragon: Force Tier 3 */', 1)
+                  patches_applied += 1
+                  binding_applied = True
+                  print("[OK] Patch 5: Resource Binding Tier 3")
+                  break
+          
+          if not binding_applied:
+              print("[SKIP] Patch 5: Resource Binding pattern not found")
+          
+          # Patch 6: Tiled Resources Tier
+          tiled_pattern = r'(options->TiledResourcesTier\s*=\s*[^;]+;)'
+          tiled_match = re.search(tiled_pattern, content)
+          if tiled_match:
+              content = content.replace(tiled_match.group(1),
+                  'options->TiledResourcesTier = D3D12_TILED_RESOURCES_TIER_3; /* Dragon: Force Tiled Tier 3 */', 1)
+              patches_applied += 1
+              print("[OK] Patch 6: Tiled Resources Tier 3")
+          else:
+              print("[SKIP] Patch 6: Tiled Resources pattern not found")
+          
+          # Patch 7: Conservative Rasterization
+          conservative_pattern = r'(options->ConservativeRasterizationTier\s*=\s*[^;]+;)'
+          conservative_match = re.search(conservative_pattern, content)
+          if conservative_match:
+              content = content.replace(conservative_match.group(1),
+                  'options->ConservativeRasterizationTier = D3D12_CONSERVATIVE_RASTERIZATION_TIER_3; /* Dragon: Force Conservative Raster */', 1)
+              patches_applied += 1
+              print("[OK] Patch 7: Conservative Rasterization Tier 3")
+          else:
+              print("[SKIP] Patch 7: Conservative Rasterization pattern not found")
+          
+          with open("libs/vkd3d/device.c", "w") as f:
+              f.write(content)
+          
+          print("")
+          print(f"=== Total patches applied: {patches_applied} ===")
+          
+          if patches_applied < 3:
+              print("WARNING: Core patches may have failed!")
+              exit(1)
+          PYTHON_SCRIPT
+          
+          # Verify
+          echo ""
+          echo "=== Final Verification ==="
+          PATCH_COUNT=$(grep -c "Dragon:" "$DEVICE_FILE" || echo "0")
+          echo "Dragon patch markers found: $PATCH_COUNT"
+
+      - name: Build vkd3d-proton
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          cd src
+          ./package-release.sh ${{ env.TAG }} ../out --no-package
+
+      - name: Verify Build
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          SRC_PATH=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*")
+          if [[ -z "$SRC_PATH" ]]; then
+            echo "ERROR: Build output not found"
+            exit 1
+          fi
+          
+          for arch in x64 x86; do
+            for dll in d3d12.dll d3d12core.dll; do
+              if [[ ! -f "$SRC_PATH/$arch/$dll" ]]; then
+                echo "ERROR: Missing $arch/$dll"
+                exit 1
+              fi
+            done
+          done
+          
+          echo "Build verification passed"
+
+      - name: Prepare WCP Package
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        run: |
+          mkdir -p staging/system32 staging/syswow64
+          SRC_PATH=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*")
+          
+          cp "$SRC_PATH/x64/"*.dll staging/system32/
+          cp "$SRC_PATH/x86/"*.dll staging/syswow64/
+          
+          SM_DISPLAY="${{ env.SHADER_MODEL }}"
+          SM_DISPLAY="${SM_DISPLAY//_/.}"
+          
+          cat > staging/profile.json << EOF
+          {
+            "type": "VKD3D",
+            "versionName": "${{ env.VER }}-Dragon",
+            "versionCode": 0,
+            "description": "VKD3D-Proton ${{ env.VER }}",
+            "files": [
+              {
+                "source": "system32/d3d12.dll",
+                "target": "\${system32}/d3d12.dll"
+              },
+              {
+                "source": "system32/d3d12core.dll",
+                "target": "\${system32}/d3d12core.dll"
+              },
+              {
+                "source": "syswow64/d3d12.dll",
+                "target": "\${syswow64}/d3d12.dll"
+              },
+              {
+                "source": "syswow64/d3d12core.dll",
+                "target": "\${syswow64}/d3d12core.dll"
+              }
+            ]
+          }
+          EOF
+          
+          PACKAGE_NAME="vkd3d-proton-${{ env.VER }}-SM${{ env.SHADER_MODEL }}-Dragon"
+          
+          cd staging
+          tar --zstd --format=gnu -cf "../${PACKAGE_NAME}.wcp" profile.json system32 syswow64
+          
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+          echo "Package created: ${PACKAGE_NAME}.wcp"
+
+      - name: Upload Artifact
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: ${{ env.PACKAGE_NAME }}.wcp
+          retention-days: 30
+
+      - name: Deploy Release
+        if: steps.check.outputs.SKIP_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: vkd3d-${{ env.VER }}-sm${{ env.SHADER_MODEL }}-${{ env.COMMIT }}
+          name: VKD3D-Proton ${{ env.VER }} (${{ env.COMMIT }})
+          files: ${{ env.PACKAGE_NAME }}.wcp
+          body: |
+            ## VKD3D-Proton ${{ env.VER }} - Dragon
+            
+            **Commit:** `${{ env.COMMIT }}`
+            **Shader Model:** ${{ env.SHADER_MODEL }}
+            
+            ### Patches Applied
+            - WaveOps (32-64 lanes)
+            - Shader Model ${{ env.SHADER_MODEL }}
+            - MeshShader Tier 1
+            - Enhanced Barriers
+            - Resource Binding Tier 3
+            - Tiled Resources Tier 3
+            - Conservative Rasterization Tier 3 

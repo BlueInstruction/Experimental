@@ -103,18 +103,16 @@ jobs:
           echo "Release exists: $EXISTS"
 
       - name: Clone Source
-        if: steps.check.outputs.SKIP_RUN == 'false'
         run: |
-           echo "Cloning vkd3d-proton ${{ env.TAG }}..."
-           git clone https://github.com/HansKristian-Work/vkd3d-proton.git src
+           git clone "https://github.com/$UPSTREAM_REPO.git" src
            cd src
            git fetch --tags --force
-           git checkout ${{ env.TAG }}
-           git pull --rebase || true
            git reset --hard
            git clean -xfd
            git submodule sync --recursive
            git submodule update --init --recursive --force
+           git config user.name "Builder"
+           git config user.email "bot@noreply"
 
       - name: Get Commit Hash
         if: steps.check.outputs.SKIP_RUN == 'false'

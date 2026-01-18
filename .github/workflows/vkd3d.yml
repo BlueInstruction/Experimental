@@ -104,17 +104,25 @@ jobs:
       - name: Clone Source
         if: steps.check.outputs.SKIP_RUN == 'false'
         run: |
-          echo "Cloning vkd3d-proton ${{ env.TAG }}..."
-          git clone --recursive --branch ${{ env.TAG }} https://github.com/HansKristian-Work/vkd3d-proton.git src
+           echo "Cloning vkd3d-proton ${{ env.TAG }}..."
+           git clone https://github.com/HansKristian-Work/vkd3d-proton.git src
+           cd src
+           git fetch --tags --force
+           git checkout ${{ env.TAG }}
+           git pull --rebase || true
+           git reset --hard
+           git clean -xfd
+           git submodule sync --recursive
+           git submodule update --init --recursive --force
 
       - name: Get Commit Hash
         if: steps.check.outputs.SKIP_RUN == 'false'
         run: |
-          cd src
-          COMMIT_SHORT=$(git rev-parse --short HEAD)
-          echo "COMMIT=$COMMIT_SHORT" >> $GITHUB_ENV
-          echo "Commit: $COMMIT_SHORT"
-
+           cd src
+           COMMIT_SHORT=$(git rev-parse --short HEAD)
+           echo "COMMIT=$COMMIT_SHORT" >> $GITHUB_ENV
+           echo "Commit: $COMMIT_SHORT"
+          
       - name: Apply UE5 Patches
         if: steps.check.outputs.SKIP_RUN == 'false'
         run: |
@@ -124,7 +132,7 @@ jobs:
           DEVICE_FILE="libs/vkd3d/device.c"
           SHADER_MODEL="${{ env.SHADER_MODEL }}"
           
-          # Backup
+           # Backup
           cp "$DEVICE_FILE" "$DEVICE_FILE.orig"
           
           # Add header

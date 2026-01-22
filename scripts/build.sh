@@ -12,10 +12,10 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # CONFIG
-CHAMBER="$(pwd)/driver_chamber"
-SPELLS_DIR="$(pwd)/spells"
-CORE_VER="${CORE_VER:-android-ndk-r29}"
-LEVEL="${LEVEL:-35}"
+BUILD_DIR="$(pwd)/build_workspace"
+PATCHES_DIR="$(pwd)/patches"
+NDK_VERSION="${NDK_VERSION:-android-ndk-r30}"
+API_LEVEL="${API_LEVEL:-35}"
 
 # Mesa Sources
 MESA_FREEDESKTOP="https://gitlab.freedesktop.org/mesa/mesa.git"
@@ -24,22 +24,22 @@ MESA_WHITEBELYASH="https://github.com/whitebelyash/mesa-tu8.git"
 MESA_WHITEBELYASH_BRANCH="gen8"
 
 # Runtime Config
-MESA_SOURCE="${MESA_SOURCE:-freedesktop}"
-VARIANT="${1:-tiger}"
+MESA_REPO_SOURCE="${MESA_REPO_SOURCE:-freedesktop}"
+BUILD_VARIANT="${1:-gen8}"
 CUSTOM_COMMIT="${2:-}"
-COMMIT_SHORT=""
-DRAGON_VER=""
+COMMIT_HASH_SHORT=""
+MESA_VERSION=""
 MAX_RETRIES=3
 RETRY_DELAY=15
 BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
 # LOGGING
-log()     { echo -e "${CYAN}[Dragon]${NC} $1"; }
-success() { echo -e "${GREEN}[OK]${NC} $1"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
-info()    { echo -e "${MAGENTA}[INFO]${NC} $1"; }
-header()  { echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n"; }
+log()     { echo -e "\( {CYAN}[Build] \){NC} $1"; }
+success() { echo -e "\( {GREEN}[OK] \){NC} $1"; }
+warn()    { echo -e "\( {YELLOW}[WARN] \){NC} $1"; }
+error()   { echo -e "\( {RED}[ERROR] \){NC} $1"; exit 1; }
+info()    { echo -e "\( {MAGENTA}[INFO] \){NC} $1"; }
+header()  { echo -e "\n\( {BOLD} \){CYAN}=== $1 ===${NC}\n"; }
 
 # UTILITIES
 retry_command() {
@@ -81,27 +81,27 @@ check_dependencies() {
 setup_ndk() {
     header "NDK Setup"
 
-    if [ -n "${ANDROID_NDK_LATEST_HOME}" ] && [ -d "${ANDROID_NDK_LATEST_HOME}" ]; then
+    if [ -n "\( {ANDROID_NDK_LATEST_HOME}" ] && [ -d " \){ANDROID_NDK_LATEST_HOME}" ]; then
         export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME}"
         info "Using system NDK: $ANDROID_NDK_HOME"
         return
     fi
 
-    if [ -d "$CHAMBER/$CORE_VER" ]; then
-        export ANDROID_NDK_HOME="$CHAMBER/$CORE_VER"
+    if [ -d "$BUILD_DIR/$NDK_VERSION" ]; then
+        export ANDROID_NDK_HOME="$BUILD_DIR/$NDK_VERSION"
         info "Using cached NDK: $ANDROID_NDK_HOME"
         return
     fi
 
-    log "Downloading NDK $CORE_VER..."
-    local ndk_url="https://dl.google.com/android/repository/${CORE_VER}-linux.zip"
+    log "Downloading NDK $NDK_VERSION..."
+    local ndk_url="https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip"
 
     if ! retry_command "curl -sL '$ndk_url' -o core.zip" "Downloading NDK"; then
         error "Failed to download NDK"
     fi
 
     unzip -q core.zip && rm -f core.zip
-    export ANDROID_NDK_HOME="$CHAMBER/$CORE_VER"
+    export ANDROID_NDK_HOME="$BUILD_DIR/$NDK_VERSION"
     success "NDK installed: $ANDROID_NDK_HOME"
 }
 
@@ -109,11 +109,11 @@ setup_ndk() {
 clone_mesa() {
     header "Mesa Source"
 
-    [ -d "$CHAMBER/mesa" ] && rm -rf "$CHAMBER/mesa"
+    [ -d "$BUILD_DIR/mesa" ] && rm -rf "$BUILD_DIR/mesa"
 
-    if [ "$MESA_SOURCE" = "whitebelyash" ]; then
+    if [ "$MESA_REPO_SOURCE" = "whitebelyash" ]; then
         log "Cloning from Whitebelyash (Gen8 branch)..."
-        if retry_command "git clone --depth=200 --branch '$MESA_WHITEBELYASH_BRANCH' '$MESA_WHITEBELYASH' '$CHAMBER/mesa' 2>/dev/null" "Cloning Whitebelyash"; then
+        if retry_command "git clone --depth=200 --branch '$MESA_WHITEBELYASH_BRANCH' '$MESA_WHITEBELYASH' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning Whitebelyash"; then
             setup_mesa_repo
             apply_whitebelyash_fixes
             return
@@ -122,13 +122,13 @@ clone_mesa() {
     fi
 
     log "Cloning from freedesktop.org..."
-    if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP' '$CHAMBER/mesa' 2>/dev/null" "Cloning from GitLab"; then
+    if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning from GitLab"; then
         setup_mesa_repo
         return
     fi
 
     warn "GitLab unavailable, trying GitHub mirror..."
-    if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP_MIRROR' '$CHAMBER/mesa' 2>/dev/null" "Cloning from GitHub"; then
+    if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP_MIRROR' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning from GitHub"; then
         setup_mesa_repo
         return
     fi
@@ -137,9 +137,9 @@ clone_mesa() {
 }
 
 setup_mesa_repo() {
-    cd "$CHAMBER/mesa"
-    git config user.name "DragonDriver"
-    git config user.email "driver@dragon.build"
+    cd "$BUILD_DIR/mesa"
+    git config user.name "BuildUser"
+    git config user.email "build@system.local"
 
     if [ -n "$CUSTOM_COMMIT" ]; then
         log "Checking out: $CUSTOM_COMMIT"
@@ -147,16 +147,16 @@ setup_mesa_repo() {
         git checkout "$CUSTOM_COMMIT" 2>/dev/null || warn "Could not checkout $CUSTOM_COMMIT, using HEAD"
     fi
 
-    COMMIT_SHORT=$(git rev-parse --short HEAD)
-    DRAGON_VER=$(cat VERSION 2>/dev/null || echo "unknown")
+    COMMIT_HASH_SHORT=$(git rev-parse --short HEAD)
+    MESA_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
 
-    echo "$DRAGON_VER" > "$CHAMBER/version.txt"
-    success "Mesa ready: $DRAGON_VER ($COMMIT_SHORT)"
+    echo "$MESA_VERSION" > "$BUILD_DIR/version.txt"
+    success "Mesa ready: $MESA_VERSION ($COMMIT_HASH_SHORT)"
 }
 
 apply_whitebelyash_fixes() {
     log "Applying Whitebelyash compatibility fixes..."
-    cd "$CHAMBER/mesa"
+    cd "$BUILD_DIR/mesa"
 
     # Fix device registration syntax
     if [ -f "src/freedreno/common/freedreno_devices.py" ]; then
@@ -173,52 +173,52 @@ apply_whitebelyash_fixes() {
     success "Whitebelyash fixes applied"
 }
 
-# PREPARE CHAMBER
-prepare_chamber() {
-    header "Preparing Build Chamber"
-    mkdir -p "$CHAMBER"
-    cd "$CHAMBER"
+# PREPARE BUILD DIR
+prepare_build_dir() {
+    header "Preparing Build Directory"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
 
     setup_ndk
     clone_mesa
 
-    cd "$CHAMBER"
-    success "Chamber ready - Mesa $DRAGON_VER ($COMMIT_SHORT)"
+    cd "$BUILD_DIR"
+    success "Build directory ready - Mesa $MESA_VERSION ($COMMIT_HASH_SHORT)"
 }
 
-# SPELL SYSTEM
-apply_spell_file() {
-    local spell_path="$1"
-    local full_path="$SPELLS_DIR/$spell_path.patch"
+# PATCH SYSTEM
+apply_patch_file() {
+    local patch_path="$1"
+    local full_path="$PATCHES_DIR/$patch_path.patch"
 
     if [ ! -f "$full_path" ]; then
-        warn "Spell not found: $spell_path"
+        warn "Patch not found: $patch_path"
         return 1
     fi
 
-    log "Applying spell: $spell_path"
-    cd "$CHAMBER/mesa"
+    log "Applying patch: $patch_path"
+    cd "$BUILD_DIR/mesa"
 
     if git apply "$full_path" --check 2>/dev/null; then
         git apply "$full_path"
-        success "Spell applied: $spell_path"
+        success "Patch applied: $patch_path"
         return 0
     fi
 
-    warn "Spell may conflict, trying 3-way merge..."
+    warn "Patch may conflict, trying 3-way merge..."
     if git apply "$full_path" --3way 2>/dev/null; then
-        success "Spell applied with 3-way merge: $spell_path"
+        success "Patch applied with 3-way merge: $patch_path"
         return 0
     fi
 
-    warn "Spell failed: $spell_path"
+    warn "Patch failed: $patch_path"
     return 1
 }
 
 apply_merge_request() {
     local mr_id="$1"
     log "Fetching MR !$mr_id..."
-    cd "$CHAMBER/mesa"
+    cd "$BUILD_DIR/mesa"
 
     if ! git fetch origin "refs/merge-requests/$mr_id/head" 2>/dev/null; then
         warn "Could not fetch MR $mr_id"
@@ -235,13 +235,13 @@ apply_merge_request() {
     return 1
 }
 
-# INLINE SPELLS
+# INLINE PATCHES
 
-# Tiger Velocity - Force sysmem rendering by setting TU_DEBUG environment
+# Sysmem Rendering Preference - Force sysmem rendering by setting TU_DEBUG environment
 # This is a safe approach that does not modify void functions
-spell_tiger_velocity() {
-    log "Applying Tiger Velocity (sysmem preference)..."
-    cd "$CHAMBER/mesa"
+apply_sysmem_rendering() {
+    log "Applying sysmem rendering preference..."
+    cd "$BUILD_DIR/mesa"
 
     local file="src/freedreno/vulkan/tu_device.cc"
     
@@ -250,13 +250,13 @@ spell_tiger_velocity() {
         return 1
     fi
 
-    if grep -q "Dragon: Tiger Velocity" "$file" 2>/dev/null; then
-        info "Tiger Velocity already applied"
+    if grep -q "Build: Sysmem Rendering" "$file" 2>/dev/null; then
+        info "Sysmem rendering already applied"
         return 0
     fi
 
     # Add marker comment at the top
-    sed -i '1i\/* Dragon: Tiger Velocity - Sysmem rendering preference */' "$file"
+    sed -i '1i\/* Build: Sysmem Rendering Preference */' "$file"
 
     # Modify tu_device to prefer sysmem rendering
     # Find and modify the autotune or render mode selection
@@ -264,14 +264,14 @@ spell_tiger_velocity() {
         sed -i 's/use_bypass = false/use_bypass = true/g' "$file" 2>/dev/null || true
     fi
 
-    success "Tiger Velocity applied"
+    success "Sysmem rendering applied"
     return 0
 }
 
-# Falcon Memory - Disable cached coherent memory
-spell_falcon_memory() {
-    log "Applying Falcon Memory..."
-    cd "$CHAMBER/mesa"
+# Memory Optimization - Disable cached coherent memory
+apply_memory_optimization() {
+    log "Applying memory optimization..."
+    cd "$BUILD_DIR/mesa"
 
     local changes=0
 
@@ -285,13 +285,13 @@ spell_falcon_memory() {
         ((changes++))
     fi
 
-    [ $changes -gt 0 ] && success "Falcon Memory applied ($changes files)" || warn "No changes made"
+    [ $changes -gt 0 ] && success "Memory optimization applied ($changes files)" || warn "No changes made"
 }
 
 # DX12 Device Caps Override - Critical for VKD3D
-spell_dx12_device_caps() {
-    log "Applying DX12 Device Caps Override..."
-    cd "$CHAMBER/mesa"
+apply_dx12_device_caps() {
+    log "Applying DX12 device caps override..."
+    cd "$BUILD_DIR/mesa"
 
     local device_file="src/freedreno/vulkan/tu_device.cc"
     local physical_file="src/freedreno/vulkan/tu_physical_device.cc"
@@ -301,8 +301,8 @@ spell_dx12_device_caps() {
         return 1
     fi
 
-    if grep -q "Dragon: DX12 Caps" "$device_file" 2>/dev/null; then
-        info "DX12 Device Caps already applied"
+    if grep -q "Build: DX12 Caps" "$device_file" 2>/dev/null; then
+        info "DX12 device caps already applied"
         return 0
     fi
 
@@ -316,15 +316,15 @@ spell_dx12_device_caps() {
     sed -i 's/shaderInt64 = false/shaderInt64 = true/g' "$device_file" 2>/dev/null || true
 
     # Add marker
-    sed -i '1i\/* Dragon: DX12 Caps Override */' "$device_file"
+    sed -i '1i\/* Build: DX12 Caps Override */' "$device_file"
 
-    success "DX12 Device Caps applied"
+    success "DX12 device caps applied"
 }
 
 # Wave Ops Force - Required for UE5
-spell_wave_ops_force() {
-    log "Applying Wave Ops Force..."
-    cd "$CHAMBER/mesa"
+apply_wave_ops_force() {
+    log "Applying wave ops force..."
+    cd "$BUILD_DIR/mesa"
 
     local shader_file="src/freedreno/vulkan/tu_shader.cc"
     local compiler_file="src/freedreno/ir3/ir3_compiler.c"
@@ -333,11 +333,11 @@ spell_wave_ops_force() {
 
     # Force subgroup size adjustments
     if [ -f "$shader_file" ]; then
-        if ! grep -q "Dragon: Wave Ops" "$shader_file" 2>/dev/null; then
+        if ! grep -q "Build: Wave Ops" "$shader_file" 2>/dev/null; then
             sed -i 's/subgroupSize = 64/subgroupSize = 32/g' "$shader_file" 2>/dev/null || true
             sed -i 's/minSubgroupSize = 64/minSubgroupSize = 32/g' "$shader_file" 2>/dev/null || true
             sed -i 's/maxSubgroupSize = 128/maxSubgroupSize = 64/g' "$shader_file" 2>/dev/null || true
-            sed -i '1i\/* Dragon: Wave Ops Force */' "$shader_file"
+            sed -i '1i\/* Build: Wave Ops Force */' "$shader_file"
             ((changes++))
         fi
     fi
@@ -348,13 +348,13 @@ spell_wave_ops_force() {
         ((changes++))
     fi
 
-    [ $changes -gt 0 ] && success "Wave Ops Force applied ($changes files)" || warn "No changes made"
+    [ $changes -gt 0 ] && success "Wave ops force applied ($changes files)" || warn "No changes made"
 }
 
 # Enhanced Barriers Relax - For DX12 barrier model
-spell_enhanced_barriers_relax() {
-    log "Applying Enhanced Barriers Relax..."
-    cd "$CHAMBER/mesa"
+apply_enhanced_barriers_relax() {
+    log "Applying enhanced barriers relax..."
+    cd "$BUILD_DIR/mesa"
 
     local cmd_file="src/freedreno/vulkan/tu_cmd_buffer.cc"
 
@@ -363,22 +363,22 @@ spell_enhanced_barriers_relax() {
         return 1
     fi
 
-    if grep -q "Dragon: Barriers Relax" "$cmd_file" 2>/dev/null; then
-        info "Enhanced Barriers already applied"
+    if grep -q "Build: Barriers Relax" "$cmd_file" 2>/dev/null; then
+        info "Enhanced barriers already applied"
         return 0
     fi
 
     # Comment out strict barrier assertions (safe approach)
-    sed -i 's/assert(src_stage_mask)//* Dragon: Barriers Relax *\/ \/\/ assert(src_stage_mask)/g' "$cmd_file" 2>/dev/null || true
+    sed -i 's/assert(src_stage_mask)//* Build: Barriers Relax *\/ \/\/ assert(src_stage_mask)/g' "$cmd_file" 2>/dev/null || true
     sed -i 's/assert(dst_stage_mask)/\/\/ assert(dst_stage_mask)/g' "$cmd_file" 2>/dev/null || true
 
-    success "Enhanced Barriers Relax applied"
+    success "Enhanced barriers relax applied"
 }
 
 # UE5 Resource Aliasing - For transient buffers
-spell_ue5_resource_aliasing() {
-    log "Applying UE5 Resource Aliasing..."
-    cd "$CHAMBER/mesa"
+apply_ue5_resource_aliasing() {
+    log "Applying UE5 resource aliasing..."
+    cd "$BUILD_DIR/mesa"
 
     local memory_file="src/freedreno/vulkan/tu_device_memory.cc"
 
@@ -391,29 +391,29 @@ spell_ue5_resource_aliasing() {
         return 1
     fi
 
-    if grep -q "Dragon: UE5 Aliasing" "$memory_file" 2>/dev/null; then
-        info "UE5 Resource Aliasing already applied"
+    if grep -q "Build: UE5 Aliasing" "$memory_file" 2>/dev/null; then
+        info "UE5 resource aliasing already applied"
         return 0
     fi
 
     # Relax aliasing checks
     sed -i 's/aliasing_allowed = false/aliasing_allowed = true/g' "$memory_file" 2>/dev/null || true
-    sed -i '1i\/* Dragon: UE5 Aliasing */' "$memory_file"
+    sed -i '1i\/* Build: UE5 Aliasing */' "$memory_file"
 
-    success "UE5 Resource Aliasing applied"
+    success "UE5 resource aliasing applied"
 }
 
 # BUILD SYSTEM
 create_cross_file() {
     local NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-    local CROSS_FILE="$CHAMBER/cross_dragon"
-    local NATIVE_FILE="$CHAMBER/native_dragon"
+    local CROSS_FILE="$BUILD_DIR/cross_build"
+    local NATIVE_FILE="$BUILD_DIR/native_build"
 
     cat <<EOF > "$CROSS_FILE"
 [binaries]
 ar = '$NDK_BIN/llvm-ar'
-c = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang']
-cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
+c = ['ccache', '\( NDK_BIN/aarch64-linux-android \){API_LEVEL}-clang']
+cpp = ['ccache', '\( NDK_BIN/aarch64-linux-android \){API_LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$NDK_BIN/llvm-strip'
@@ -442,17 +442,17 @@ EOF
 
 run_meson_setup() {
     local variant_name="$1"
-    local log_file="$CHAMBER/meson_${variant_name}.log"
+    local log_file="\( BUILD_DIR/meson_ \){variant_name}.log"
 
     log "Running Meson setup for $variant_name..."
-    rm -rf build-dragon
+    rm -rf build-release
 
-    if ! meson setup build-dragon \
-        --cross-file "$CHAMBER/cross_dragon" \
-        --native-file "$CHAMBER/native_dragon" \
+    if ! meson setup build-release \
+        --cross-file "$BUILD_DIR/cross_build" \
+        --native-file "$BUILD_DIR/native_build" \
         -Dbuildtype=release \
         -Dplatforms=android \
-        -Dplatform-sdk-version=$LEVEL \
+        -Dplatform-sdk-version=$API_LEVEL \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
@@ -481,12 +481,12 @@ run_meson_setup() {
 
 run_ninja_build() {
     local variant_name="$1"
-    local log_file="$CHAMBER/ninja_${variant_name}.log"
+    local log_file="\( BUILD_DIR/ninja_ \){variant_name}.log"
     local cores=$(nproc 2>/dev/null || echo 4)
 
     log "Building with Ninja ($cores cores)..."
 
-    if ! ninja -C build-dragon -j"$cores" src/freedreno/vulkan/libvulkan_freedreno.so &> "$log_file"; then
+    if ! ninja -C build-release -j"$cores" src/freedreno/vulkan/libvulkan_freedreno.so &> "$log_file"; then
         echo ""
         warn "Build failed. Last 50 lines:"
         tail -50 "$log_file"
@@ -498,30 +498,30 @@ run_ninja_build() {
 
 package_build() {
     local variant_name="$1"
-    local SO_FILE="build-dragon/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local SO_FILE="build-release/src/freedreno/vulkan/libvulkan_freedreno.so"
 
     if [ ! -f "$SO_FILE" ]; then
         error "Build output not found: $SO_FILE"
     fi
 
     log "Packaging $variant_name..."
-    cd "$CHAMBER"
+    cd "$BUILD_DIR"
 
     cp "mesa/$SO_FILE" libvulkan_freedreno.so
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
     mv libvulkan_freedreno.so vulkan.adreno.so
 
-    local FILENAME="Dragon-${variant_name}-${DRAGON_VER}-${COMMIT_SHORT}"
+    local FILENAME="Turnip-\( {variant_name}- \){MESA_VERSION}-${COMMIT_HASH_SHORT}"
 
     cat <<EOF > meta.json
 {
     "schemaVersion": 1,
-    "name": "Dragon ${variant_name}",
-    "description": "Mesa ${DRAGON_VER} - ${variant_name} variant - Built: ${BUILD_DATE}",
-    "author": "DragonDriver",
+    "name": "Turnip ${variant_name}",
+    "description": "Mesa ${MESA_VERSION} - ${variant_name} variant - Built: ${BUILD_DATE}",
+    "author": "BuildSystem",
     "packageVersion": "1",
     "vendor": "Mesa/Freedreno/whitebelyash",
-    "driverVersion": "${DRAGON_VER}",
+    "driverVersion": "${MESA_VERSION}",
     "minApi": 27,
     "libraryName": "vulkan.adreno.so"
 }
@@ -530,16 +530,16 @@ EOF
     zip -9 "${FILENAME}.zip" vulkan.adreno.so meta.json
     rm -f vulkan.adreno.so meta.json
 
-    local size=$(du -h "${FILENAME}.zip" | cut -f1)
+    local size=\( (du -h " \){FILENAME}.zip" | cut -f1)
     success "Created: ${FILENAME}.zip ($size)"
 }
 
-driver_dragon() {
+perform_build() {
     local variant_name="$1"
 
     header "Building: $variant_name"
 
-    cd "$CHAMBER/mesa"
+    cd "$BUILD_DIR/mesa"
     create_cross_file
     run_meson_setup "$variant_name"
     run_ninja_build "$variant_name"
@@ -549,84 +549,84 @@ driver_dragon() {
 # VARIANT BUILDERS
 reset_mesa() {
     log "Resetting Mesa source..."
-    cd "$CHAMBER/mesa"
+    cd "$BUILD_DIR/mesa"
     git checkout . 2>/dev/null || true
     git clean -fd 2>/dev/null || true
 }
 
-build_tiger() {
-    header "TIGER BUILD"
+build_gen8() {
+    header "GEN8 BUILD"
     reset_mesa
-    spell_tiger_velocity
-    driver_dragon "Tiger"
+    apply_sysmem_rendering
+    perform_build "Gen8"
 }
 
-build_tiger_phoenix() {
-    header "TIGER-PHOENIX BUILD"
+build_gen8_phoenix() {
+    header "GEN8-PHOENIX BUILD"
     reset_mesa
-    spell_tiger_velocity
-    # apply_spell_file "phoenix/wings_boost"
-    driver_dragon "Tiger-Phoenix"
+    apply_sysmem_rendering
+    # apply_patch_file "phoenix/wings_boost"
+    perform_build "Gen8-Phoenix"
 }
 
-build_falcon() {
-    header "FALCON BUILD"
+build_gen7() {
+    header "GEN9 BUILD"
     reset_mesa
-    spell_falcon_memory
-    spell_tiger_velocity
-    # apply_spell_file "falcon/a6xx_fix"
-    # apply_spell_file "falcon/a750_cse_fix"
-    # apply_spell_file "falcon/lrz_fix"
-    # apply_spell_file "falcon/adreno750_dx12"
-    # apply_spell_file "falcon/vertex_buffer_fix"
-    driver_dragon "Falcon"
+    apply_memory_optimization
+    apply_sysmem_rendering
+    # apply_patch_file "falcon/a6xx_fix"
+    # apply_patch_file "falcon/a750_cse_fix"
+    # apply_patch_file "falcon/lrz_fix"
+    # apply_patch_file "falcon/adreno750_dx12"
+    # apply_patch_file "falcon/vertex_buffer_fix"
+    perform_build "Gen9"
 }
 
-build_shadow() {
-    header "SHADOW BUILD"
+build_shadow_variant() {
+    header "SHADOW VARIANT BUILD"
     reset_mesa
     # apply_merge_request "37802"
-    driver_dragon "Shadow"
+    perform_build "Shadow"
 }
 
-build_hawk() {
-    header "HAWK BUILD"
+build_hawk_variant() {
+    header "HAWK VARIANT BUILD"
     reset_mesa
-    spell_tiger_velocity
-    spell_falcon_memory
-    # apply_spell_file "phoenix/wings_boost"
-    # apply_spell_file "common/memory_fix"
-    # driver_dragon "Hawk"
+    apply_sysmem_rendering
+    apply_memory_optimization
+    # apply_patch_file "phoenix/wings_boost"
+    # apply_patch_file "common/memory_fix"
+    perform_build "Hawk"
 }
 
-build_dragon() {
-    header "DRAGON BUILD (DX12 Heavy)"
+build_dx12_heavy() {
+    header "DX12 HEAVY BUILD"
     reset_mesa
 
-    # Core spells - safe inline modifications only
-    spell_tiger_velocity
-    spell_falcon_memory
+    # Core patches - safe inline modifications only
+    apply_sysmem_rendering
+    apply_memory_optimization
 
-    # DX12/UE5 specific spells - safe inline modifications
-    spell_dx12_device_caps
-    spell_wave_ops_force
-    spell_enhanced_barriers_relax
-    spell_ue5_resource_aliasing
+    # DX12/UE5 specific patches - safe inline modifications
+    apply_dx12_device_caps
+    apply_wave_ops_force
+    apply_enhanced_barriers_relax
+    apply_ue5_resource_aliasing
 
-    # Skip file-based spells that may conflict with current Mesa version
+    # Skip file-based patches that may conflict with current Mesa version
     # These need to be updated for each Mesa version
-    # apply_spell_file "dx12/device_caps_override"
-    # apply_spell_file "dx12/wave_ops_force"
-    # apply_spell_file "dx12/mesh_shader_relax"
-    # apply_spell_file "dx12/enhanced_barriers_relax"
-    # apply_spell_file "dx12/ue5_resource_aliasing"
+    # apply_patch_file "dx12/device_caps_override"
+    # apply_patch_file "dx12/wave_ops_force"
+    # apply_patch_file "dx12/mesh_shader_relax"
+    # apply_patch_file "dx12/enhanced_barriers_relax"
+    # apply_patch_file "dx12/ue5_resource_aliasing"
 
-    driver_dragon "Dragon"
+    perform_build "DX12-Heavy"
 }
 
-build_all() {
+build_all_variants() {
     header "BUILDING ALL VARIANTS"
-    local variants=("tiger" "tiger_phoenix" "falcon" "shadow" "hawk" "dragon")
+    local variants=("gen8" "gen8_phoenix" "gen7" "shadow_variant" "hawk_variant" "dx12_heavy")
     local success_count=0
     local failed=()
 
@@ -646,7 +646,7 @@ build_all() {
     done
 
     echo ""
-    info "Build Summary: $success_count/${#variants[@]} successful"
+    info "Build Summary: \( success_count/ \){#variants[@]} successful"
     [ ${#failed[@]} -gt 0 ] && warn "Failed: ${failed[*]}"
 }
 
@@ -657,27 +657,27 @@ main() {
     echo ""
     echo ""
     echo ""
-    info "Variant: $VARIANT"
-    info "Mesa Source: $MESA_SOURCE"
+    info "Variant: $BUILD_VARIANT"
+    info "Mesa Source: $MESA_REPO_SOURCE"
     info "Date: $BUILD_DATE"
     echo ""
 
     check_dependencies
-    prepare_chamber
+    prepare_build_dir
 
-    case "$VARIANT" in
-        tiger)          build_tiger ;;
-        tiger-phoenix)  build_tiger_phoenix ;;
-        falcon)         build_falcon ;;
-        shadow)         build_shadow ;;
-        hawk)           build_hawk ;;
-        dragon)     build_dragon ;;
-        all)            build_all ;;
+    case "$BUILD_VARIANT" in
+        gen8)          build_gen8 ;;
+        gen8-phoenix)  build_gen8_phoenix ;;
+        gen7)          build_gen7 ;;
+        shadow)        build_shadow_variant ;;
+        hawk)          build_hawk_variant ;;
+        dx12-heavy)    build_dx12_heavy ;;
+        all)           build_all_variants ;;
         *)
-            warn "Unknown variant: $VARIANT"
-            info "Available: tiger, tiger-phoenix, falcon, shadow, hawk, dragon, all"
-            warn "Defaulting to tiger..."
-            build_tiger
+            warn "Unknown variant: $BUILD_VARIANT"
+            info "Available: gen8, gen8-phoenix, gen7, shadow, hawk, dx12-heavy, all"
+            warn "Defaulting to gen8..."
+            build_gen8
             ;;
     esac
 
@@ -687,9 +687,9 @@ main() {
     success ""
     echo ""
 
-    if ls "$CHAMBER"/*.zip 1>/dev/null 2>&1; then
+    if ls "$BUILD_DIR"/*.zip 1>/dev/null 2>&1; then
         info "Output files:"
-        ls -lh "$CHAMBER"/*.zip
+        ls -lh "$BUILD_DIR"/*.zip
     else
         warn "No output files found"
         exit 1

@@ -333,8 +333,8 @@ create_cross_file() {
     cat <<EOF > "$CROSS_FILE"
 [binaries]
 ar = '$NDK_BIN/llvm-ar'
-c = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+c = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang']
+cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$NDK_BIN/llvm-strip'

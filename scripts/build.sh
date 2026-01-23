@@ -21,11 +21,11 @@ API_LEVEL="${API_LEVEL:-35}"
 MESA_FREEDESKTOP="https://gitlab.freedesktop.org/mesa/mesa.git"
 MESA_FREEDESKTOP_MIRROR="https://github.com/mesa3d/mesa.git"
 MESA_WHITEBELYASH="https://github.com/whitebelyash/mesa-tu8.git"
-MESA_WHITEBELYASH_BRANCH="gen8"
+MESA_WHITEBELYASH_BRANCH="8gen"
 
 # Runtime Config
 MESA_REPO_SOURCE="${MESA_REPO_SOURCE:-freedesktop}"
-BUILD_VARIANT="${1:-gen7}"
+BUILD_VARIANT="${1:-a7xx}"
 CUSTOM_COMMIT="${2:-}"
 COMMIT_HASH_SHORT=""
 MESA_VERSION=""
@@ -125,12 +125,12 @@ clone_mesa() {
     if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning from GitLab"; then
         cd "$BUILD_DIR/mesa"
         
-        # التأكد من أننا على فرع main ونأخذ أحدث التزام ممكن
+        # main
         git remote set-branches origin main
         git fetch origin main --depth=1 --update-shallow || warn "Shallow fetch failed, continuing anyway"
         git checkout main || warn "Checkout main failed, using whatever branch was cloned"
         git reset --hard origin/main || warn "Reset to origin/main failed"
-        git clean -fdx || true  # تنظيف أي ملفات غير متتبعة إذا وجدت
+        git clean -fdx || true
         
         setup_mesa_repo
         return
@@ -393,11 +393,11 @@ package_build() {
     cat <<EOF > meta.json
 {
     "schemaVersion": 1,
-    "name": "Turnip ${variant_name}",
+    "name": "Turnip-driver-${variant_name}",
     "description": "Mesa ${MESA_VERSION} - ${variant_name} variant - Built: ${BUILD_DATE}",
-    "author": "Blue",
+    "author": "Freedreno/whitebelyash",
     "packageVersion": "1",
-    "vendor": "Freedreno/whitebelyash",
+    "vendor": "Meaa",
     "driverVersion": "${MESA_VERSION}",
     "minApi": 27,
     "libraryName": "vulkan.ad07xx.so"
@@ -431,12 +431,14 @@ reset_mesa() {
     git clean -fd 2>/dev/null || true
 }
 
-build_gen7() {
-    header "GEN7 BUILD (Freedesktop)"
+build_a7xx() {
+    header "A7XX BUILD (Freedesktop)"
     reset_mesa
     apply_memory_optimization
     apply_sysmem_rendering
-    perform_build "Gen7"
+  # apply_patch_file ""
+     
+    perform_build "a7xx"
 }
 
 build_gen8() {
@@ -459,11 +461,11 @@ main() {
     prepare_build_dir
 
     case "$BUILD_VARIANT" in
-        gen7)
+        a7xx)
             if [ "$MESA_REPO_SOURCE" != "freedesktop" ]; then
-                warn "gen7 is recommended for freedesktop source"
+                warn "a7xx is recommended for freedesktop source"
             fi
-            build_gen7
+            build_a7xx
             ;;
         gen8)
             if [ "$MESA_REPO_SOURCE" != "whitebelyash" ]; then
@@ -473,19 +475,19 @@ main() {
             ;;
         *)
             warn "Unknown variant: $BUILD_VARIANT"
-            info "Available: gen7 (freedesktop), gen8 (whitebelyash)"
+            info "Available: a7xx (freedesktop), gen8 (whitebelyash)"
             if [ "$MESA_REPO_SOURCE" = "whitebelyash" ]; then
                 warn "Defaulting to gen8..."
                 build_gen8
             else
-                warn "Defaulting to gen7..."
-                build_gen7
+                warn "Defaulting to a7xx..."
+                build_a7xx
             fi
             ;;
     esac
 
     echo ""
-    success "Build Complete!"
+    success "Build Complete"
     echo ""
 
     if ls "$BUILD_DIR"/*.zip 1>/dev/null 2>&1; then

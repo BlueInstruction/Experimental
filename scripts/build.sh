@@ -34,12 +34,12 @@ RETRY_DELAY=15
 BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
 # LOGGING
-log()     { echo -e "\( {CYAN}[Build] \){NC} $1"; }
-success() { echo -e "\( {GREEN}[OK] \){NC} $1"; }
-warn()    { echo -e "\( {YELLOW}[WARN] \){NC} $1"; }
-error()   { echo -e "\( {RED}[ERROR] \){NC} $1"; exit 1; }
-info()    { echo -e "\( {MAGENTA}[INFO] \){NC} $1"; }
-header()  { echo -e "\n\( {BOLD} \){CYAN}=== $1 ===${NC}\n"; }
+log()     { echo -e "${CYAN}[Build]${NC} $1"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+info()    { echo -e "${MAGENTA}[INFO]${NC} $1"; }
+header()  { echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n"; }
 
 # UTILITIES
 retry_command() {
@@ -81,7 +81,7 @@ check_dependencies() {
 setup_ndk() {
     header "NDK Setup"
 
-    if [ -n "\( {ANDROID_NDK_LATEST_HOME}" ] && [ -d " \){ANDROID_NDK_LATEST_HOME}" ]; then
+    if [ -n "${ANDROID_NDK_LATEST_HOME}" ] && [ -d "${ANDROID_NDK_LATEST_HOME}" ]; then
         export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME}"
         info "Using system NDK: $ANDROID_NDK_HOME"
         return

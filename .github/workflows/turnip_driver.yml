@@ -2,19 +2,19 @@ name: Turnip Driver Build
 
 on:
   workflow_dispatch:
-    inputs:
-      build_variant:
-        type: choice
-        description: "Select build variant"
-        default: "gen8"
-        options:
-          - gen8
-          - gen8-phoenix
-          - gen7
-          - shadow
-          - hawk
-          - dx12-heavy
-          - all
+   inputs:
+     # build_variant:
+      # type: choice
+      # description: "Select build variant"
+      # default: "gen8"
+      # options:
+      #    - gen8
+      #    - gen8-phoenix
+      #    - gen7
+      #    - shadow
+      #   - hawk
+      #    - dx12-heavy
+      #    - all
       custom_commit:
         description: "Custom Mesa commit (optional)"
         required: false

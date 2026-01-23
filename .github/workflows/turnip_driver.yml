@@ -2,7 +2,7 @@ name: Turnip Driver
 
 on:
   workflow_dispatch:
-   inputs:
+    inputs:
       custom_commit:
         description: "Custom Mesa commit (optional)"
         required: false
@@ -14,6 +14,13 @@ on:
         options:
           - freedesktop
           - whitebelyash
+      build_variant:
+        type: choice
+        description: "Build variant (gen7 for freedesktop, gen8 for whitebelyash)"
+        default: "gen7"
+        options:
+          - gen7
+          - gen8
   schedule:
     - cron: "0 6 1,15 * *"
 
@@ -60,12 +67,13 @@ jobs:
         run: |
           chmod +x scripts/build.sh
           export MESA_REPO_SOURCE="${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}"
-          bash scripts/build.sh "${{ github.event.inputs.build_variant || 'gen8' }}" "${{ github.event.inputs.custom_commit }}" || {
+          export BUILD_VARIANT="${{ github.event.inputs.build_variant || 'gen7' }}"
+          bash scripts/build.sh "$BUILD_VARIANT" "${{ github.event.inputs.custom_commit }}" || {
             echo ""
             echo "============================================"
             echo "========== MESON ERROR LOG =========="
             echo "============================================"
-            cat build_workspace/meson_Gen8.log 2>/dev/null || echo "Log file not found"
+            cat build_workspace/meson_*.log 2>/dev/null || echo "Log file not found"
             echo "============================================"
             exit 1
           }
@@ -73,7 +81,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-${{ github.event.inputs.build_variant || 'gen8' }}-${{ github.run_number }}
+          name: turnip-${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}-${{ github.event.inputs.build_variant || 'gen7' }}-${{ github.run_number }}
           path: build_workspace/*.zip
           retention-days: 30
 
@@ -96,7 +104,7 @@ jobs:
           body: |
             ## Turnip Driver
             
-            **Variant:** `${{ github.event.inputs.build_variant || 'gen8' }}`
+            **Variant:** `${{ github.event.inputs.build_variant || 'gen7' }}`
             **Mesa Version:** ${{ steps.info.outputs.mesa_ver }}
             **Date:** ${{ steps.info.outputs.date }}
             **Source:** ${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}

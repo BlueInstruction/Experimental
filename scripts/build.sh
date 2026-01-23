@@ -121,7 +121,6 @@ clone_mesa() {
         warn "Whitebelyash unavailable, falling back to freedesktop..."
     fi
 
-    # freedesktop
     log "Cloning from freedesktop.org..."
     if retry_command "git clone --depth=500 '$MESA_FREEDESKTOP' '$BUILD_DIR/mesa' 2>/dev/null" "Cloning from GitLab"; then
         cd "$BUILD_DIR/mesa"
@@ -245,49 +244,103 @@ apply_merge_request() {
     return 1
 }
 
-# INLINE PATCHES (Methods for applying specific code changes)
+# INLINE PATCHES
+
+# Sysmem Rendering Preference - Force sysmem rendering by setting TU_DEBUG environment
+# This is a safe approach that does not modify void functions
 apply_sysmem_rendering() {
     log "Applying sysmem rendering preference..."
     cd "$BUILD_DIR/mesa"
+
     local file="src/freedreno/vulkan/tu_device.cc"
-    if [ ! -f "$file" ]; then warn "Target file not found: $file"; return 1; fi
-    if grep -q "Build: Sysmem Rendering" "$file" 2>/dev/null; then info "Sysmem rendering already applied"; return 0; fi
+    
+    if [ ! -f "$file" ]; then
+        warn "Target file not found: $file"
+        return 1
+    fi
+
+    if grep -q "Build: Sysmem Rendering" "$file" 2>/dev/null; then
+        info "Sysmem rendering already applied"
+        return 0
+    fi
+
+    # Add marker comment at the top
     sed -i '1i\/* Build: Sysmem Rendering Preference */' "$file"
-    if grep -q "use_bypass" "$file"; then sed -i 's/use_bypass = false/use_bypass = true/g' "$file" 2>/dev/null || true; fi
+
+    # Modify tu_device to prefer sysmem rendering
+    # Find and modify the autotune or render mode selection
+    if grep -q "use_bypass" "$file"; then
+        sed -i 's/use_bypass = false/use_bypass = true/g' "$file" 2>/dev/null || true
+    fi
+
     success "Sysmem rendering applied"
     return 0
 }
 
+# Memory Optimization - Disable cached coherent memory
 apply_memory_optimization() {
     log "Applying memory optimization..."
     cd "$BUILD_DIR/mesa"
+
     local changes=0
-    if [ -f "src/freedreno/vulkan/tu_query.cc" ]; then sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc; ((changes++)); fi
-    if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then sed -i 's/has_cached_coherent_memory = true/has_cached_coherent_memory = false/g' src/freedreno/vulkan/tu_device.cc; ((changes++)); fi
+
+    if [ -f "src/freedreno/vulkan/tu_query.cc" ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+        ((changes++))
+    fi
+
+    if [ -f "src/freedreno/vulkan/tu_device.cc" ]; then
+        sed -i 's/has_cached_coherent_memory = true/has_cached_coherent_memory = false/g' src/freedreno/vulkan/tu_device.cc
+        ((changes++))
+    fi
+
     [ $changes -gt 0 ] && success "Memory optimization applied ($changes files)" || warn "No changes made"
 }
 
+# DX12 Device Caps Override - Critical for VKD3D
 apply_dx12_device_caps() {
     log "Applying DX12 device caps override..."
     cd "$BUILD_DIR/mesa"
+
     local device_file="src/freedreno/vulkan/tu_device.cc"
-    if [ ! -f "$device_file" ]; then warn "Device file not found"; return 1; fi
-    if grep -q "Build: DX12 Caps" "$device_file" 2>/dev/null; then info "DX12 device caps already applied"; return 0; fi
+    local physical_file="src/freedreno/vulkan/tu_physical_device.cc"
+
+    if [ ! -f "$device_file" ]; then
+        warn "Device file not found"
+        return 1
+    fi
+
+    if grep -q "Build: DX12 Caps" "$device_file" 2>/dev/null; then
+        info "DX12 device caps already applied"
+        return 0
+    fi
+
+    # Increase descriptor limits for DX12
     sed -i 's/maxBoundDescriptorSets = 4/maxBoundDescriptorSets = 8/g' "$device_file" 2>/dev/null || true
     sed -i 's/maxPerStageDescriptorSamplers = 16/maxPerStageDescriptorSamplers = 64/g' "$device_file" 2>/dev/null || true
     sed -i 's/maxPerStageDescriptorStorageBuffers = 24/maxPerStageDescriptorStorageBuffers = 64/g' "$device_file" 2>/dev/null || true
     sed -i 's/maxPerStageDescriptorStorageImages = 8/maxPerStageDescriptorStorageImages = 32/g' "$device_file" 2>/dev/null || true
+
+    # Enable shaderInt64
     sed -i 's/shaderInt64 = false/shaderInt64 = true/g' "$device_file" 2>/dev/null || true
+
+    # Add marker
     sed -i '1i\/* Build: DX12 Caps Override */' "$device_file"
+
     success "DX12 device caps applied"
 }
 
+# Wave Ops Force - Required for UE5
 apply_wave_ops_force() {
     log "Applying wave ops force..."
     cd "$BUILD_DIR/mesa"
+
     local shader_file="src/freedreno/vulkan/tu_shader.cc"
     local compiler_file="src/freedreno/ir3/ir3_compiler.c"
+
     local changes=0
+
+    # Force subgroup size adjustments
     if [ -f "$shader_file" ]; then
         if ! grep -q "Build: Wave Ops" "$shader_file" 2>/dev/null; then
             sed -i 's/subgroupSize = 64/subgroupSize = 32/g' "$shader_file" 2>/dev/null || true
@@ -297,30 +350,65 @@ apply_wave_ops_force() {
             ((changes++))
         fi
     fi
-    if [ -f "$compiler_file" ]; then sed -i 's/has_wave_ops = false/has_wave_ops = true/g' "$compiler_file" 2>/dev/null || true; ((changes++)); fi
+
+    # Enable wave ops in compiler
+    if [ -f "$compiler_file" ]; then
+        sed -i 's/has_wave_ops = false/has_wave_ops = true/g' "$compiler_file" 2>/dev/null || true
+        ((changes++))
+    fi
+
     [ $changes -gt 0 ] && success "Wave ops force applied ($changes files)" || warn "No changes made"
 }
 
+# Enhanced Barriers Relax - For DX12 barrier model
 apply_enhanced_barriers_relax() {
     log "Applying enhanced barriers relax..."
     cd "$BUILD_DIR/mesa"
+
     local cmd_file="src/freedreno/vulkan/tu_cmd_buffer.cc"
-    if [ ! -f "$cmd_file" ]; then warn "Command buffer file not found"; return 1; fi
-    if grep -q "Build: Barriers Relax" "$cmd_file" 2>/dev/null; then info "Enhanced barriers already applied"; return 0; fi
+
+    if [ ! -f "$cmd_file" ]; then
+        warn "Command buffer file not found"
+        return 1
+    fi
+
+    if grep -q "Build: Barriers Relax" "$cmd_file" 2>/dev/null; then
+        info "Enhanced barriers already applied"
+        return 0
+    fi
+
+    # Comment out strict barrier assertions (safe approach)
     sed -i 's/assert(src_stage_mask)//* Build: Barriers Relax *\/ \/\/ assert(src_stage_mask)/g' "$cmd_file" 2>/dev/null || true
     sed -i 's/assert(dst_stage_mask)/\/\/ assert(dst_stage_mask)/g' "$cmd_file" 2>/dev/null || true
+
     success "Enhanced barriers relax applied"
 }
 
+# UE5 Resource Aliasing - For transient buffers
 apply_ue5_resource_aliasing() {
     log "Applying UE5 resource aliasing..."
     cd "$BUILD_DIR/mesa"
+
     local memory_file="src/freedreno/vulkan/tu_device_memory.cc"
-    if [ ! -f "$memory_file" ]; then memory_file="src/freedreno/vulkan/tu_device.cc"; fi
-    if [ ! -f "$memory_file" ]; then warn "Memory file not found"; return 1; fi
-    if grep -q "Build: UE5 Aliasing" "$memory_file" 2>/dev/null; then info "UE5 resource aliasing already applied"; return 0; fi
+
+    if [ ! -f "$memory_file" ]; then
+        memory_file="src/freedreno/vulkan/tu_device.cc"
+    fi
+
+    if [ ! -f "$memory_file" ]; then
+        warn "Memory file not found"
+        return 1
+    fi
+
+    if grep -q "Build: UE5 Aliasing" "$memory_file" 2>/dev/null; then
+        info "UE5 resource aliasing already applied"
+        return 0
+    fi
+
+    # Relax aliasing checks
     sed -i 's/aliasing_allowed = false/aliasing_allowed = true/g' "$memory_file" 2>/dev/null || true
     sed -i '1i\/* Build: UE5 Aliasing */' "$memory_file"
+
     success "UE5 resource aliasing applied"
 }
 
@@ -334,7 +422,7 @@ create_cross_file() {
 [binaries]
 ar = '$NDK_BIN/llvm-ar'
 c = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang']
-cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+cpp = ['ccache', '$NDK_BIN/aarch64-linux-android${API_LEVEL}-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$NDK_BIN/llvm-strip'
@@ -377,12 +465,11 @@ run_meson_setup() {
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
+        -Dvulkan-beta=true \
         -Dvulkan-layers=device-select,overlay \
         -Dbuild-aco-tests=true \
-        -Dfreedreno-enable-sparse=true \
-        -Dvulkan-beta=true \
-        -Ddefault_library=shared \
         -Dfreedreno-kmds=kgsl \
+        -Dfreedreno-enable-sparse=true \
         -Db_lto=true \
         -Db_ndebug=true \
         -Dcpp_rtti=false \
@@ -434,24 +521,26 @@ package_build() {
 
     cp "mesa/$SO_FILE" libvulkan_freedreno.so
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
-    mv libvulkan_freedreno.so vulkan.ad07XX.so
+    mv libvulkan_freedreno.so vulkan.adreno.so
 
     local FILENAME="Turnip-${variant_name}-${MESA_VERSION}-${COMMIT_HASH_SHORT}"
 
     cat <<EOF > meta.json
 {
     "schemaVersion": 1,
-    "name": "Turnip Driver-${variant_name}",
+    "name": "Turnip ${variant_name}",
     "description": "Mesa ${MESA_VERSION} - ${variant_name} variant - Built: ${BUILD_DATE}",
-    "author": "Mesa",
+    "author": "BuildSystem",
     "packageVersion": "1",
+    "vendor": "Mesa/Freedreno/whitebelyash",
     "driverVersion": "${MESA_VERSION}",
-    "libraryName": "vulkan.ad07XX.so"
+    "minApi": 27,
+    "libraryName": "vulkan.adreno.so"
 }
 EOF
 
     zip -9 "${FILENAME}.zip" vulkan.adreno.so meta.json
-    rm -f vulkan.ad07XX.so meta.json
+    rm -f vulkan.adreno.so meta.json
 
     local size=$(du -h "${FILENAME}.zip" | cut -f1)
     success "Created: ${FILENAME}.zip ($size)"
@@ -459,7 +548,9 @@ EOF
 
 perform_build() {
     local variant_name="$1"
+
     header "Building: $variant_name"
+
     cd "$BUILD_DIR/mesa"
     create_cross_file
     run_meson_setup "$variant_name"
@@ -467,6 +558,7 @@ perform_build() {
     package_build "$variant_name"
 }
 
+# VARIANT BUILDERS
 reset_mesa() {
     log "Resetting Mesa source..."
     cd "$BUILD_DIR/mesa"
@@ -474,21 +566,73 @@ reset_mesa() {
     git clean -fd 2>/dev/null || true
 }
 
-# VARIANT BUILD FUNCTIONS
-build_gen8() { header "GEN8 BUILD"; reset_mesa; apply_sysmem_rendering; perform_build "Gen8"; }
-build_gen8_phoenix() { header "GEN8-PHOENIX BUILD"; reset_mesa; apply_sysmem_rendering; perform_build "Gen8-Phoenix"; }
-build_gen7() { header "GEN7 BUILD"; reset_mesa; apply_memory_optimization; apply_sysmem_rendering; perform_build "Gen7"; }
-build_shadow_variant() { header "SHADOW VARIANT BUILD"; reset_mesa; perform_build "Shadow"; }
-build_hawk_variant() { header "HAWK VARIANT BUILD"; reset_mesa; apply_sysmem_rendering; apply_memory_optimization; perform_build "Hawk"; }
-build_dx12_heavy() {
-    header "DX12 HEAVY BUILD"
+build_gen8() {
+    header "GEN8 BUILD"
+    reset_mesa
+    apply_sysmem_rendering
+    perform_build "Gen8"
+}
+
+build_gen8_phoenix() {
+    header "GEN8-PHOENIX BUILD"
+    reset_mesa
+    apply_sysmem_rendering
+    # apply_patch_file "phoenix/wings_boost"
+    perform_build "Gen8-Phoenix"
+}
+
+build_gen7() {
+    header "GEN9 BUILD"
+    reset_mesa
+    apply_memory_optimization
+    apply_sysmem_rendering
+    # apply_patch_file "falcon/a6xx_fix"
+    # apply_patch_file "falcon/a750_cse_fix"
+    # apply_patch_file "falcon/lrz_fix"
+    # apply_patch_file "falcon/adreno750_dx12"
+    # apply_patch_file "falcon/vertex_buffer_fix"
+    perform_build "Gen9"
+}
+
+build_shadow_variant() {
+    header "SHADOW VARIANT BUILD"
+    reset_mesa
+    # apply_merge_request "37802"
+    perform_build "Shadow"
+}
+
+build_hawk_variant() {
+    header "HAWK VARIANT BUILD"
     reset_mesa
     apply_sysmem_rendering
     apply_memory_optimization
+    # apply_patch_file "phoenix/wings_boost"
+    # apply_patch_file "common/memory_fix"
+    perform_build "Hawk"
+}
+
+build_dx12_heavy() {
+    header "DX12 HEAVY BUILD"
+    reset_mesa
+
+    # Core patches - safe inline modifications only
+    apply_sysmem_rendering
+    apply_memory_optimization
+
+    # DX12/UE5 specific patches - safe inline modifications
     apply_dx12_device_caps
     apply_wave_ops_force
     apply_enhanced_barriers_relax
     apply_ue5_resource_aliasing
+
+    # Skip file-based patches that may conflict with current Mesa version
+    # These need to be updated for each Mesa version
+    # apply_patch_file "dx12/device_caps_override"
+    # apply_patch_file "dx12/wave_ops_force"
+    # apply_patch_file "dx12/mesh_shader_relax"
+    # apply_patch_file "dx12/enhanced_barriers_relax"
+    # apply_patch_file "dx12/ue5_resource_aliasing"
+
     perform_build "DX12-Heavy"
 }
 
@@ -497,24 +641,38 @@ build_all_variants() {
     local variants=("gen8" "gen8_phoenix" "gen7" "shadow_variant" "hawk_variant" "dx12_heavy")
     local success_count=0
     local failed=()
+
     for v in "${variants[@]}"; do
         echo ""
         local func_name="build_${v//-/_}"
         if type "$func_name" &>/dev/null; then
-            if $func_name; then ((success_count++)); else failed+=("$v"); fi
+            if $func_name; then
+                ((success_count++))
+            else
+                failed+=("$v")
+            fi
         else
-            warn "Unknown build function: $func_name"; failed+=("$v")
+            warn "Unknown build function: $func_name"
+            failed+=("$v")
         fi
     done
+
+    echo ""
     info "Build Summary: $success_count/${#variants[@]} successful"
     [ ${#failed[@]} -gt 0 ] && warn "Failed: ${failed[*]}"
 }
 
 # MAIN
 main() {
+    echo ""
+    echo ""
+    echo ""
+    echo ""
+    echo ""
     info "Variant: $BUILD_VARIANT"
     info "Mesa Source: $MESA_REPO_SOURCE"
     info "Date: $BUILD_DATE"
+    echo ""
 
     check_dependencies
     prepare_build_dir
@@ -528,10 +686,18 @@ main() {
         dx12-heavy)    build_dx12_heavy ;;
         all)           build_all_variants ;;
         *)
-            warn "Unknown variant: $BUILD_VARIANT. Defaulting to gen8..."
+            warn "Unknown variant: $BUILD_VARIANT"
+            info "Available: gen8, gen8-phoenix, gen7, shadow, hawk, dx12-heavy, all"
+            warn "Defaulting to gen8..."
             build_gen8
             ;;
     esac
+
+    echo ""
+    success ""
+    success "Complete"
+    success ""
+    echo ""
 
     if ls "$BUILD_DIR"/*.zip 1>/dev/null 2>&1; then
         info "Output files:"

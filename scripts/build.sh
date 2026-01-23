@@ -469,7 +469,6 @@ run_meson_setup() {
         -Dvulkan-layers=device-select,overlay \
         -Dbuild-aco-tests=true \
         -Dfreedreno-kmds=kgsl \
-        -Dfreedreno-enable-sparse=true \
         -Db_lto=true \
         -Db_ndebug=true \
         -Dcpp_rtti=false \

@@ -70,7 +70,7 @@ permissions:
   contents: write
 
 env:
-  NDK_VERSION: "android-ndk-r30"
+  NDK_VERSION: "android-ndk-r29"
   API_LEVEL: "35"
 
 jobs:

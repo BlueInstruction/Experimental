@@ -204,11 +204,6 @@ jobs:
             **Source:** ${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}
             **Variant:** ${{ github.event.inputs.build_variant || 'a7xx' }}
             
-            ### Build Details:
-            - Android API: ${{ env.API_LEVEL }}
-            - NDK: ${{ env.NDK_VERSION }}
-            - Optimizations: Sysmem Rendering, Memory Optimization
-            
           files: build_workspace/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

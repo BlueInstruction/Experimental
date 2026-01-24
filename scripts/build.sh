@@ -512,11 +512,11 @@ package_build() {
     rm -rf "$TEMP_DIR"
     mkdir -p "$TEMP_DIR"
 
-    cp "mesa/$SO_FILE" "$TEMP_DIR/libvulkan.adreno.so"
+    cp "mesa/$SO_FILE" "$TEMP_DIR/libvulkan_freedreno.so"
     
-    patchelf --set-soname "libvulkan.adreno.so" "$TEMP_DIR/libvulkan.adreno.so" 2>/dev/null || true
+    patchelf --set-soname "libvulkan_freedreno.so" "$TEMP_DIR/libvulkan_freedreno.so" 2>/dev/null || true
     
-    "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "$TEMP_DIR/libvulkan.adreno.so" 2>/dev/null || true
+    "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "$TEMP_DIR/libvulkan_freedreno.so" 2>/dev/null || true
     
     local VULKAN_VERSION=$(extract_vulkan_version)
     local DRIVER_NAME=$(generate_filename "$variant_name" "$MESA_VERSION" "$NAMING_FORMAT")
@@ -538,7 +538,7 @@ package_build() {
     "vendor": "Mesa3D",
     "driverVersion": "Vulkan ${VULKAN_VERSION}",
     "minApi": ${API_LEVEL},
-    "libraryName": "libvulkan.adreno.so"
+    "libraryName": "libvulkan_freedreno.so"
 }
 EOF
 
@@ -554,7 +554,6 @@ NDK Version: ${NDK_VERSION}
 Build Date: ${BUILD_DATE}
 
 Supported GPUs:
-- Adreno 660
 - Adreno 730/740/750
 - Adreno 830/840 (lfdevs source recommended)
 EOF

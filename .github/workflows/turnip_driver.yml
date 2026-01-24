@@ -168,11 +168,15 @@ jobs:
           for file in *.zip; do
             if [ -f "$file" ]; then
               NEW_NAME="${{ steps.gen_name.outputs.filename }}.zip"
-              mv "$file" "$NEW_NAME"
-              echo "Renamed: $file -> $NEW_NAME"
+              if [ "$file" != "$NEW_NAME" ]; then
+                mv "$file" "$NEW_NAME"
+                echo "Renamed: $file -> $NEW_NAME"
+              else
+                echo "File already named correctly: $file"
+              fi
             fi
           done
-
+        
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:

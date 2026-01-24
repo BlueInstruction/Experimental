@@ -1,1 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Build System <build@system.local>
+Date: $(date)
+Subject: [PATCH] Memory optimization
 
+---
+ src/freedreno/vulkan/tu_query.cc | 2 +-
+ src/freedreno/vulkan/tu_device.cc | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_query.cc b/src/freedreno/vulkan/tu_query.cc
+index XXXXXXX..XXXXXXX 100644
+--- a/src/freedreno/vulkan/tu_query.cc
++++ b/src/freedreno/vulkan/tu_query.cc
+@@ -XXX,XX +XXX,XX @@ tu_create_query_pool(struct vk_device *_device,
+          pool->stride = 16;
+       }
+ 
+-      result = tu_bo_init_new_cached(device, &pool->bo,
++      result = tu_bo_init_new(device, &pool->bo,
+                                      pool->stride * pool->count,
+                                      TU_BO_ALLOC_NO_FLAGS, "query pool");
+       if (result != VK_SUCCESS) {
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index XXXXXXX..XXXXXXX 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -XXX,XX +XXX,XX @@ tu_CreateDevice(
+    }
+ 
+    /* Disable cached coherent memory for better stability */
+-   dev->has_cached_coherent_memory = true;
++   dev->has_cached_coherent_memory = false;
+ 
+    /* Initialize per-thread state */
+    mtx_init(&device->submit_mutex, mtx_plain);
+-- 
+2.34.1

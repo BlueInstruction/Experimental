@@ -5,7 +5,7 @@ This repository is purely **experimental**. The content here represents my perso
 This work helped me understand:   
 - CI builds.
 
-If you are looking for high-performance!, professionally maintained drivers, check out these repositories:  
+If you are looking for high-performance, professionally maintained drivers, check out these repositories:  
 - [AdrenoToolsDrivers](https://github.com/K11MCH1/AdrenoToolsDrivers)  
 - [freedreno_turnip-CI](https://github.com/StevenMXZ/freedreno_turnip-CI)  
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "version (empty = latest)"
+        description: "version"
         required: false
         default: ""
   workflow_call:

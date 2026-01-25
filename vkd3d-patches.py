@@ -7,95 +7,95 @@ import sys
 import argparse
 import logging
 from datetime import datetime
-from concurrent.futures import threadpoolexecutor, as_completed
-from threading import lock
-from typing import list, tuple, dict, any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+from typing import List, Tuple, Dict, Any
 
-logging.basicconfig(level=logging.info, format='[%(levelname)s] %(message)s')
-logger = logging.getlogger(__name__)
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
-_lock = lock()
+_lock = Lock()
 _applied = 0
 _skipped = 0
-_errors: list[str] = []
-_patch_details: list[dict[str, any]] = []
+_errors: List[str] = []
+_patch_details: List[Dict[str, Any]] = []
 
 
-shader_patches: list[tuple[str, str]] = [
-    (r'(data->highestshadermodel\s*=\s*)[^;]+;', r'\1d3d_shader_model_6_6;'),
-    (r'(info\.highestshadermodel\s*=\s*)[^;]+;', r'\1d3d_shader_model_6_6;'),
-    (r'(maxsupportedfeaturelevel\s*=\s*)[^;]+;', r'\1d3d_feature_level_12_2;'),
+SHADER_PATCHES: List[Tuple[str, str]] = [
+    (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\1D3D_SHADER_MODEL_6_6;'),
+    (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\1D3D_SHADER_MODEL_6_6;'),
+    (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\1D3D_FEATURE_LEVEL_12_2;'),
 ]
 
-rt_patches: list[tuple[str, str]] = [
-    (r'(options5\.raytracingtier\s*=\s*)[^;]+;', r'\1d3d12_raytracing_tier_1_0;'),
+RT_PATCHES: List[Tuple[str, str]] = [
+    (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\1D3D12_RAYTRACING_TIER_1_0;'),
 ]
 
-mesh_patches: list[tuple[str, str]] = [
-    (r'(options7\.meshshadertier\s*=\s*)[^;]+;', r'\1d3d12_mesh_shader_tier_1;'),
+MESH_PATCHES: List[Tuple[str, str]] = [
+    (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\1D3D12_MESH_SHADER_TIER_1;'),
 ]
 
-vrs_patches: list[tuple[str, str]] = [
-    (r'(options6\.variableshadingratetier\s*=\s*)[^;]+;', r'\1d3d12_variable_shading_rate_tier_2;'),
+VRS_PATCHES: List[Tuple[str, str]] = [
+    (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\1D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
 ]
 
-wave_patches: list[tuple[str, str]] = [
-    (r'(options1\.waveops\s*=\s*)[^;]+;', r'\1true;'),
-    (r'(options1\.wavelanecountmin\s*=\s*)[^;]+;', r'\g<1>32;'),
-    (r'(options1\.wavelanecountmax\s*=\s*)[^;]+;', r'\g<1>64;'),
+WAVE_PATCHES: List[Tuple[str, str]] = [
+    (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\1TRUE;'),
+    (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
+    (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
 ]
 
-resource_patches: list[tuple[str, str]] = [
-    (r'(options\.resourcebindingtier\s*=\s*)[^;]+;', r'\1d3d12_resource_binding_tier_3;'),
-    (r'(options\.tiledresourcestier\s*=\s*)[^;]+;', r'\1d3d12_tiled_resources_tier_3;'),
-    (r'(options\.resourceheaptier\s*=\s*)[^;]+;', r'\1d3d12_resource_heap_tier_2;'),
+RESOURCE_PATCHES: List[Tuple[str, str]] = [
+    (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\1D3D12_RESOURCE_BINDING_TIER_3;'),
+    (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\1D3D12_TILED_RESOURCES_TIER_3;'),
+    (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\1D3D12_RESOURCE_HEAP_TIER_2;'),
 ]
 
-shader_ops_patches: list[tuple[str, str]] = [
-    (r'(options\.doubleprecisionfloatshaderops\s*=\s*)[^;]+;', r'\1true;'),
-    (r'(options1\.int64shaderops\s*=\s*)[^;]+;', r'\1true;'),
-    (r'(options4\.native16bitshaderopssupported\s*=\s*)[^;]+;', r'\1true;'),
+SHADER_OPS_PATCHES: List[Tuple[str, str]] = [
+    (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\1TRUE;'),
+    (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\1TRUE;'),
+    (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
 ]
 
-enhanced_patches: list[tuple[str, str]] = [
-    (r'(options12\.enhancedbarrierssupported\s*=\s*)[^;]+;', r'\1true;'),
-    (r'(options2\.depthboundstestsupported\s*=\s*)[^;]+;', r'\1true;'),
+ENHANCED_PATCHES: List[Tuple[str, str]] = [
+    (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
+    (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
 ]
 
-cpu_x86_64_patches: list[tuple[str, str]] = [
+CPU_X86_64_PATCHES: List[Tuple[str, str]] = [
     (r'(vkd3d_cpu_supports_sse4_2\s*\(\s*\))', 'true'),
     (r'(vkd3d_cpu_supports_avx\s*\(\s*\))', 'true'),
     (r'(vkd3d_cpu_supports_avx2\s*\(\s*\))', 'true'),
     (r'(vkd3d_cpu_supports_fma\s*\(\s*\))', 'true'),
-    (r'#define\s+vkd3d_enable_avx\s+\d+', '#define vkd3d_enable_avx 1'),
-    (r'#define\s+vkd3d_enable_avx2\s+\d+', '#define vkd3d_enable_avx2 1'),
-    (r'#define\s+vkd3d_enable_fma\s+\d+', '#define vkd3d_enable_fma 1'),
-    (r'#define\s+vkd3d_enable_sse4_2\s+\d+', '#define vkd3d_enable_sse4_2 1'),
+    (r'#define\s+VKD3D_ENABLE_AVX\s+\d+', '#define VKD3D_ENABLE_AVX 1'),
+    (r'#define\s+VKD3D_ENABLE_AVX2\s+\d+', '#define VKD3D_ENABLE_AVX2 1'),
+    (r'#define\s+VKD3D_ENABLE_FMA\s+\d+', '#define VKD3D_ENABLE_FMA 1'),
+    (r'#define\s+VKD3D_ENABLE_SSE4_2\s+\d+', '#define VKD3D_ENABLE_SSE4_2 1'),
 ]
 
-cpu_arm64ec_patches: list[tuple[str, str]] = [
-    (r'#define\s+vkd3d_enable_avx\s+\d+', '#define vkd3d_enable_avx 0'),
-    (r'#define\s+vkd3d_enable_avx2\s+\d+', '#define vkd3d_enable_avx2 0'),
-    (r'#define\s+vkd3d_enable_fma\s+\d+', '#define vkd3d_enable_fma 0'),
-    (r'#define\s+vkd3d_enable_sse4_2\s+\d+', '#define vkd3d_enable_sse4_2 0'),
-    (r'#define\s+vkd3d_enable_sse\s+\d+', '#define vkd3d_enable_sse 0'),
+CPU_ARM64EC_PATCHES: List[Tuple[str, str]] = [
+    (r'#define\s+VKD3D_ENABLE_AVX\s+\d+', '#define VKD3D_ENABLE_AVX 0'),
+    (r'#define\s+VKD3D_ENABLE_AVX2\s+\d+', '#define VKD3D_ENABLE_AVX2 0'),
+    (r'#define\s+VKD3D_ENABLE_FMA\s+\d+', '#define VKD3D_ENABLE_FMA 0'),
+    (r'#define\s+VKD3D_ENABLE_SSE4_2\s+\d+', '#define VKD3D_ENABLE_SSE4_2 0'),
+    (r'#define\s+VKD3D_ENABLE_SSE\s+\d+', '#define VKD3D_ENABLE_SSE 0'),
     (r'(vkd3d_cpu_supports_sse4_2\s*\(\s*\))', 'false'),
     (r'(vkd3d_cpu_supports_avx\s*\(\s*\))', 'false'),
     (r'(vkd3d_cpu_supports_avx2\s*\(\s*\))', 'false'),
     (r'(vkd3d_cpu_supports_fma\s*\(\s*\))', 'false'),
 ]
 
-perf_patches: list[tuple[str, str]] = [
-    (r'#define\s+vkd3d_debug\s+1', '#define vkd3d_debug 0'),
-    (r'#define\s+vkd3d_profiling\s+1', '#define vkd3d_profiling 0'),
+PERF_PATCHES: List[Tuple[str, str]] = [
+    (r'#define\s+VKD3D_DEBUG\s+1', '#define VKD3D_DEBUG 0'),
+    (r'#define\s+VKD3D_PROFILING\s+1', '#define VKD3D_PROFILING 0'),
 ]
 
 
-def patch_file(path: str, patches: list[tuple[str, str]], dry_run: bool = false) -> tuple[int, int, list[str], list[dict[str, any]]]:
+def patch_file(path: str, patches: List[Tuple[str, str]], dry_run: bool = False) -> Tuple[int, int, List[str], List[Dict[str, Any]]]:
     local_applied = 0
     local_skipped = 0
-    local_errors: list[str] = []
-    local_details: list[dict[str, any]] = []
+    local_errors: List[str] = []
+    local_details: List[Dict[str, Any]] = []
 
     if not os.path.exists(path):
         return local_applied, local_skipped, local_errors, local_details
@@ -103,21 +103,21 @@ def patch_file(path: str, patches: list[tuple[str, str]], dry_run: bool = false)
     try:
         with open(path, "r", encoding='utf-8', errors='ignore') as f:
             content = f.read()
-    except exception as e:
+    except Exception as e:
         local_errors.append(f"read error {path}: {e}")
         return local_applied, local_skipped, local_errors, local_details
 
     original = content
-    file_changes: list[dict[str, any]] = []
+    file_changes: List[Dict[str, Any]] = []
 
     for pattern, replacement in patches:
         try:
-            matches = len(re.findall(pattern, content, re.multiline))
+            matches = len(re.findall(pattern, content, re.MULTILINE))
             if matches > 0:
-                match = re.search(pattern, original, re.multiline)
+                match = re.search(pattern, original, re.MULTILINE)
                 example = match.group(0) if match else 'n/a'
                 if not dry_run:
-                    content = re.sub(pattern, replacement, content, flags=re.multiline)
+                    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
                 local_applied += matches
                 file_changes.append({
                     'pattern': pattern[:50] + "..." if len(pattern) > 50 else pattern,
@@ -133,7 +133,7 @@ def patch_file(path: str, patches: list[tuple[str, str]], dry_run: bool = false)
         try:
             with open(path, "w", encoding='utf-8') as f:
                 f.write(content)
-        except exception as e:
+        except Exception as e:
             local_errors.append(f"write error {path}: {e}")
 
     if file_changes:
@@ -143,11 +143,11 @@ def patch_file(path: str, patches: list[tuple[str, str]], dry_run: bool = false)
 
 
 def generate_report(output_path: str, arch: str, dry_run: bool,
-                    applied: int, skipped: int, errors: list[str],
-                    details: list[dict[str, any]]) -> none:
+                    applied: int, skipped: int, errors: List[str],
+                    details: List[Dict[str, Any]]) -> None:
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(f"vkd3d-proton patch report\n")
-        f.write(f"generated: {datetime.now().strftime('%y-%m-%d %h:%m:%s')}\n")
+        f.write(f"generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"architecture: {arch}\n")
         f.write(f"mode: {'dry-run' if dry_run else 'applied'}\n\n")
         f.write(f"summary:\n")
@@ -179,11 +179,11 @@ def generate_report(output_path: str, arch: str, dry_run: bool,
     logger.info(f"report saved: {output_path}")
 
 
-def apply_patches(src_dir: str, arch: str, dry_run: bool = false,
-                  report: bool = false, max_workers: int = none) -> int:
+def apply_patches(src_dir: str, arch: str, dry_run: bool = False,
+                  report: bool = False, max_workers: int = None) -> int:
     global _applied, _skipped, _errors, _patch_details
 
-    if max_workers is none:
+    if max_workers is None:
         max_workers = os.cpu_count() or 4
 
     _applied, _skipped, _errors, _patch_details = 0, 0, [], []
@@ -192,15 +192,15 @@ def apply_patches(src_dir: str, arch: str, dry_run: bool = false,
     logger.info(f"source: {src_dir} | arch: {arch} | mode: {'dry-run' if dry_run else 'apply'}")
 
     device_patches = (
-        shader_patches + rt_patches + mesh_patches + vrs_patches +
-        wave_patches + resource_patches + shader_ops_patches + enhanced_patches
+        SHADER_PATCHES + RT_PATCHES + MESH_PATCHES + VRS_PATCHES +
+        WAVE_PATCHES + RESOURCE_PATCHES + SHADER_OPS_PATCHES + ENHANCED_PATCHES
     )
 
     device_files = glob.glob(os.path.join(src_dir, "libs/vkd3d/*.[ch]"))
     if not device_files:
-        device_files = glob.glob(os.path.join(src_dir, "src/**/*.[ch]"), recursive=true)
+        device_files = glob.glob(os.path.join(src_dir, "src/**/*.[ch]"), recursive=True)
 
-    all_files = [f for f in glob.glob(os.path.join(src_dir, "**/*.[ch]"), recursive=true) if 'tests' not in f]
+    all_files = [f for f in glob.glob(os.path.join(src_dir, "**/*.[ch]"), recursive=True) if 'tests' not in f]
 
     logger.info(f"files: {len(device_files)} device, {len(all_files)} total")
 
@@ -210,18 +210,18 @@ def apply_patches(src_dir: str, arch: str, dry_run: bool = false,
         tasks.append((f, device_patches))
 
     for f in all_files:
-        tasks.append((f, perf_patches))
+        tasks.append((f, PERF_PATCHES))
 
     if arch == "x86_64":
         logger.info("applying x86_64 optimizations (sse4.2/avx/avx2/fma enabled)")
         for f in all_files:
-            tasks.append((f, cpu_x86_64_patches))
+            tasks.append((f, CPU_X86_64_PATCHES))
     else:
         logger.info("applying arm64ec configuration (x86 simd disabled)")
         for f in all_files:
-            tasks.append((f, cpu_arm64ec_patches))
+            tasks.append((f, CPU_ARM64EC_PATCHES))
 
-    with threadpoolexecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(patch_file, path, patches, dry_run) for path, patches in tasks]
         for future in as_completed(futures):
             a, s, e, d = future.result()
@@ -239,13 +239,13 @@ def apply_patches(src_dir: str, arch: str, dry_run: bool = false,
     return 1 if _errors else 0
 
 
-def main() -> none:
-    parser = argparse.argumentparser(description="vkd3d-proton patcher")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="vkd3d-proton patcher")
     parser.add_argument("src_dir", help="path to vkd3d-proton source")
     parser.add_argument("--arch", choices=["x86_64", "arm64ec"], default="x86_64")
     parser.add_argument("--dry-run", action="store_true", help="preview without applying")
     parser.add_argument("--report", action="store_true", help="generate report")
-    parser.add_argument("--max-workers", type=int, default=none)
+    parser.add_argument("--max-workers", type=int, default=None)
 
     args = parser.parse_args()
 

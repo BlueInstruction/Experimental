@@ -1,67 +1,38 @@
-name: Turnip Driver Builder
+name: turnip driver builder
 
 on:
   workflow_dispatch:
     inputs:
-      mesa_source_type:
+      mesa_source:
         type: choice
-        description: "Source type"
-        default: "official_release"
+        description: "mesa source"
+        default: "latest_release"
         options:
-          - official_release
+          - latest_release
           - staging_branch
-          - custom_commit
-      
-      official_version:
-        type: choice
-        description: "Official version"
-        default: "25.3.4"
-        options:
-          - 25.3.4
-          - 25.2.8
-          - 26.0.0-rc1
-          - custom
+          - main_branch
+          - custom_tag
       
       staging_branch:
         type: choice
-        description: "Staging branch"
+        description: "staging branch (if selected)"
         default: "staging/25.3"
         options:
           - staging/26.0
           - staging/25.3
-          - staging/25.2
-          - main
       
-      custom_commit:
-        description: "Custom commit hash"
+      custom_tag:
+        description: "custom tag (e.g., mesa-25.3.4)"
         required: false
         default: ""
       
-      mesa_repo_source:
+      build_type:
         type: choice
-        description: "Repository source"
-        default: "freedesktop"
+        description: "build type"
+        default: "release"
         options:
-          - freedesktop
-          - lfdevs
-          - 8gen
-      
-      build_variant:
-        type: choice
-        description: "Build variant"
-        default: "a7xx"
-        options:
-          - a7xx
-          - gen8
-      
-      naming_format:
-        type: choice
-        description: "Naming format"
-        default: "emulator"
-        options:
-          - emulator
-          - simple
-          - detailed
+          - release
+          - debug
           
   schedule:  
     - cron: "0 7 * * *"
@@ -74,136 +45,76 @@ env:
   API_LEVEL: "35"
 
 jobs:
-  build_driver:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     
     steps:
-      - name: Checkout Repository
+      - name: checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Build Environment
+      - name: setup build environment
         run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt update
-          sudo apt install -y \
-            libssl-dev \
-            libzstd-dev \
-            libarchive-dev \
-            python3-mako \
-            python3-pip \
-            flex \
-            bison \
-            ccache \
-            patchelf \
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git curl unzip zip \
+            python3 python3-pip python3-mako \
+            ninja-build ccache patchelf \
+            flex bison \
             glslang-tools \
-            libdrm-dev \
-            libwayland-dev \
-            libx11-xcb-dev \
-            libxrandr-dev \
-            libxext-dev \
-            clang \
-            lld
-          sudo apt build-dep mesa -y
-          pip install meson mako PyYAML
+            clang lld
+          pip install --quiet meson mako pyyaml
 
-      - name: Build Turnip Driver
-        run: |
-          chmod +x scripts/build.sh
-          export MESA_SOURCE_TYPE="${{ github.event.inputs.mesa_source_type || 'official_release' }}"
-          export OFFICIAL_VERSION="${{ github.event.inputs.official_version || '25.3.4' }}"
-          export STAGING_BRANCH="${{ github.event.inputs.staging_branch || 'staging/25.3' }}"
-          export CUSTOM_COMMIT="${{ github.event.inputs.custom_commit || '' }}"
-          export MESA_REPO_SOURCE="${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}"
-          export BUILD_VARIANT="${{ github.event.inputs.build_variant || 'a7xx' }}"
-          export NAMING_FORMAT="${{ github.event.inputs.naming_format || 'emulator' }}"
-          bash scripts/build.sh || {
-            echo ""
-            echo "========== BUILD ERROR =========="
-            echo ""
-            echo "=== MESON LOG ==="
-            cat build_workspace/meson_*.log 2>/dev/null || echo "Meson log not found"
-            echo ""
-            echo "=== NINJA LOG ==="
-            cat build_workspace/ninja_*.log 2>/dev/null || echo "Ninja log not found"
-            echo ""
-            exit 1
-          }
+      - name: cache ndk
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: ${{ env.NDK_VERSION }}
 
-      - name: Generate Filename
-        id: gen_name
+      - name: setup ndk
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          cd build_workspace
-          if [ -f version.txt ]; then
-            MESA_VER=$(cat version.txt)
-            CLEAN_VER=$(echo "$MESA_VER" | sed 's/[^0-9.]//g' | sed 's/\.$//')
-          else
-            MESA_VER="unknown"
-            CLEAN_VER="unknown"
-          fi
-          
-          case "${{ github.event.inputs.naming_format || 'emulator' }}" in
-            "emulator")
-              FILENAME="Turnip-${CLEAN_VER}"
-              ;;
-            "simple")
-              FILENAME="Turnip-${{ github.event.inputs.build_variant || 'a7xx' }}-${CLEAN_VER}"
-              ;;
-            "detailed")
-              DATE=$(date +'%Y%m%d')
-              FILENAME="Turnip-${{ github.event.inputs.build_variant || 'a7xx' }}-Mesa${CLEAN_VER}-${DATE}"
-              ;;
-            *)
-              FILENAME="turnip-driver-${CLEAN_VER}"
-              ;;
-          esac
-          
-          CLEAN_FILENAME=$(echo "$FILENAME" | sed 's/[^a-zA-Z0-9._-]//g')
-          
-          echo "filename=${CLEAN_FILENAME}" >> $GITHUB_OUTPUT
-          echo "mesa_version=${MESA_VER}" >> $GITHUB_OUTPUT
+          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
+          sudo unzip -q ndk.zip -d /opt
+          sudo mv /opt/${{ env.NDK_VERSION }} /opt/android-ndk
 
-      - name: Rename Artifacts
+      - name: build turnip
+        id: build
         run: |
-          cd build_workspace
-          for file in *.zip; do
-            if [ -f "$file" ]; then
-              NEW_NAME="${{ steps.gen_name.outputs.filename }}.zip"
-              if [ "$file" != "$NEW_NAME" ]; then
-                mv "$file" "$NEW_NAME"
-                echo "Renamed: $file -> $NEW_NAME"
-              else
-                echo "File already named correctly: $file"
-              fi
-            fi
-          done
-        
-      - name: Upload Artifacts
+          chmod +x build.sh
+          export MESA_SOURCE="${{ inputs.mesa_source || 'latest_release' }}"
+          export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/25.3' }}"
+          export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
+          export BUILD_TYPE="${{ inputs.build_type || 'release' }}"
+          export NDK_PATH="/opt/android-ndk"
+          export API_LEVEL="${{ env.API_LEVEL }}"
+          
+          bash build.sh
+          
+          echo "version=$(cat build/version.txt)" >> $GITHUB_OUTPUT
+          echo "filename=$(cat build/filename.txt)" >> $GITHUB_OUTPUT
+
+      - name: upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-driver-${{ github.run_number }}
-          path: build_workspace/*.zip
-          retention-days: 31
+          name: turnip-${{ steps.build.outputs.version }}
+          path: build/*.zip
+          retention-days: 30
 
-      - name: Prepare Release Info
-        id: release_info
-        run: |
-          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          echo "time=$(date +'%H:%M')" >> $GITHUB_OUTPUT
-          echo "tag=Turnip-${{ steps.gen_name.outputs.mesa_version }}-$(date +'%Y%m%d%H%M')" >> $GITHUB_OUTPUT
-
-      - name: Create Release
+      - name: create release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Turnip Driver ${{ steps.gen_name.outputs.mesa_version }}"
-          tag_name: ${{ steps.release_info.outputs.tag }}
+          tag_name: turnip-${{ steps.build.outputs.version }}
+          name: "Turnip ${{ steps.build.outputs.version }}"
           body: |
             ## Turnip Driver
             
-            **Mesa Version:** ${{ steps.gen_name.outputs.mesa_version }}
-            **Build Date:** ${{ steps.release_info.outputs.date }} ${{ steps.release_info.outputs.time }}
-            **Source:** ${{ github.event.inputs.mesa_repo_source || 'freedesktop' }}
-            **Variant:** ${{ github.event.inputs.build_variant || 'a7xx' }}
+            **Mesa Version:** ${{ steps.build.outputs.version }}
+            **Build Date:** $(date +'%Y-%m-%d')
+            **Android API:** ${{ env.API_LEVEL }}
             
-          files: build_workspace/*.zip
+          files: build/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

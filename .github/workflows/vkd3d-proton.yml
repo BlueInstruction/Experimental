@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "version"
+        description: "version (empty = latest)"
         required: false
         default: ""
   workflow_call:
@@ -63,11 +63,11 @@ jobs:
             ver="${{ inputs.version }}"
             [[ "$ver" =~ ^v ]] || ver="v$ver"
           else
-            ver=$(curl -sl https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
-            [[ -z "$ver" ]] && ver=$(curl -sl https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
+            ver=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
+            [[ -z "$ver" ]] && ver=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
           fi
-          echo "tag=$ver" >> $github_env
-          echo "version=${ver#v}" >> $github_output
+          echo "tag=$ver" >> $GITHUB_ENV
+          echo "version=${ver#v}" >> $GITHUB_OUTPUT
 
       - name: clone source
         id: clone
@@ -75,14 +75,14 @@ jobs:
           git clone --branch ${{ env.tag }} --depth 1 https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           git submodule update --init --recursive --depth 1 --jobs 4
-          commit=$(git rev-parse --short=8 head)
-          commit_count=$(git rev-list --count head 2>/dev/null || echo "0")
-          echo "commit=$commit" >> $github_output
-          echo "commit=$commit" >> $github_env
-          echo "commit_count=$commit_count" >> $github_env
+          commit=$(git rev-parse --short=8 HEAD)
+          commit_count=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+          echo "commit=$commit" >> $GITHUB_OUTPUT
+          echo "commit=$commit" >> $GITHUB_ENV
+          echo "commit_count=$commit_count" >> $GITHUB_ENV
 
       - name: apply patches
-        run: python3 vkd3d-patches.py src --arch x86_64 --report
+        run: python3 scripts/vkd3d-patches.py src --arch x86_64 --report
 
       - name: upload patch report
         uses: actions/upload-artifact@v4
@@ -96,9 +96,9 @@ jobs:
         run: |
           cd src
           chmod +x ./package-release.sh
-          export cflags="-o3 -march=x86-64 -mtune=generic -msse4.2 -mavx -mavx2 -mfma -ffast-math -dndebug"
-          export cxxflags="$cflags"
-          export ldflags="-s -wl,--gc-sections"
+          export CFLAGS="-O3 -march=x86-64 -mtune=generic -msse4.2 -mavx -mavx2 -mfma -ffast-math -DNDEBUG"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-s -Wl,--gc-sections"
           bash ./package-release.sh ${{ env.tag }} ../out --no-package
 
       - name: verify build
@@ -115,7 +115,7 @@ jobs:
               echo "$dll_path: $(stat -c%s "$dll_path") bytes"
             done
           done
-          echo "src_path=$src" >> $github_env
+          echo "src_path=$src" >> $GITHUB_ENV
 
       - name: package
         id: package
@@ -131,7 +131,7 @@ jobs:
           cd pkg
           sha256sum system32/*.dll syswow64/*.dll > checksums.txt
 
-          cat > profile.json << eof
+          cat > profile.json << EOF
           {
             "type": "vkd3d",
             "versionname": "vkd3d-proton ${version}",
@@ -144,10 +144,10 @@ jobs:
               {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
             ]
           }
-          eof
+          EOF
 
           tar --zstd -cf "../${artifact_name}.wcp" .
-          echo "artifact_name=$artifact_name" >> $github_output
+          echo "artifact_name=$artifact_name" >> $GITHUB_OUTPUT
 
       - name: upload artifact
         uses: actions/upload-artifact@v4

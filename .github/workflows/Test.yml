@@ -1,4 +1,4 @@
-name: VKD3D-Proton
+name: Test Build 
 
 on:
   schedule:

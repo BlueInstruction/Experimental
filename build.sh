@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Mesa Turnip Driver for Android
 
 set -euo pipefail
 

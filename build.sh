@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-
+#
+# Turnip Driver Builder
+# Mesa Turnip Driver for Android
+#
 
 set -euo pipefail
 
@@ -43,18 +46,16 @@ check_command() {
 }
 
 fetch_latest_release() {
-    log_info "fetching latest mesa release..."
+    local tags=""
     
-    local tags
     tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
            grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-           sort -V | tail -1)
+           sort -V | tail -1) || true
     
     if [[ -z "$tags" ]]; then
-        log_warn "gitlab unavailable, trying mirror..."
         tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
                grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-               sort -V | tail -1)
+               sort -V | tail -1) || true
     fi
     
     [[ -z "$tags" ]] && log_fatal "could not determine latest release"
@@ -80,36 +81,45 @@ clone_mesa() {
     
     case "$MESA_SOURCE" in
         latest_release)
+            log_info "fetching latest mesa release..."
             target_ref=$(fetch_latest_release)
             clone_args+=("--branch" "$target_ref")
-            log_info "using latest release: $target_ref"
+            log_info "target: $target_ref"
             ;;
         staging_branch)
             target_ref="$STAGING_BRANCH"
             clone_args+=("--branch" "$target_ref")
-            log_info "using staging branch: $target_ref"
+            log_info "target: $target_ref"
             ;;
         main_branch)
             target_ref="main"
             clone_args+=("--branch" "main")
-            log_info "using main branch"
+            log_info "target: main branch"
             ;;
         custom_tag)
             [[ -z "$CUSTOM_TAG" ]] && log_fatal "custom tag not specified"
             target_ref="$CUSTOM_TAG"
             clone_args+=("--branch" "$target_ref")
-            log_info "using custom tag: $target_ref"
+            log_info "target: $target_ref"
             ;;
         *)
             log_fatal "unknown mesa source: $MESA_SOURCE"
             ;;
     esac
     
-    if ! git clone "${clone_args[@]}" "$MESA_REPO" "$MESA_DIR" 2>/dev/null; then
-        log_warn "gitlab unavailable, trying mirror..."
-        git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" || \
-            log_fatal "failed to clone mesa"
+    local clone_success=false
+    
+    log_info "trying gitlab..."
+    if git clone "${clone_args[@]}" "$MESA_REPO" "$MESA_DIR" 2>/dev/null; then
+        clone_success=true
+    else
+        log_warn "gitlab failed, trying github mirror..."
+        if git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null; then
+            clone_success=true
+        fi
     fi
+    
+    [[ "$clone_success" == false ]] && log_fatal "failed to clone mesa from all sources"
     
     cd "$MESA_DIR"
     

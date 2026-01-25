@@ -1,1 +1,170 @@
+name: Release
 
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "Version (empty = latest release)"
+        required: false
+        default: ""
+      FORCE:
+        type: boolean
+        default: false
+        description: "Force rebuild"
+      BUILD_X86_64:
+        type: boolean
+        default: true
+      BUILD_ARM64EC:
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version: ${{ steps.check.outputs.version }}
+      commit: ${{ steps.check.outputs.commit }}
+    steps:
+      - name: Check Version
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          UPSTREAM="HansKristian-Work/vkd3d-proton"
+
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/releases/latest" | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && VER=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/releases" | jq -r '.[0].tag_name')
+          fi
+
+          VER_CLEAN="${VER#v}"
+
+          TAG_INFO=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/git/refs/tags/${VER}")
+          TAG_SHA=$(echo "$TAG_INFO" | jq -r '.object.sha // empty')
+          TAG_TYPE=$(echo "$TAG_INFO" | jq -r '.object.type // empty')
+
+          if [[ "$TAG_TYPE" == "tag" ]]; then
+            TAG_OBJ=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/git/tags/${TAG_SHA}")
+            COMMIT=$(echo "$TAG_OBJ" | jq -r '.object.sha // empty')
+          else
+            COMMIT="$TAG_SHA"
+          fi
+
+          [[ -z "$COMMIT" ]] && COMMIT=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/commits/${VER}" | jq -r '.sha // empty')
+
+          COMMIT_SHORT="${COMMIT:0:8}"
+
+          echo "version=$VER_CLEAN" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT_SHORT" >> $GITHUB_OUTPUT
+
+          RELEASE_TAG="v${VER_CLEAN}-${COMMIT_SHORT}"
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+
+          if [[ "${{ inputs.FORCE }}" == "true" ]] || [[ "$EXISTS" == "false" ]]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "Will build ${VER_CLEAN} (${COMMIT_SHORT})"
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "Release ${RELEASE_TAG} already exists, skipping"
+          fi
+
+  build-x86_64:
+    needs: check
+    if: needs.check.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.BUILD_X86_64)
+    uses: ./.github/workflows/build-x86_64.yml
+    with:
+      VERSION: ${{ needs.check.outputs.version }}
+
+  build-arm64ec:
+    needs: check
+    if: needs.check.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.BUILD_ARM64EC)
+    uses: ./.github/workflows/build-arm64ec.yml
+    with:
+      VERSION: ${{ needs.check.outputs.version }}
+
+  release:
+    needs: [check, build-x86_64, build-arm64ec]
+    if: |
+      always() &&
+      needs.check.outputs.should_build == 'true' &&
+      (needs.build-x86_64.result == 'success' || needs.build-arm64ec.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download x86_64
+        if: needs.build-x86_64.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-x86_64.outputs.artifact_name }}
+          path: artifacts/x86_64/
+
+      - name: Download ARM64EC
+        if: needs.build-arm64ec.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-arm64ec.outputs.artifact_name }}
+          path: artifacts/arm64ec/
+
+      - name: Prepare Release
+        id: prep
+        run: |
+          VERSION="${{ needs.check.outputs.version }}"
+          COMMIT="${{ needs.check.outputs.commit }}"
+
+          mkdir -p release
+
+          if [[ -d "artifacts/x86_64" ]]; then
+            for f in artifacts/x86_64/*.wcp; do
+              [[ -f "$f" ]] && cp "$f" "release/vkd3d-proton-${VERSION}-${COMMIT}.wcp"
+            done
+            [[ -f "artifacts/x86_64/checksums.txt" ]] && cp "artifacts/x86_64/checksums.txt" "release/checksums-x86_64.txt"
+          fi
+
+          if [[ -d "artifacts/arm64ec" ]]; then
+            for f in artifacts/arm64ec/*.wcp; do
+              [[ -f "$f" ]] && cp "$f" "release/vkd3d-proton-arm64ec-${VERSION}-${COMMIT}.wcp"
+            done
+            [[ -f "artifacts/arm64ec/checksums.txt" ]] && cp "artifacts/arm64ec/checksums.txt" "release/checksums-arm64ec.txt"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+
+          echo "Release files:"
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.prep.outputs.version }}-${{ steps.prep.outputs.commit }}
+          name: "VKD3D-Proton ${{ steps.prep.outputs.version }}"
+          files: release/*
+          body: |
+            ## VKD3D-Proton ${{ steps.prep.outputs.version }}
+
+            **Commit:** `${{ steps.prep.outputs.commit }}`
+            **Source:** [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton)
+
+            ### Downloads
+            - `vkd3d-proton-*.wcp` - x86_64 build (Box64)
+            - `vkd3d-proton-arm64ec-*.wcp` - ARM64EC build (FEXCore)
+
+            ### Features
+            - DirectX 12 Feature Level 12_2
+            - Shader Model 6.6
+            - Raytracing Tier 1.0
+            - Mesh Shader Tier 1
+            - Variable Rate Shading Tier 2
+          draft: false
+          prerelease: false
+        env:
+          GH_TOKEN: ${{ github.token }}

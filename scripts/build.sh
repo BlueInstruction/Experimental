@@ -45,7 +45,9 @@ clone_source() {
 
 apply_patches() {
     log "applying performance patches"
-    python3 "$PROJECT_ROOT/patches/performance.py" "$SRC_DIR" --arch "$ARCH" --report
+    if ! python3 "$PROJECT_ROOT/patches/performance.py" "$SRC_DIR" --arch "$ARCH" --report; then
+        error "patches failed"
+    fi
 }
 
 build_x86_64() {

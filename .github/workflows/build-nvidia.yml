@@ -1,0 +1,312 @@
+name: Build Nvidia
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      FORCE_MODE:
+        type: boolean
+        default: false
+      VERSION:
+        description: "Version"
+        required: false
+        default: ""
+      BUILD_TYPE:
+        type: choice
+        default: "release"
+        options: ["release", "debug"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            /var/cache/apt
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/workflow.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Setup Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y git meson ninja-build curl jq python3 glslang-tools spirv-tools zstd \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+            mingw-w64 mingw-w64-tools binutils-mingw-w64
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
+
+      - name: Fetch Version
+        run: |
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
+          fi
+          echo "TAG=$VER" >> $GITHUB_ENV
+          echo "VER=${VER#v}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Check Release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="vkd3d-${{ env.VER }}-nv90"
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
+          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+
+      - name: Clone Source
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
+          cd src && chmod +x ./package-release.sh
+          COMMIT=$(git rev-parse --short HEAD)
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "BUILD_ID=${{ env.VER }}-${COMMIT:0:7}" >> $GITHUB_ENV
+
+      - name: Apply Patches
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+          cat > patch.py << 'PYSCRIPT'
+          import re, os, glob, sys, json
+          from datetime import datetime
+
+          applied = 0
+          errors = []
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path): 
+                  return
+              try:
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f: 
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}")
+                  return
+              
+              orig = c
+              for p, r in patches:
+                  m = len(re.findall(p, c))
+                  if m > 0:
+                      c = re.sub(p, r, c)
+                      applied += m
+              
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding='utf-8') as f: 
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*=\s*)[^;]+;', r'\g<1>0x10DE;'),
+              (r'(adapter_id\.device_id\s*=\s*)[^;]+;', r'\g<1>0x2684;'),
+              (r'(VendorId\s*=\s*)[^;]+;', r'\g<1>0x10DE;'),
+              (r'(DeviceId\s*=\s*)[^;]+;', r'\g<1>0x2684;'),
+              (r'(SharedSystemMemory\s*=\s*)[^;]+;', r'\g<1>24576ULL * 1024 * 1024;'),
+              (r'(DedicatedVideoMemory\s*=\s*)[^;]+;', r'\g<1>24576ULL * 1024 * 1024;'),
+          ]
+
+          dev = [
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
+              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>32;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>16;'),
+              (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options8\.UnalignedBlockTexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              (r'(options3\.ViewInstancingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VIEW_INSTANCING_TIER_3;'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + dev)
+
+          report = {
+              "v": "2.1.0",
+              "t": datetime.utcnow().isoformat(),
+              "gpu": {"vid": "0x10DE", "did": "0x2684", "name": "NV90", "desc": "RTX 4090", "vram": "24GB"},
+              "applied": applied,
+              "errors": len(errors)
+          }
+
+          with open("../patch-report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          print(f"Applied {applied} patches")
+          print(f"GPU: 0x10DE:0x2684 (RTX 4090)")
+          if errors:
+              print(f"Errors: {len(errors)}")
+              for e in errors[:5]:
+                  print(f"  - {e}")
+              sys.exit(1)
+          PYSCRIPT
+          python3 patch.py
+
+      - name: Build
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+          BUILD_FLAGS="-O3 -DNDEBUG"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
+          
+          export CFLAGS="$BUILD_FLAGS"
+          export CXXFLAGS="$BUILD_FLAGS"
+          export LDFLAGS="-s"
+          
+          bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
+          
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "Build failed, check logs"
+            tail -n 100 build.log
+            exit 1
+          fi
+
+      - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
+          [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
+          
+          for a in x64 x86; do 
+            for d in d3d12.dll d3d12core.dll; do 
+              DLL="$SRC/$a/$d"
+              if [[ ! -f "$DLL" ]]; then
+                echo "Missing: $DLL"
+                exit 1
+              fi
+              SIZE=$(stat -c%s "$DLL" 2>/dev/null || stat -f%z "$DLL")
+              echo "$DLL: ${SIZE} bytes"
+            done
+          done
+          
+          echo "SRC_PATH=$SRC" >> $GITHUB_ENV
+
+      - name: Generate Checksums
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd "${{ env.SRC_PATH }}"
+          find . -name "*.dll" -type f -exec sha256sum {} \; > ../../checksums.txt
+          cd ../..
+          cat checksums.txt
+
+      - name: Create Package
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          mkdir -p pkg/system32 pkg/syswow64
+          cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
+          cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
+          cp checksums.txt pkg/
+          if [[ -f patch-report.json ]]; then
+            cp patch-report.json pkg/
+          fi
+          
+          cat > pkg/profile.json << JSONEOF
+          {
+            "type": "VKD3D",
+            "versionName": "${{ env.VER }}-${{ env.COMMIT }}-nv90",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "buildId": "${{ env.BUILD_ID }}",
+            "description": "VKD3D Proton NV90 (RTX 4090)",
+            "files": [
+              {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
+              {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
+              {"source": "syswow64/d3d12.dll", "target": "\${syswow64}/d3d12.dll"},
+              {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
+            ]
+          }
+          JSONEOF
+          
+          PKG="vkd3d-proton-${{ env.BUILD_ID }}-nv90"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+          
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        if: steps.check.outputs.SKIP == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            ${{ env.PKG }}.wcp
+            checksums.txt
+            patch-report.json
+          retention-days: 30
+          compression-level: 9
+
+      - name: Create Release
+        if: steps.check.outputs.SKIP == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}-${{ env.COMMIT }}
+          name: "VKD3D Proton ${{ env.VER }} NV90 (${{ env.COMMIT }})"
+          files: |
+            ${{ env.PKG }}.wcp
+            checksums.txt
+            patch-report.json
+          body: |
+            ## VKD3D Proton ${{ env.VER }} - NV90 (RTX 4090)
+            
+            **Build:** `${{ env.COMMIT }}`
+            **Date:** ${{ env.BUILD_DATE }}
+            **FakeGPU:** `0x10DE:0x2684` (RTX 4090 24GB)
+            
+            
+            [Source](https://github.com/HansKristian-Work/vkd3d-proton)
+          draft: false
+          prerelease: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf src out pkg
+          echo "Cleanup completed"

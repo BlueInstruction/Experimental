@@ -26,10 +26,8 @@ fetch_ver() {
 clone() {
     [[ -d "$SRC" ]] && rm -rf "$SRC"
     log "Cloning $VERSION..."
-    git clone --branch "$VERSION" --depth 1 "$RU" "$SRC"
+    git clone --branch "$VERSION" --depth 1 --recursive --shallow-submodules "$RU" "$SRC"
     cd "$SRC"
-    log "Submodules..."
-    git submodule update --init --recursive --depth 1 --jobs 4
     COMMIT=$(git rev-parse --short=8 HEAD)
     log "C:$COMMIT"
     export COMMIT
@@ -37,14 +35,12 @@ clone() {
 
 patch() {
     log "Patching P:$PROFILE..."
-    python3 "$PR/patches/patcher.py" "$SRC" --profile "$PROFILE" --report || err "Patch failed"
+    python3 "$SD/patcher.py" "$SRC" --profile "$PROFILE" --report || err "Patch failed"
     log "Patched"
 }
 
 flags() {
-    export CFLAGS="-O3 -march=x86-64-v3 -mtune=generic -msse4.2 -mavx -mavx2 -mfma"
-    export CFLAGS="$CFLAGS -ffast-math -fno-math-errno -fomit-frame-pointer"
-    export CFLAGS="$CFLAGS -flto=auto -fno-semantic-interposition -DNDEBUG"
+    export CFLAGS="-O3 -march=x86-64-v3 -mtune=generic -msse4.2 -mavx -mavx2 -mfma -ffast-math -fno-math-errno -fomit-frame-pointer -flto=auto -fno-semantic-interposition -DNDEBUG"
     export CXXFLAGS="$CFLAGS"
     export LDFLAGS="-Wl,-O2 -Wl,--as-needed -Wl,--gc-sections -flto=auto -s"
 }
@@ -66,12 +62,7 @@ verify() {
     for ad in x64 x86; do
         for dll in d3d12.dll d3d12core.dll; do
             local dp="$bo/$ad/$dll"
-            if [[ -f "$dp" ]]; then
-                log "OK:$dp ($(stat -c%s "$dp"))"
-            else
-                log "MISS:$dp"
-                ((e++))
-            fi
+            [[ -f "$dp" ]] && log "OK:$dp ($(stat -c%s "$dp"))" || { log "MISS:$dp"; ((e++)); }
         done
     done
     [[ $e -gt 0 ]] && err "Verify failed:$e"
@@ -79,11 +70,7 @@ verify() {
 }
 
 export_env() {
-    {
-        echo "VERSION=${VERSION#v}"
-        echo "COMMIT=$COMMIT"
-        echo "PROFILE=$PROFILE"
-    } >> "${GITHUB_ENV:-/dev/null}"
+    { echo "VERSION=${VERSION#v}"; echo "COMMIT=$COMMIT"; echo "PROFILE=$PROFILE"; } >> "${GITHUB_ENV:-/dev/null}"
 }
 
 main() {

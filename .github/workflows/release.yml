@@ -1,23 +1,26 @@
-name: release
+name: Release
 
 on:
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       version:
-        description: version
+        description: 'Version'
         required: false
-        default: ""
+        default: ''
       force:
+        description: 'Force'
         type: boolean
         default: false
-      build_x86_64:
-        type: boolean
-        default: true
-      build_arm64ec:
-        type: boolean
-        default: true
+      profile:
+        description: 'Profile'
+        type: choice
+        default: 'p7'
+        options:
+          - p3
+          - p7
+          - p9
 
 permissions:
   contents: write
@@ -32,123 +35,101 @@ jobs:
       commit: ${{ steps.check.outputs.commit }}
 
     steps:
-      - name: check
+      - name: Check
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          upstream="HansKristian-Work/vkd3d-proton"
+          set -euo pipefail
+          UPSTREAM="HansKristian-Work/vkd3d-proton"
 
           if [[ -n "${{ inputs.version }}" ]]; then
-            ver="${{ inputs.version }}"
-            [[ "$ver" =~ ^v ]] || ver="v$ver"
+            VERSION="${{ inputs.version }}"
+            [[ "$VERSION" =~ ^v ]] || VERSION="v$VERSION"
           else
-            ver=$(curl -sL "https://api.github.com/repos/${upstream}/releases/latest" | jq -r '.tag_name // empty')
-            [[ -z "$ver" ]] && ver=$(curl -sL "https://api.github.com/repos/${upstream}/releases" | jq -r '.[0].tag_name')
+            VERSION=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/releases/latest" | jq -r '.tag_name // empty')
+            [[ -z "$VERSION" ]] && VERSION=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/releases" | jq -r '.[0].tag_name')
           fi
 
-          ver_clean="${ver#v}"
+          VERSION_CLEAN="${VERSION#v}"
 
-          tag_info=$(curl -sL "https://api.github.com/repos/${upstream}/git/refs/tags/${ver}")
-          tag_sha=$(echo "$tag_info" | jq -r '.object.sha // empty')
-          tag_type=$(echo "$tag_info" | jq -r '.object.type // empty')
+          TAG_INFO=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/git/refs/tags/${VERSION}")
+          TAG_SHA=$(echo "$TAG_INFO" | jq -r '.object.sha // empty')
+          TAG_TYPE=$(echo "$TAG_INFO" | jq -r '.object.type // empty')
 
-          if [[ "$tag_type" == "tag" ]]; then
-            tag_obj=$(curl -sL "https://api.github.com/repos/${upstream}/git/tags/${tag_sha}")
-            commit=$(echo "$tag_obj" | jq -r '.object.sha // empty')
+          if [[ "$TAG_TYPE" == "tag" ]]; then
+            TAG_OBJ=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/git/tags/${TAG_SHA}")
+            COMMIT=$(echo "$TAG_OBJ" | jq -r '.object.sha // empty')
           else
-            commit="$tag_sha"
+            COMMIT="$TAG_SHA"
           fi
 
-          [[ -z "$commit" ]] && commit=$(curl -sL "https://api.github.com/repos/${upstream}/commits/${ver}" | jq -r '.sha // empty')
+          [[ -z "$COMMIT" ]] && COMMIT=$(curl -sL "https://api.github.com/repos/${UPSTREAM}/commits/${VERSION}" | jq -r '.sha // empty')
 
-          commit_short="${commit:0:8}"
+          COMMIT_SHORT="${COMMIT:0:8}"
 
-          echo "version=$ver_clean" >> $GITHUB_OUTPUT
-          echo "commit=$commit_short" >> $GITHUB_OUTPUT
+          echo "version=$VERSION_CLEAN" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT_SHORT" >> $GITHUB_OUTPUT
 
-          release_tag="${ver_clean}-${commit_short}-experimental"
-          exists=$(gh release view "$release_tag" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+          RELEASE_TAG="${VERSION_CLEAN}-${COMMIT_SHORT}-d3mu"
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
 
-          if [[ "${{ inputs.force }}" == "true" ]] || [[ "$exists" == "false" ]]; then
+          if [[ "${{ inputs.force }}" == "true" ]] || [[ "$EXISTS" == "false" ]]; then
             echo "should_build=true" >> $GITHUB_OUTPUT
           else
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-  build-x86_64:
+  build:
     needs: check
-    if: needs.check.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.build_x86_64)
-    uses: ./.github/workflows/build-x86_64.yml
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.check.outputs.version }}
-
-  build-arm64ec:
-    needs: check
-    if: needs.check.outputs.should_build == 'true' && (github.event_name == 'schedule' || inputs.build_arm64ec)
-    uses: ./.github/workflows/build-arm64ec.yml
-    with:
-      version: ${{ needs.check.outputs.version }}
+      profile: ${{ inputs.profile || 'p7' }}
 
   release:
-    needs: [check, build-x86_64, build-arm64ec]
+    needs: [check, build]
     if: |
       always() &&
       needs.check.outputs.should_build == 'true' &&
-      (needs.build-x86_64.result == 'success' || needs.build-arm64ec.result == 'success')
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
-      - name: download-x86_64
-        if: needs.build-x86_64.result == 'success'
+      - name: Download
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build-x86_64.outputs.artifact_name }}
-          path: artifacts/x86_64/
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: artifacts/
 
-      - name: download-arm64ec
-        if: needs.build-arm64ec.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-arm64ec.outputs.artifact_name }}
-          path: artifacts/arm64ec/
-
-      - name: prepare
-        id: prep
+      - name: Prepare
+        id: prepare
         run: |
-          version="${{ needs.check.outputs.version }}"
-          commit="${{ needs.check.outputs.commit }}"
+          set -euo pipefail
+          VERSION="${{ needs.check.outputs.version }}"
+          COMMIT="${{ needs.check.outputs.commit }}"
 
           mkdir -p release
+          find artifacts -name "*.wcp" -exec cp {} release/ \;
 
-          if [[ -d "artifacts/x86_64" ]]; then
-            for f in artifacts/x86_64/*.wcp; do
-              [[ -f "$f" ]] && cp "$f" release/
-            done
-          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
 
-          if [[ -d "artifacts/arm64ec" ]]; then
-            for f in artifacts/arm64ec/*.wcp; do
-              [[ -f "$f" ]] && cp "$f" release/
-            done
-          fi
-
-          echo "version=$version" >> $GITHUB_OUTPUT
-          echo "commit=$commit" >> $GITHUB_OUTPUT
-
-      - name: release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.prep.outputs.version }}-${{ steps.prep.outputs.commit }}-experimental
-          name: vkd3d-proton ${{ steps.prep.outputs.version }}-${{ steps.prep.outputs.commit }}-experimental
+          tag_name: ${{ steps.prepare.outputs.version }}-${{ steps.prepare.outputs.commit }}-d3mu
+          name: V3X ${{ steps.prepare.outputs.version }} D3MU
           files: release/*
           body: |
-            vkd3d-proton ${{ steps.prep.outputs.version }}
-            commit: ${{ steps.prep.outputs.commit }}
-            type: experimental
+            ## V3X ${{ steps.prepare.outputs.version }} - D3MU
 
-            source: https://github.com/HansKristian-Work/vkd3d-proton
+            **Build:** `${{ steps.prepare.outputs.commit }}`
+            **Profile:** P7
+            **Config:** 0x1002:0x163f
+
           draft: false
-          prerelease: true
+          prerelease: false
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}

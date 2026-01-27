@@ -1,0 +1,95 @@
+name: Build V3X
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag'
+        required: false
+        default: ''
+      profile:
+        description: 'Profile'
+        required: false
+        default: 'p7'
+        type: choice
+        options:
+          - p3
+          - p7
+          - p9
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: ''
+      profile:
+        type: string
+        required: false
+        default: 'p7'
+    outputs:
+      version:
+        value: ${{ jobs.build.outputs.version }}
+      commit:
+        value: ${{ jobs.build.outputs.commit }}
+      artifact_name:
+        value: ${{ jobs.build.outputs.artifact_name }}
+
+concurrency:
+  group: build-v3x-${{ github.ref }}-${{ inputs.version || 'latest' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      commit: ${{ steps.build.outputs.commit }}
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git meson ninja-build python3 python3-pip \
+            glslang-tools spirv-tools zstd \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+            mingw-w64 mingw-w64-tools binutils-mingw-w64
+
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
+
+      - name: Build
+        id: build
+        env:
+          PROFILE: ${{ inputs.profile || 'p7' }}
+        run: |
+          chmod +x scripts/build.sh
+          bash scripts/build.sh "${{ inputs.version }}"
+
+      - name: Package
+        id: package
+        run: |
+          chmod +x scripts/package.sh
+          bash scripts/package.sh "$VERSION" "$COMMIT"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            ${{ env.ARTIFACT_NAME }}.wcp
+            patch-report.json
+          retention-days: 90
+          compression-level: 0

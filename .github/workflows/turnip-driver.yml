@@ -15,14 +15,14 @@ on:
       
       staging_branch:
         type: choice
-        description: "staging branch (if selected)"
-        default: "staging/25.3"
+        description: "staging branch"
+        default: "staging/26.0"
         options:
           - staging/26.0
           - staging/25.3
       
       custom_tag:
-        description: "custom tag (e.g., mesa-25.3.4)"
+        description: "custom tag"
         required: false
         default: ""
       
@@ -85,7 +85,7 @@ jobs:
         run: |
           chmod +x turnip-driver.sh
           export MESA_SOURCE="${{ inputs.mesa_source || 'latest_release' }}"
-          export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/25.3' }}"
+          export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
           export BUILD_TYPE="${{ inputs.build_type || 'release' }}"
           export NDK_PATH="/opt/android-ndk"
@@ -105,18 +105,18 @@ jobs:
           path: build/*.zip
           retention-days: 30
 
-      - name: create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.build.outputs.filename }}
-          name: ${{ steps.build.outputs.filename }}
-          body: |
+#      - name: create release
+#        uses: softprops/action-gh-release@v2
+#        with:
+#          tag_name: ${{ steps.build.outputs.filename }}
+#          name: ${{ steps.build.outputs.filename }}
+#          body: |
             ## Mesa Turnip Driver
             
-            **Mesa Version:** ${{ steps.build.outputs.version }}
-            **Vulkan Version:** ${{ steps.build.outputs.vulkan_version }}
-            **Build Date:** ${{ steps.build.outputs.build_date }}
-            
+#           **Mesa Version:** ${{ steps.build.outputs.version }}
+#            **Vulkan Version:** ${{ steps.build.outputs.vulkan_version }}
+#            **Build Date:** ${{ steps.build.outputs.build_date }}
+           
           files: build/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

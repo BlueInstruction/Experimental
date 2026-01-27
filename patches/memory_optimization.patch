@@ -1,13 +1,1 @@
-diff --git a/src/freedreno/vulkan/tu_query.cc b/src/freedreno/vulkan/tu_query.cc
-index abc1234..def5678 100644
---- a/src/freedreno/vulkan/tu_query.cc
-+++ b/src/freedreno/vulkan/tu_query.cc
-@@ -123,7 +123,7 @@ tu_create_query_pool(struct vk_device *_device,
-       pool->stride = 16;
-    }
- 
--   result = tu_bo_init_new_cached(device, &pool->bo,
-+   result = tu_bo_init_new(device, &pool->bo,
-                                   pool->stride * pool->count,
-                                   TU_BO_ALLOC_NO_FLAGS, "query pool");
-    if (result != VK_SUCCESS) {
+

@@ -186,7 +186,7 @@ jobs:
         done
         
         cd ..
-
+        
     - name: Build Wine ARM64EC
       run: |
         mkdir -p wine-arm64ec
@@ -202,10 +202,16 @@ jobs:
           --disable-tests \
           --prefix="$PWD/install"
 
-        mkdir -p nls   
-        rm -f nls/locale.nls
+        mkdir -p nls
         cp ../wine-proton/nls/locale.nls nls/locale.nls
-        ls -la nls/
+        
+        cp ../wine-proton/nls/locale.nls ./locale.nls
+        
+        mkdir -p include
+        cp ../wine-proton/nls/locale.nls include/locale.nls
+        
+        echo "=== Checking locale.nls ==="
+        find . -name "locale.nls" -ls
         
         make -j$(nproc)
         make install

@@ -75,6 +75,8 @@ jobs:
           libsdl2-dev \
           libcups2-dev \
           libusb-1.0-0-dev \
+          libunwind-dev \
+          libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
           clang \
           lld \

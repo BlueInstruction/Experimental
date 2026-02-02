@@ -47,11 +47,6 @@ jobs:
         sudo dpkg --add-architecture i386
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential git wget curl xz-utils zstd \
-          flex bison autoconf automake libtool gettext \
-          pkg-config cmake ninja-build python3 python3-pip meson \
-          glslang-tools libvulkan-dev clang lld llvm
-          
           build-essential \
           git \
           wget \

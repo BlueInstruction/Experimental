@@ -1,4 +1,4 @@
-name: Build Wine ARM64EC
+name: Build Wine ARM64EC for Winlator
 
 on:
   workflow_dispatch:
@@ -6,13 +6,13 @@ on:
       version_name:
         description: 'Version name'
         default: 'wine-arm64ec-fex'
-      wine_source:
-        description: 'Wine source'
-        default: 'bylaws'
-        type: choice
-        options: ['bylaws', 'upstream']
       include_dxvk:
         description: 'Include DXVK'
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      include_vkd3d:
+        description: 'Include VKD3D'
         default: 'true'
         type: choice
         options: ['true', 'false']
@@ -20,6 +20,7 @@ on:
 env:
   VERSION_NAME: ${{ github.event.inputs.version_name || 'wine-arm64ec-fex' }}
   OUT_DIR: "./out"
+  TOOLCHAIN_DIR: "/opt/llvm-mingw"
 
 jobs:
   build:
@@ -43,94 +44,54 @@ jobs:
         sudo apt-get install -y \
           build-essential git wget curl xz-utils zstd \
           flex bison autoconf automake libtool gettext \
-          pkg-config cmake ninja-build python3 meson \
-          clang lld llvm \
-          gcc-multilib g++-multilib \
+          pkg-config cmake ninja-build python3 python3-pip meson \
+          clang lld llvm jq \
           libvulkan-dev glslang-tools
     
     - name: Download bylaws LLVM-MinGW (ARM64EC support)
       run: |
-        echo "=== Downloading bylaws LLVM-MinGW ==="
+        echo "=== Downloading bylaws LLVM-MinGW 20250920 ==="
+        wget -q "https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz" \
+          -O llvm-mingw.tar.xz
         
-        # Try to get latest release
-        RELEASE_INFO=$(curl -s https://api.github.com/repos/bylaws/llvm-mingw/releases/latest)
+        sudo mkdir -p "$TOOLCHAIN_DIR"
+        sudo tar -C "$TOOLCHAIN_DIR" --strip-components=1 -xJf llvm-mingw.tar.xz
         
-        # Look for x86_64 Linux build (for cross-compilation)
-        DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep -o 'https://[^"]*x86_64[^"]*linux[^"]*tar[^"]*' | head -1)
-        
-        if [ -z "$DOWNLOAD_URL" ]; then
-          # Fallback URL
-          DOWNLOAD_URL="https://github.com/bylaws/llvm-mingw/releases/download/20241119/llvm-mingw-20241119-ucrt-ubuntu-22.04-x86_64.tar.xz"
-        fi
-        
-        echo "Downloading: $DOWNLOAD_URL"
-        wget -q "$DOWNLOAD_URL" -O llvm-mingw.tar.xz || wget -q "$DOWNLOAD_URL" -O llvm-mingw.tar.gz
-        
-        # Extract
-        if [ -f "llvm-mingw.tar.xz" ]; then
-          tar -xf llvm-mingw.tar.xz
-        else
-          tar -xf llvm-mingw.tar.gz
-        fi
-        
-        # Find and set path
-        TOOLCHAIN_DIR=$(ls -d llvm-mingw-*/ 2>/dev/null | head -1)
-        echo "TOOLCHAIN_DIR=$PWD/$TOOLCHAIN_DIR" >> $GITHUB_ENV
-        
-        # IMPORTANT: Must be FIRST in PATH (per FEX docs)
-        echo "$PWD/${TOOLCHAIN_DIR}bin" >> $GITHUB_PATH
+        echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+        echo "✓ Toolchain installed to $TOOLCHAIN_DIR"
     
     - name: Verify ARM64EC toolchain
       run: |
-        export PATH="${TOOLCHAIN_DIR}bin:$PATH"
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
         
-        echo "=== Available compilers ==="
-        ls -la ${TOOLCHAIN_DIR}bin/ | grep -E "clang|mingw" | head -20
+        echo "=== Checking compilers ==="
+        ls "$TOOLCHAIN_DIR/bin/" | grep -E "arm64ec|aarch64" | head -10
         
         echo ""
-        echo "=== Checking ARM64EC compiler ==="
         if command -v arm64ec-w64-mingw32-clang &> /dev/null; then
           echo "✓ arm64ec-w64-mingw32-clang found"
           arm64ec-w64-mingw32-clang --version | head -2
-        else
-          echo "⚠ arm64ec-w64-mingw32-clang not found"
-          echo "Will use aarch64-w64-mingw32-clang"
         fi
         
         echo ""
-        echo "=== Checking aarch64 compiler ==="
+        echo "✓ aarch64-w64-mingw32-clang"
         aarch64-w64-mingw32-clang --version | head -2
     
-    - name: Clone Wine source
+    - name: Clone bylaws Wine (arm64ec branch)
       run: |
-        WINE_SOURCE="${{ github.event.inputs.wine_source || 'bylaws' }}"
+        echo "=== Cloning bylaws/wine arm64ec branch ==="
+        git clone --depth 1 -b arm64ec https://github.com/bylaws/wine.git wine-source
         
-        if [ "$WINE_SOURCE" = "bylaws" ]; then
-          echo "=== Cloning bylaws Wine (ARM64EC optimized) ==="
-          git clone --depth 1 https://github.com/bylaws/wine.git wine-source
-        else
-          echo "=== Cloning upstream Wine ==="
-          git clone --depth 1 https://github.com/wine-mirror/wine.git wine-source
-        fi
-        
-        echo "Wine version:"
-        cat wine-source/VERSION 2>/dev/null || git -C wine-source describe --tags 2>/dev/null || echo "unknown"
+        cd wine-source
+        echo "Commit: $(git rev-parse --short HEAD)"
     
     - name: Prepare Wine source
       run: |
         cd wine-source
-        
-        # Generate required files
         tools/make_requests || true
         tools/make_specfiles || true
         dlls/winevulkan/make_vulkan || true
-        
-        # Run autoreconf if needed
-        if [ -f "autogen.sh" ]; then
-          ./autogen.sh || true
-        else
-          autoreconf -f || true
-        fi
+        autoreconf -f || true
     
     - name: Build Wine tools (native x86_64)
       run: |
@@ -143,20 +104,17 @@ jobs:
           --without-fontconfig \
           --disable-tests
         
-        # Build required tools
         make -j$(nproc) __tooldeps__ || make -j$(nproc) tools
         
         echo "=== Wine tools built ==="
-        ls -la tools/widl/widl tools/winebuild/winebuild tools/wrc/wrc tools/wmc/wmc 2>/dev/null || \
-        ls -la tools/
+        ls tools/widl/widl tools/winebuild/winebuild 2>/dev/null || ls tools/
     
     - name: Build Wine ARM64EC
       run: |
-        export PATH="${TOOLCHAIN_DIR}bin:$PATH"
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
         
         mkdir -p wine-arm64ec && cd wine-arm64ec
         
-        # Configure with ARM64EC + aarch64 + i386 (per FEX wiki)
         ../wine-source/configure \
           --enable-archs=arm64ec,aarch64,i386 \
           --with-mingw=clang \
@@ -167,66 +125,47 @@ jobs:
           --disable-tests \
           --prefix="$PWD/install"
         
-        # Build
-        echo "=== Starting Wine ARM64EC build ==="
+        echo "=== Building Wine ARM64EC ==="
         make -j$(nproc) 2>&1 | tee build.log || {
-          echo "=== Build failed, showing errors ==="
-          grep -n "error:" build.log | tail -50
+          echo "=== Build errors ==="
+          grep -i "error:" build.log | tail -30
           exit 1
         }
         
-        # Install
         make install
         
-        echo "=== Wine ARM64EC build complete ==="
-        ls -la install/bin/ | head -15
-        echo ""
-        ls -la install/lib/wine/ | head -15
+        echo "=== Wine ARM64EC complete ==="
+        ls -la install/bin/ | head -10
+        ls -la install/lib/wine/ | head -10
     
-    - name: Download FEX Wine DLLs
-      run: |
-        echo "=== Downloading FEX Wine DLLs ==="
-        mkdir -p fex-dlls
-        
-        # Try FEX 2601 (latest as of Jan 2026)
-        FEX_RELEASES=("FEX-2601" "FEX-2511" "FEX-2501")
-        
-        for FEX_VER in "${FEX_RELEASES[@]}"; do
-          echo "Trying $FEX_VER..."
-          wget -q "https://github.com/FEX-Emu/FEX/releases/download/${FEX_VER}/fex-emu-wine_${FEX_VER#FEX-}_arm64.deb" \
-            -O fex-wine.deb && break || true
-        done
-        
-        if [ -f "fex-wine.deb" ]; then
-          dpkg-deb -x fex-wine.deb fex-dlls/
-          echo "✓ FEX DLLs extracted:"
-          find fex-dlls -name "*.dll" -o -name "*.so" | head -10
-        else
-          echo "⚠ Could not download FEX DLLs"
-        fi
-    
-    - name: Download DXVK
+    - name: Download DXVK ARM64EC
       if: github.event.inputs.include_dxvk == 'true'
       run: |
+        echo "=== Downloading DXVK 2.7.1 ==="
         wget -q "https://github.com/doitsujin/dxvk/releases/download/v2.7.1/dxvk-2.7.1.tar.gz"
         tar -xf dxvk-2.7.1.tar.gz
         ls -la dxvk-2.7.1/
     
     - name: Download VKD3D-Proton
+      if: github.event.inputs.include_vkd3d == 'true'
       run: |
+        echo "=== Downloading VKD3D-Proton ==="
         wget -q "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.0b/vkd3d-proton-3.0b.tar.zst" || true
         if [ -f "vkd3d-proton-3.0b.tar.zst" ]; then
           zstd -d vkd3d-proton-3.0b.tar.zst -o vkd3d.tar
           tar -xf vkd3d.tar
+          ls -la vkd3d-proton-*/
         fi
     
-    - name: Create prefix pack
+    - name: Create Wine prefix pack
       run: |
         mkdir -p prefix_temp && cd prefix_temp
         
-        mkdir -p drive_c/windows/{system32,syswow64}
+        mkdir -p drive_c/windows/system32
+        mkdir -p drive_c/windows/syswow64
         mkdir -p drive_c/users/Public/Temp
-        mkdir -p "drive_c/Program Files" "drive_c/Program Files (x86)"
+        mkdir -p "drive_c/Program Files"
+        mkdir -p "drive_c/Program Files (x86)"
         
         # system.reg
         cat > system.reg << 'EOF'
@@ -257,6 +196,9 @@ jobs:
         
         tar -cJf ../prefixPack.txz .
         cd .. && rm -rf prefix_temp
+        
+        echo "✓ prefixPack.txz created"
+        ls -lh prefixPack.txz
     
     - name: Create WCP package
       run: |
@@ -264,38 +206,48 @@ jobs:
         BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
         
         mkdir -p "$OUT_DIR"
-        mkdir -p wcp_package/{bin,lib/wine/{aarch64-unix,aarch64-windows,i386-windows,x86_64-windows}}
+        mkdir -p wcp_package/bin
+        mkdir -p wcp_package/lib/wine/aarch64-unix
+        mkdir -p wcp_package/lib/wine/aarch64-windows
+        mkdir -p wcp_package/lib/wine/i386-windows
+        mkdir -p wcp_package/lib/wine/x86_64-windows
         
         # Copy Wine ARM64EC
-        cp -r wine-arm64ec/install/bin/* wcp_package/bin/ 2>/dev/null || true
-        cp -r wine-arm64ec/install/lib/* wcp_package/lib/ 2>/dev/null || true
-        cp -r wine-arm64ec/install/share wcp_package/ 2>/dev/null || true
+        if [ -d "wine-arm64ec/install/bin" ]; then
+          cp -r wine-arm64ec/install/bin/* wcp_package/bin/
+        fi
+        if [ -d "wine-arm64ec/install/lib" ]; then
+          cp -r wine-arm64ec/install/lib/* wcp_package/lib/
+        fi
+        if [ -d "wine-arm64ec/install/share" ]; then
+          cp -r wine-arm64ec/install/share wcp_package/
+        fi
         
-        # Copy FEX DLLs
-        find fex-dlls -name "*.dll" -exec cp {} wcp_package/lib/wine/aarch64-windows/ \; 2>/dev/null || true
-        
-        # Copy DXVK
-        [ -d "dxvk-2.7.1" ] && {
+        # Copy DXVK (x32 -> syswow64, x64 -> system32 style)
+        if [ -d "dxvk-2.7.1" ]; then
+          echo "Adding DXVK 2.7.1..."
           cp dxvk-2.7.1/x32/*.dll wcp_package/lib/wine/i386-windows/ 2>/dev/null || true
           cp dxvk-2.7.1/x64/*.dll wcp_package/lib/wine/x86_64-windows/ 2>/dev/null || true
-        }
+        fi
         
-        # Copy VKD3D
+        # Copy VKD3D-Proton
         VKD3D_DIR=$(ls -d vkd3d-proton-*/ 2>/dev/null | head -1)
-        [ -n "$VKD3D_DIR" ] && {
+        if [ -n "$VKD3D_DIR" ]; then
+          echo "Adding VKD3D-Proton..."
           cp ${VKD3D_DIR}x86/*.dll wcp_package/lib/wine/i386-windows/ 2>/dev/null || true
           cp ${VKD3D_DIR}x64/*.dll wcp_package/lib/wine/x86_64-windows/ 2>/dev/null || true
-        }
+        fi
         
+        # Copy prefix pack
         cp prefixPack.txz wcp_package/
         
-        # profile.json
+        # Create profile.json (Winlator format)
         cat > wcp_package/profile.json << EOF
         {
           "type": "Wine",
           "versionName": "${VERSION_NAME}",
           "versionCode": ${VERSION_CODE},
-          "description": "Wine ARM64EC + FEX + DXVK for Winlator",
+          "description": "Wine ARM64EC (bylaws) + DXVK + VKD3D for Winlator",
           "files": [],
           "wine": {
             "binPath": "bin",
@@ -305,24 +257,27 @@ jobs:
         }
         EOF
         
-        # README
+        # Create README
         cat > wcp_package/README.txt << EOF
         Wine ARM64EC for Winlator
         =========================
         Version: ${VERSION_NAME}
-        Build Date: ${BUILD_DATE}
+        Build: ${BUILD_DATE}
+        
+        Source: bylaws/wine (arm64ec branch)
+        Toolchain: bylaws/llvm-mingw 20250920
         
         Components:
-        - Wine ARM64EC (bylaws fork)
-        - FEX-Emu Wine DLLs
+        - Wine ARM64EC (--enable-archs=arm64ec,aarch64,i386)
         - DXVK 2.7.1
         - VKD3D-Proton 3.0b
         
-        Based on FEX-Emu wiki instructions:
-        https://wiki.fex-emu.com/index.php/Development:ARM64EC
+        For use with:
+        - Winlator Ludashi Bionic
+        - FEXCore emulator
         EOF
         
-        # Create archive
+        # Create .wcp archive (tar.xz)
         cd wcp_package
         tar -cJf "../${OUT_DIR}/${VERSION_NAME}.wcp" .
         cd ..
@@ -337,6 +292,20 @@ jobs:
         echo "File: ${VERSION_NAME}.wcp"
         echo "Size: $(du -h ${VERSION_NAME}.wcp | cut -f1)"
         echo "SHA256: $(cat ${VERSION_NAME}.wcp.sha256)"
+    
+    - name: Verify WCP package
+      run: |
+        WCP_FILE="${OUT_DIR}/${VERSION_NAME}.wcp"
+        
+        echo "=== WCP Contents ==="
+        tar -tJf "$WCP_FILE" | head -30
+        
+        echo ""
+        echo "=== Checking required files ==="
+        tar -tJf "$WCP_FILE" | grep -q "profile.json" && echo "✓ profile.json" || echo "✗ profile.json"
+        tar -tJf "$WCP_FILE" | grep -q "prefixPack.txz" && echo "✓ prefixPack.txz" || echo "✗ prefixPack.txz"
+        tar -tJf "$WCP_FILE" | grep -q "bin/" && echo "✓ bin/" || echo "✗ bin/"
+        tar -tJf "$WCP_FILE" | grep -q "lib/wine" && echo "✓ lib/wine" || echo "✗ lib/wine"
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4

@@ -202,16 +202,13 @@ jobs:
           --disable-tests \
           --prefix="$PWD/install"
 
+        # Fix locale.nls issue
         mkdir -p nls
-        cp ../wine-proton/nls/locale.nls nls/locale.nls
-        
-        cp ../wine-proton/nls/locale.nls ./locale.nls
-        
-        mkdir -p include
-        cp ../wine-proton/nls/locale.nls include/locale.nls
-        
-        echo "=== Checking locale.nls ==="
-        find . -name "locale.nls" -ls
+        if [ -f "../wine-tools/nls/locale.nls" ]; then
+          cp ../wine-tools/nls/locale.nls nls/
+        elif [ -f "../wine-proton/nls/locale.nls" ]; then
+          cp ../wine-proton/nls/locale.nls nls/
+        fi
         
         make -j$(nproc)
         make install

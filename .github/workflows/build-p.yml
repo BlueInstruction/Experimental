@@ -105,9 +105,11 @@ jobs:
           --disable-tests
         
         make -j$(nproc) __tooldeps__ || make -j$(nproc) tools
+        make -j$(nproc) nls/locale.nls || true
         
-        echo "=== Wine tools built ==="
-        ls tools/widl/widl tools/winebuild/winebuild 2>/dev/null || ls tools/
+        echo "=== Verifying wine-tools ==="
+        ls -la tools/widl/widl tools/winebuild/winebuild 2>/dev/null || ls tools/
+        ls -la nls/locale.nls 2>/dev/null || echo "⚠ locale.nls missing"
     
     - name: Build Wine ARM64EC
       run: |
@@ -125,6 +127,16 @@ jobs:
           --disable-tests \
           --prefix="$PWD/install"
         
+        # Fix locale.nls issue
+        mkdir -p nls
+        if [ -f "../wine-tools/nls/locale.nls" ]; then
+          cp ../wine-tools/nls/locale.nls nls/
+          echo "✓ locale.nls copied"
+        elif [ -f "../wine-source/nls/locale.nls" ]; then
+          cp ../wine-source/nls/locale.nls nls/
+          echo "✓ locale.nls copied from source"
+        fi
+        
         echo "=== Building Wine ARM64EC ==="
         make -j$(nproc) 2>&1 | tee build.log || {
           echo "=== Build errors ==="
@@ -136,7 +148,6 @@ jobs:
         
         echo "=== Wine ARM64EC complete ==="
         ls -la install/bin/ | head -10
-        ls -la install/lib/wine/ | head -10
     
     - name: Download DXVK ARM64EC
       if: github.event.inputs.include_dxvk == 'true'

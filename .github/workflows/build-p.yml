@@ -46,7 +46,38 @@ jobs:
           flex bison autoconf automake libtool gettext \
           pkg-config cmake ninja-build python3 python3-pip meson \
           clang lld llvm jq \
-          libvulkan-dev glslang-tools
+          libvulkan-dev glslang-tools \
+          libdrm-dev \
+          libxcb1-dev \
+          libx11-dev \
+          libxext-dev \
+          libxrandr-dev \
+          libxinerama-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libxcomposite-dev \
+          libglu1-mesa-dev \
+          libosmesa6-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libsane-dev \
+          libusb-1.0-0-dev \
+          libv4l-dev \
+          libgphoto2-dev \
+          libpulse-dev \
+          libasound2-dev \
+          libcups2-dev \
+          libfontconfig1-dev \
+          libgsm1-dev \
+          libkrb5-dev \
+          libldap2-dev \
+          libopenal-dev \
+          libsdl2-dev \
+          libudev-dev \
+          libunwind-dev \
+          ocl-icd-opencl-dev
+        
+        echo "✓ Dependencies installed"
     
     - name: Download bylaws LLVM-MinGW (ARM64EC support)
       run: |

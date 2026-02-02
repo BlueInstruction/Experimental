@@ -1,4 +1,4 @@
-name: Build Proton 10.0-4 ARM64EC for Winlator
+name: Build Proton 10.0-4 Arm64ec 
 
 on:
   workflow_dispatch:

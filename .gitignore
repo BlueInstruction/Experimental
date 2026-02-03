@@ -1,3 +1,4 @@
+# Build outputs
 build/
 build-*/
 build_workspace/
@@ -7,56 +8,75 @@ mesa/builddir/
 out/
 pkg/
 src/
+wine-tools/
+wine-arm64ec/
+wine-source/
+fex-source/
+dxvk/
+vkd3d-proton/
+wcp_package/
+prefix_temp/
+deps/
+bin/
+lib/
+artifacts/
 
+# Toolchain
+llvm-mingw.tar.xz
+android-ndk-*/
+
+# Compiled objects
+*.o
+*.a
 *.so
-*.pyc
-*.pyo
-*.pyd
+*.dll
+*.exe
 
+# Packages/Archives
 *.wcp
 *.tar.zst
 *.tar.gz
 *.zip
 core.zip
 
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+venv/
+.venv/
+env/
+
+# IDE/Editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
+# Temporary/Backup
 *.tmp
 *.temp
 *.bak
 *.orig
+*.rej
 
+# Logs/Cache
 *.log
 build.log
 .cache/
-__pycache__/
-
-android-ndk-*/
 checksums.txt
-.act/
 
-*.o
-*.a
-*.dll
-*.exe
-deps/
-bin/
-lib/
+# Patches
 patches/
 *.patch
-*.rej
 
-venv/
-.venv/
-env/
-
+# Misc
+.act/
 .github/workflows/*.log
-artifacts/

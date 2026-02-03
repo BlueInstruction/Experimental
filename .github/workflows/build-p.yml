@@ -1,1 +1,168 @@
+name: Build Wine Proton 10.0-4 ARM64EC for Winlator
 
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        default: 'wine-proton-10.0-4-arm64ec'
+      include_dxvk:
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      include_vkd3d:
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+env:
+  VERSION_NAME: ${{ inputs.version_name }}
+  OUT_DIR: "./out"
+  TOOLCHAIN_DIR: "/opt/llvm-mingw"
+  WINE_VERSION: "10.0-4"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # Use ARM64 if available
+    timeout-minutes: 360
+
+    steps:
+    - name: Free disk space
+      run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc; sudo apt-get clean; df -h
+
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        sudo apt install -y autoconf automake bison build-essential clang cmake curl flex fontforge gettext git glslang-tools jq libasound2-dev libcapi20-dev libcups2-dev libdbus-1-dev libdrm-dev libfaudio-dev libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libglu1-mesa-dev libgnutls28-dev libgphoto2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libjpeg-dev libkrb5-dev liblcms2-dev libldap2-dev libmpg123-dev libopenal-dev libosmesa6-dev libpcap-dev libpng-dev libpulse-dev libsane-dev libsdl2-dev libssl-dev libtiff-dev libtool libudev-dev libunwind-dev libusb-1.0-0-dev libv4l-dev libvulkan-dev libx11-dev libxcb1-dev libxcomposite-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxinerama-dev libxml2-dev libxrandr-dev libxrender-dev libxslt1-dev libxxf86vm-dev lld llvm meson mingw-w64-tools ninja-build ocl-icd-opencl-dev pkg-config python3 python3-pip samba-dev wget wine64-tools xz-utils zstd
+
+    - name: Download LLVM-MinGW
+      run: |
+        wget https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz -O llvm-mingw.tar.xz
+        sudo mkdir -p $TOOLCHAIN_DIR
+        sudo tar -C $TOOLCHAIN_DIR --strip-components=1 -xJf llvm-mingw.tar.xz
+        echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+
+    - name: Clone FEX-Emu
+      run: git clone --depth 1 https://github.com/FEX-Emu/FEX.git fex-source
+
+    - name: Build FEX ARM64EC
+      run: |
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        cd fex-source
+        mkdir build-arm64ec && cd build-arm64ec
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake -DCMAKE_INSTALL_LIBDIR=/usr/lib/wine/aarch64-windows -DENABLE_LTO=False -DMINGW_TRIPLE=arm64ec-w64-mingw32 -DBUILD_TESTING=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DCMAKE_INSTALL_PREFIX=/usr -DTUNE_CPU=none ..
+        ninja
+        sudo ninja install
+
+    - name: Build FEX WOW64
+      run: |
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        cd fex-source
+        mkdir build-wow64 && cd build-wow64
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake -DCMAKE_INSTALL_LIBDIR=/usr/lib/wine/aarch64-windows -DENABLE_LTO=False -DMINGW_TRIPLE=aarch64-w64-mingw32 -DBUILD_TESTING=False -DENABLE_JEMALLOC_GLIBC_ALLOC=False -DCMAKE_INSTALL_PREFIX=/usr -DTUNE_CPU=none ..
+        ninja
+        sudo ninja install
+
+    - name: Clone Wine Proton
+      run: git clone --depth 1 -b proton_10.0 https://github.com/fathonix/wine-proton-arm64ec.git wine-source
+
+    - name: Prepare Wine source
+      run: |
+        cd wine-source
+        autoreconf -fiv
+        tools/make_requests
+        tools/make_specfiles
+        dlls/winevulkan/make_vulkan
+
+    - name: Build Wine tools
+      run: |
+        mkdir wine-tools && cd wine-tools
+        ../wine-source/configure --enable-win64 --without-x --without-freetype --without-fontconfig --disable-tests
+        make -j$(nproc) __tooldeps__
+        make -j$(nproc) nls/locale.nls
+
+    - name: Build Wine ARM64EC
+      run: |
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        mkdir wine-arm64ec && cd wine-arm64ec
+        ../wine-source/configure --enable-archs=arm64ec,aarch64,i386 --with-mingw=clang --with-wine-tools=../wine-tools --without-x --without-freetype --without-fontconfig --disable-tests --prefix="$PWD/install"
+        cp ../wine-tools/nls/locale.nls nls/
+        make -j$(nproc)
+        make install
+
+    - name: Clone and Build DXVK
+      if: inputs.include_dxvk == 'true'
+      run: |
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        git clone --depth 1 -b v2.7.1 https://github.com/doitsujin/dxvk.git
+        cd dxvk
+        echo '[binaries]\nar = "arm64ec-w64-mingw32-ar"\nc = "arm64ec-w64-mingw32-gcc"\ncpp = "arm64ec-w64-mingw32-g++"\nld = "arm64ec-w64-mingw32-ld"\nwindres = "arm64ec-w64-mingw32-windres"\nstrip = "strip"\nwidl = "arm64ec-w64-mingw32-widl"\npkgconfig = "aarch64-linux-gnu-pkg-config"\n[host_machine]\nsystem = "windows"\ncpu_family = "aarch64"\ncpu = "aarch64"\nendian = "little"' > crossfile.txt
+        meson setup build --cross-file crossfile.txt --buildtype release
+        ninja -C build
+
+    - name: Clone and Build VKD3D-Proton
+      if: inputs.include_vkd3d == 'true'
+      run: |
+        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        git clone --depth 1 -b v3.0b https://github.com/HansKristian-Work/vkd3d-proton.git
+        cd vkd3d-proton
+        echo '[binaries]\nar = "arm64ec-w64-mingw32-ar"\nc = "arm64ec-w64-mingw32-gcc"\ncpp = "arm64ec-w64-mingw32-g++"\nld = "arm64ec-w64-mingw32-ld"\nwindres = "arm64ec-w64-mingw32-windres"\nstrip = "strip"\nwidl = "arm64ec-w64-mingw32-widl"\npkgconfig = "aarch64-linux-gnu-pkg-config"\n[host_machine]\nsystem = "windows"\ncpu_family = "aarch64"\ncpu = "aarch64"\nendian = "little"' > crossfile.txt
+        meson setup build --cross-file crossfile.txt --buildtype release
+        ninja -C build
+
+    - name: Create prefix pack
+      run: |
+        mkdir prefix_temp && cd prefix_temp
+        mkdir -p drive_c/windows/system32 drive_c/windows/syswow64 drive_c/users/Public/Temp "drive_c/Program Files" "drive_c/Program Files (x86)"
+        echo 'WINE REGISTRY Version 2\n;; All keys relative to \\Machine\n[Software\\Microsoft\\Windows NT\\CurrentVersion]\n"CurrentVersion"="10.0"\n"CurrentBuild"="19045"\n"CurrentBuildNumber"="19045"\n"ProductName"="Windows 10 Pro"\n"EditionID"="Professional"\n[System\\CurrentControlSet\\Control\\Session Manager\\Environment]\n"PROCESSOR_ARCHITECTURE"="ARM64"' > system.reg
+        echo 'WINE REGISTRY Version 2\n;; All keys relative to \\User\\S-1-5-21-0-0-0-1000\n[Software\\Wine\\DllOverrides]\n"*d3d8"="native"\n"*d3d9"="native"\n"*d3d10core"="native"\n"*d3d11"="native"\n"*d3d12"="native"\n"*dxgi"="native"\n"*d3d12core"="native"' > user.reg
+        echo 'WINE REGISTRY Version 2' > userdef.reg
+        date +%s > .update-timestamp
+        tar -cJf ../prefixPack.txz .
+        cd .. && rm -rf prefix_temp
+
+    - name: Create WCP package
+      run: |
+        mkdir -p $OUT_DIR wcp_package/bin wcp_package/lib/wine/{aarch64-unix,aarch64-windows,arm64ec-windows,i386-unix,i386-windows,x86_64-unix,x86_64-windows}
+        cp -r wine-arm64ec/install/* wcp_package/
+        # Copy FEX DLLs
+        cp /usr/lib/wine/aarch64-windows/*.dll wcp_package/lib/wine/aarch64-windows/
+        # Copy DXVK
+        if [ "${{ inputs.include_dxvk }}" = "true" ]; then
+          cp dxvk/build/src/d3d9/*.dll wcp_package/lib/wine/i386-windows/ || true
+          cp dxvk/build/src/d3d9/*.dll wcp_package/lib/wine/x86_64-windows/ || true  # Adjust paths
+        fi
+        # Copy VKD3D
+        if [ "${{ inputs.include_vkd3d }}" = "true" ]; then
+          cp vkd3d-proton/build/src/*.dll wcp_package/lib/wine/i386-windows/ || true
+          cp vkd3d-proton/build/src/*.dll wcp_package/lib/wine/x86_64-windows/ || true  # Adjust paths
+        fi
+        cp prefixPack.txz wcp_package/
+        cat > wcp_package/profile.json << EOF
+        {
+          "type": "Wine",
+          "versionName": "${VERSION_NAME}",
+          "versionCode": $(date +%Y%m%d%H%M),
+          "description": "Wine Proton ${WINE_VERSION} ARM64EC for Winlator",
+          "files": [],
+          "wine": {
+            "binPath": "bin",
+            "libPath": "lib",
+            "prefixPack": "prefixPack.txz"
+          }
+        }
+        EOF
+        cd wcp_package
+        tar -cJf "../\( OUT_DIR/ \){VERSION_NAME}.wcp" .
+        cd ..
+        cd $OUT_DIR
+        sha256sum "\( {VERSION_NAME}.wcp" > " \){VERSION_NAME}.wcp.sha256"
+        md5sum "\( {VERSION_NAME}.wcp" > " \){VERSION_NAME}.wcp.md5"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.VERSION_NAME }}
+        path: ./out/*

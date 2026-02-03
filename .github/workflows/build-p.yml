@@ -1,4 +1,4 @@
-name: Build Wine ARM64EC for Winlator
+name: Build Wine ARM64EC
 
 on:
   workflow_dispatch:

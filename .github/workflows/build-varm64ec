@@ -1,0 +1,289 @@
+name: Build VKD3D-Proton ARM64EC
+
+on:
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "Version (e.g., v3.0b)"
+        required: false
+        default: "v3.0b"
+      BUILD_TYPE:
+        type: choice
+        default: "release"
+        options: ["release", "debug"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
+
+env:
+  TOOLCHAIN_DIR: /opt/llvm-mingw
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y git ninja-build curl jq python3 python3-pip glslang-tools spirv-tools zstd wget
+          sudo pip3 install --upgrade meson
+          meson --version
+
+      - name: Setup LLVM MinGW Toolchain
+        run: |
+          wget https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz -O llvm-mingw.tar.xz
+          sudo mkdir -p $TOOLCHAIN_DIR
+          sudo tar -C $TOOLCHAIN_DIR --strip-components=1 -xJf llvm-mingw.tar.xz
+          echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+          rm llvm-mingw.tar.xz
+
+      - name: Verify Toolchain
+        run: |
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          arm64ec-w64-mingw32-clang --version || { echo "arm64ec clang missing"; exit 1; }
+          aarch64-w64-mingw32-clang --version || { echo "aarch64 clang missing"; exit 1; }
+
+      - name: Fetch Version
+        run: |
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER="v3.0b"
+          fi
+          echo "TAG=$VER" >> $GITHUB_ENV
+          echo "VER=${VER#v}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Clone Source
+        run: |
+          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
+          cd src
+          git submodule update --init --recursive
+          COMMIT=$(git rev-parse --short HEAD)
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "BUILD_ID=${{ env.VER }}-${COMMIT:0:7}" >> $GITHUB_ENV
+
+      - name: Apply Patches
+        run: |
+          cd src
+          cat > patch.py << 'PYSCRIPT'
+          import re, os, glob, sys, json
+          from datetime import datetime
+
+          applied = 0
+          errors = []
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path): 
+                  return
+              try:
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f: 
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}")
+                  return
+              
+              orig = c
+              for p, r in patches:
+                  m = len(re.findall(p, c))
+                  if m > 0:
+                      c = re.sub(p, r, c)
+                      applied += m
+              
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding='utf-8') as f: 
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*=\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*=\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(VendorId\s*=\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(DeviceId\s*=\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(SharedSystemMemory\s*=\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+          ]
+
+          dev = [
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
+              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>128;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
+              (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options8\.UnalignedBlockTexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + dev)
+
+          report = {
+              "v": "2.1.0",
+              "t": datetime.utcnow().isoformat(),
+              "gpu": {"vid": "0x1002", "did": "0x163f", "name": "D3MU"},
+              "applied": applied,
+              "errors": len(errors)
+          }
+
+          with open("../patch-report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          print(f"Applied {applied} patches")
+          print(f"GPU: 0x1002:0x163f (D3MU)")
+          if errors:
+              print(f"Errors: {len(errors)}")
+              for e in errors[:5]:
+                  print(f"  - {e}")
+              sys.exit(1)
+          PYSCRIPT
+          python3 patch.py
+
+      - name: Create Cross File
+        run: |
+          cat > crossfile-arm64ec.txt << 'EOF'
+          [binaries]
+          ar = 'arm64ec-w64-mingw32-ar'
+          c = 'arm64ec-w64-mingw32-clang'
+          cpp = 'arm64ec-w64-mingw32-clang++'
+          ld = 'arm64ec-w64-mingw32-ld'
+          windres = 'arm64ec-w64-mingw32-windres'
+          strip = 'arm64ec-w64-mingw32-strip'
+          widl = 'arm64ec-w64-mingw32-widl'
+
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+          EOF
+
+      - name: Build ARM64EC
+        run: |
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          cd src
+          
+          BUILD_FLAGS="-O3 -DNDEBUG"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
+          
+          meson setup build-arm64ec \
+            --cross-file ../crossfile-arm64ec.txt \
+            --buildtype release \
+            -Dc_args="$BUILD_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS"
+          
+          ninja -C build-arm64ec 2>&1 | tee build.log
+          
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "Build failed"
+            tail -n 100 build.log
+            exit 1
+          fi
+
+      - name: Verify Build
+        run: |
+          echo "=== Build output ==="
+          find src/build-arm64ec -name "*.dll" -type f
+          
+          for dll in d3d12.dll d3d12core.dll; do
+            DLL_PATH=$(find src/build-arm64ec -name "$dll" -type f | head -1)
+            if [[ -z "$DLL_PATH" ]]; then
+              echo "Warning: $dll not found"
+            else
+              SIZE=$(stat -c%s "$DLL_PATH" 2>/dev/null || stat -f%z "$DLL_PATH")
+              echo "$dll: ${SIZE} bytes"
+            fi
+          done
+
+      - name: Generate Checksums
+        run: |
+          find src/build-arm64ec -name "*.dll" -type f -exec sha256sum {} \; > checksums.txt
+          cat checksums.txt
+
+      - name: Create Package
+        run: |
+          mkdir -p pkg/aarch64-windows
+          
+          # Copy ARM64EC DLLs
+          find src/build-arm64ec -name "*.dll" -type f -exec cp {} pkg/aarch64-windows/ \;
+          
+          cp checksums.txt pkg/
+          if [[ -f patch-report.json ]]; then
+            cp patch-report.json pkg/
+          fi
+          
+          # List what we're packaging
+          echo "=== Package contents ==="
+          ls -la pkg/aarch64-windows/
+          
+          cat > pkg/profile.json << JSONEOF
+          {
+            "type": "VKD3D",
+            "versionName": "${{ env.VER }}-${{ env.COMMIT }}-arm64ec-d3mu",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "buildId": "${{ env.BUILD_ID }}",
+            "description": "VKD3D Proton ARM64EC D3MU (0x1002:0x163f) for Winlator",
+            "files": [
+              {"source": "aarch64-windows/d3d12.dll", "target": "\${aarch64-windows}/d3d12.dll"},
+              {"source": "aarch64-windows/d3d12core.dll", "target": "\${aarch64-windows}/d3d12core.dll"}
+            ]
+          }
+          JSONEOF
+          
+          PKG="vkd3d-proton-${{ env.BUILD_ID }}-arm64ec-d3mu"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+          
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
+          
+          echo "=== Package created ==="
+          ls -lh ${PKG}.wcp
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            ${{ env.PKG }}.wcp
+            checksums.txt
+            patch-report.json
+          retention-days: 30
+          compression-level: 9
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf src pkg
+          echo "Cleanup completed"

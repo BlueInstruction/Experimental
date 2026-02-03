@@ -130,7 +130,7 @@ jobs:
     
     - name: Verify ARM64EC toolchain
       run: |
-        export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+        export PATH="<path to toolchain>/bin:$PATH"
         
         echo "=== Checking compilers ==="
         ls "$TOOLCHAIN_DIR/bin/" | grep -E "arm64ec|aarch64" | head -10
@@ -144,6 +144,7 @@ jobs:
         echo ""
         echo "✓ aarch64-w64-mingw32-clang"
         aarch64-w64-mingw32-clang --version | head -2
+
     
     - name: Clone bylaws Wine (arm64ec branch)
       run: |

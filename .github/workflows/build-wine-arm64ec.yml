@@ -25,13 +25,13 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc; sudo apt clean; df -h
 
       - uses: actions/checkout@v4
-
+      
       - name: Install dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update
-          sudo apt install -y alsa-tools autoconf automake bison build-essential clang cmake curl flex gettext git glslang-tools jq libasound2-dev libcups2-dev libdbus-1-dev libdrm-dev libfaudio-dev libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libglu1-mesa-dev libgnutls28-dev libgphoto2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libjpeg-dev libkrb5-dev liblcms2-dev libldap2-dev libmpg123-dev libopenal-dev libosmesa6-dev libpcap-dev libpng-dev libpulse-dev libsane-dev libsdl2-dev libssl-dev libtiff-dev libtool libudev-dev libunwind-dev libusb-1.0-0-dev libv4l-dev libvulkan-dev libx11-dev libxcb1-dev libxcomposite-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxinerama-dev libxml2-dev libxrandr-dev libxrender-dev libxslt1-dev libxxf86vm-dev lld llvm meson ninja-build ocl-icd-opencl-dev pkg-config python3 python3-pip wget wine64-tools xz-utils zstd
-
+          sudo apt install -y alsa-tools autoconf automake bison build-essential clang cmake curl flex gettext git glslang-tools jq libasound2-dev libcups2-dev libdbus-1-dev libdrm-dev libfaudio-dev libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libglu1-mesa-dev libgnutls28-dev libgphoto2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libjpeg-dev libkrb5-dev liblcms2-dev libldap2-dev libmpg123-dev libopenal-dev libosmesa6-dev libpcap-dev libpng-dev libpulse-dev libsane-dev libsdl2-dev libssl-dev libtiff-dev libtool libudev-dev libunwind-dev libusb-1.0-0-dev libv4l-dev libvulkan-dev libx11-dev libxcb1-dev libxcomposite-dev libxcursor-dev libxext-dev libxfixes-dev libxi-dev libxinerama-dev libxml2-dev libxrandr-dev libxrender-dev libxslt1-dev libxxf86vm-dev lld llvm meson ninja-build ocl-icd-opencl-dev pkg-config python3 python3-pip wget wine64-tools xz-utils zstd opencl-headers
+      
       - name: Setup LLVM MinGW toolchain
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz -O llvm-mingw.tar.xz

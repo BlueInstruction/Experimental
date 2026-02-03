@@ -177,7 +177,7 @@ jobs:
           cpu = 'aarch64'
           endian = 'little'
           EOF
-          meson setup build-arm64ec --cross-file crossfile-arm64ec.txt --buildtype release -Dtests=false  
+          meson setup build-arm64ec --cross-file crossfile-arm64ec.txt --buildtype release  
           ninja -C build-arm64ec
     
       - name: Build VKD3D-Proton
@@ -203,7 +203,7 @@ jobs:
           cpu = 'aarch64'
           endian = 'little'
           EOF
-          meson setup build-arm64ec --cross-file crossfile-arm64ec.txt --buildtype release -Dtests=false
+          meson setup build-arm64ec --cross-file crossfile-arm64ec.txt --buildtype release
           ninja -C build-arm64ec
 
       - name: Create Wine prefix pack

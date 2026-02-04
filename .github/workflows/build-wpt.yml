@@ -40,50 +40,48 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update
+          # Install krb5-multidev first to avoid conflict
+          sudo apt install -y krb5-multidev
+          # Install 64-bit packages first
           sudo apt install -y \
-            autoconf automake bison flex gettext \
-            gcc-mingw-w64 g++-mingw-w64 \
-            gcc-multilib g++-multilib \
-            libasound2-dev libasound2-dev:i386 \
-            libcups2-dev libcups2-dev:i386 \
-            libdbus-1-dev libdbus-1-dev:i386 \
-            libfontconfig-dev libfontconfig-dev:i386 \
-            libfreetype-dev libfreetype-dev:i386 \
-            libgl-dev libgl-dev:i386 \
-            libgnutls28-dev libgnutls28-dev:i386 \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            libjpeg-dev libjpeg-dev:i386 \
-            libkrb5-dev libkrb5-dev:i386 \
-            libldap2-dev libldap2-dev:i386 \
-            libmpg123-dev libmpg123-dev:i386 \
-            libopenal-dev libopenal-dev:i386 \
-            libpcap-dev libpcap-dev:i386 \
-            libpng-dev libpng-dev:i386 \
-            libpulse-dev libpulse-dev:i386 \
-            libsdl2-dev libsdl2-dev:i386 \
-            libudev-dev libudev-dev:i386 \
-            libunwind-dev \
-            libusb-1.0-0-dev libusb-1.0-0-dev:i386 \
-            libv4l-dev libv4l-dev:i386 \
-            libvulkan-dev libvulkan-dev:i386 \
-            libx11-dev libx11-dev:i386 \
-            libxcomposite-dev libxcomposite-dev:i386 \
-            libxcursor-dev libxcursor-dev:i386 \
-            libxext-dev libxext-dev:i386 \
-            libxfixes-dev libxfixes-dev:i386 \
-            libxi-dev libxi-dev:i386 \
-            libxinerama-dev libxinerama-dev:i386 \
-            libxml2-dev libxml2-dev:i386 \
-            libxrandr-dev libxrandr-dev:i386 \
-            libxrender-dev libxrender-dev:i386 \
-            libxslt1-dev libxslt1-dev:i386 \
-            libxxf86vm-dev libxxf86vm-dev:i386 \
-            linux-libc-dev linux-libc-dev:i386 \
-            ocl-icd-opencl-dev \
-            cmake ninja-build meson glslang-tools \
-            python3 python3-pip wget xz-utils zstd jq
-          sudo pip3 install --upgrade meson
-
+          autoconf automake bison flex gettext \
+          gcc-mingw-w64 g++-mingw-w64 \
+          gcc-multilib g++-multilib \
+          libasound2-dev libcups2-dev libdbus-1-dev \
+          libfontconfig-dev libfreetype-dev libgl-dev \
+          libgnutls28-dev libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev libjpeg-dev \
+          libkrb5-dev libldap2-dev libmpg123-dev \
+          libopenal-dev libpcap-dev libpng-dev \
+          libpulse-dev libsdl2-dev libudev-dev \
+          libunwind-dev libusb-1.0-0-dev libv4l-dev \
+          libvulkan-dev libx11-dev libxcomposite-dev \
+          libxcursor-dev libxext-dev libxfixes-dev \
+          libxi-dev libxinerama-dev libxml2-dev \
+          libxrandr-dev libxrender-dev libxslt1-dev \
+          libxxf86vm-dev linux-libc-dev ocl-icd-opencl-dev \
+          cmake ninja-build meson glslang-tools \
+          python3 python3-pip wget xz-utils zstd jq
+          # Install 32-bit packages separately
+          sudo apt install -y \
+          libasound2-dev:i386 libcups2-dev:i386 \
+          libdbus-1-dev:i386 libfontconfig-dev:i386 \
+          libfreetype-dev:i386 libgl-dev:i386 \
+          libgnutls28-dev:i386 libjpeg-dev:i386 \
+          libkrb5-dev:i386 libmpg123-dev:i386 \
+          libopenal-dev:i386 libpcap-dev:i386 \
+          libpng-dev:i386 libpulse-dev:i386 \
+          libsdl2-dev:i386 libudev-dev:i386 \
+          libusb-1.0-0-dev:i386 libv4l-dev:i386 \
+          libvulkan-dev:i386 libx11-dev:i386 \
+          libxcomposite-dev:i386 libxcursor-dev:i386 \
+          libxext-dev:i386 libxfixes-dev:i386 \
+          libxi-dev:i386 libxinerama-dev:i386 \
+          libxml2-dev:i386 libxrandr-dev:i386 \
+          libxrender-dev:i386 libxslt1-dev:i386 \
+          libxxf86vm-dev:i386 linux-libc-dev:i386    
+          sudo pip3 install --upgrade meson 
+   
       - name: Clone Wine Proton
         run: |
           git clone --depth 1 -b ${{ github.event.inputs.wine_branch }} https://github.com/ValveSoftware/wine.git wine-source

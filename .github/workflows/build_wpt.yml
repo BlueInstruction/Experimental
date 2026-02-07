@@ -181,9 +181,13 @@ jobs:
           git clone --depth 1 -b v2.7.1 https://github.com/doitsujin/dxvk.git
           cd dxvk
           git submodule update --init --recursive
+          
+          # Fix missing d3d11on12.h header
+          wget -P include/native/directx https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/mingw-w64-headers/include/d3d11on12.h
+          
           ./package-release.sh v2.7.1 build --no-package
           mkdir -p ../dxvk-build
-          cp -r build/dxvk-v2.7.1/* ../dxvk-build/
+          cp -r build/dxvk-v2.7.1/* ../dxvk-build/ 
 
       - name: Build VKD3D-Proton
         if: ${{ github.event.inputs.include_vkd3d == 'true' }}

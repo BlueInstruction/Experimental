@@ -10,11 +10,11 @@ MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
 MESA_MIRROR="https://github.com/mesa3d/mesa.git"
 
 MESA_SOURCE="${MESA_SOURCE:-latest_release}"
-STAGING_BRANCH="${STAGING_BRANCH:-staging/25.3}"
+STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
 BUILD_TYPE="${BUILD_TYPE:-release}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
-API_LEVEL="${API_LEVEL:-31}"
+API_LEVEL="${API_LEVEL:-35}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -152,7 +152,7 @@ create_cross_file() {
     
     local compiler_api="$API_LEVEL"
     if [[ ! -f "${ndk_bin}/aarch64-linux-android${compiler_api}-clang" ]]; then
-        compiler_api="34"
+        compiler_api="35"
         log_warn "api $API_LEVEL compiler not found, using $compiler_api"
     fi
     

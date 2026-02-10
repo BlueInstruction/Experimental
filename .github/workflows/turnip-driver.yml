@@ -16,10 +16,10 @@ on:
       staging_branch:
         type: choice
         description: "staging branch"
-        default: "staging/26.0"
+        default: "staging/26"
         options:
-          - staging/26.0
-          - staging/25.3
+          - staging/26
+          - staging/25
       
       custom_tag:
         description: "custom tag"

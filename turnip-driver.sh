@@ -259,7 +259,7 @@ package_driver() {
     cat > "${package_dir}/meta.json" << EOF
 {
     "schemaVersion": 1,
-    "name": "turnip_v${version}$-${build_date}",
+    "name": "turnip_v${version}-${build_date}",
     "description": "Compiled from Mesa",
     "author": "Mesa3D",
     "packageVersion": "1",

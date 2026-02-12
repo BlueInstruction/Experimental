@@ -129,20 +129,13 @@ jobs:
             
             ### Supported GPUs
 #            - Adreno 710/720/730/740/750
-            
-            ### Features
-#            - Vulkan 1.4.x support
-#            - Timeline Semaphore optimization (DXVK 2.4+)
-#            - UBWC 5/6 support
-#            - VKD3D-Proton v3.0b compatible
-            
+          
             ### Recommended TU_DEBUG
 #            ```
 #            TU_DEBUG=noconform
 #           ``` 
             ### Troubleshooting
 #            - Black screen: TU_DEBUG=deck_emu
-#            - Graphics glitches: TU_DEBUG=sysmem,nolrz
             
           files: build/*.zip
           draft: false

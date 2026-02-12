@@ -113,39 +113,36 @@ jobs:
           path: build/*.zip
           retention-days: 30
           compression-level: 0
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.build.outputs.filename }}
-          name: "Turnip ${{ steps.build.outputs.version }} - ${{ inputs.build_variant || 'optimized' }}"
-          body: |
+ 
+#     - name: Create release
+#        uses: softprops/action-gh-release@v2
+#       with:
+#         tag_name: ${{ steps.build.outputs.filename }}
+#          name: "Turnip ${{ steps.build.outputs.version }} - ${{ inputs.build_variant || 'optimized' }}"
+#          body: |
             ## Turnip Vulkan Driver for Adreno 7xx
             
-            **Mesa Version:** ${{ steps.build.outputs.version }}
-            **Vulkan Version:** ${{ steps.build.outputs.vulkan_version }}
-            **Build Date:** ${{ steps.build.outputs.build_date }}
-            **Build Variant:** ${{ inputs.build_variant || 'optimized' }}
+#            **Mesa Version:** ${{ steps.build.outputs.version }}
+#            **Vulkan Version:** ${{ steps.build.outputs.vulkan_version }}
+#            **Build Date:** ${{ steps.build.outputs.build_date }}
+#            **Build Variant:** ${{ inputs.build_variant || 'optimized' }}
             
             ### Supported GPUs
-            - Adreno 710/720/730/740/750
+#            - Adreno 710/720/730/740/750
             
             ### Features
-            - Vulkan 1.4.x support
-            - Timeline Semaphore optimization (DXVK 2.4+)
-            - UBWC 5/6 support
-            - VKD3D-Proton v3.0b compatible
-            - FSR4 extensions support
+#            - Vulkan 1.4.x support
+#            - Timeline Semaphore optimization (DXVK 2.4+)
+#            - UBWC 5/6 support
+#            - VKD3D-Proton v3.0b compatible
             
             ### Recommended TU_DEBUG
-            ```
-            TU_DEBUG=noconform
-            ```
-            
+#            ```
+#            TU_DEBUG=noconform
+#           ``` 
             ### Troubleshooting
-            - Black screen: TU_DEBUG=deck_emu
-            - Graphics glitches: TU_DEBUG=sysmem,nolrz
-            - Disable DXVK_HUD if artifacts appear
+#            - Black screen: TU_DEBUG=deck_emu
+#            - Graphics glitches: TU_DEBUG=sysmem,nolrz
             
           files: build/*.zip
           draft: false

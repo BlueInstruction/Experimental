@@ -8,9 +8,11 @@ on:
         description: "Mesa source"
         default: "main_branch"
         options:
+          - latest_release
           - staging_branch
           - main_branch
-      
+          - custom_tag
+          
       staging_branch:
         type: choice
         description: "Staging branch"
@@ -35,10 +37,11 @@ on:
       build_variant:
         type: choice
         description: "Build variant"
-        default: "opt"
+        default: "optimized"
         options:
-          - opt
-          - auto
+          - optimized
+          - autotuner
+          - vanilla
           
 permissions:
   contents: write

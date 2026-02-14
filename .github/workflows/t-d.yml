@@ -8,10 +8,8 @@ on:
         description: "Mesa source"
         default: "main_branch"
         options:
-          - latest_release
           - staging_branch
           - main_branch
-          - custom_tag
       
       staging_branch:
         type: choice

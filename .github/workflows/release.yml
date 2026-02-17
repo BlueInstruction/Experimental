@@ -119,11 +119,11 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.prepare.outputs.version }}-${{ steps.prepare.outputs.commit }}-d3mu
-          name: V3X ${{ steps.prepare.outputs.version }} D3MU
+          tag_name: ${{ steps.prepare.outputs.version }}-${{ steps.prepare.outputs.commit }}-p
+          name: Vkd3d ${{ steps.prepare.outputs.version }} p
           files: release/*
           body: |
-            ## V3X ${{ steps.prepare.outputs.version }} - D3MU
+            ## Vkd3d ${{ steps.prepare.outputs.version }} - p
 
             **Build:** `${{ steps.prepare.outputs.commit }}`
             **Profile:** P7

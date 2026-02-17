@@ -18,7 +18,6 @@ def mk_asgn(var: str) -> str:
     esc = re.escape(var)
     return rf'(\b{esc}\s*=\s*)([^;]+);'
 
-# GPU spoofing: AMD RX 6700
 GPU_P: List[PT] = [
     (mk_asgn('adapter_id.vendor_id'), r'\g<1>0x1002;', 'gpu_vid'),
     (mk_asgn('adapter_id.device_id'), r'\g<1>0x73DF;', 'gpu_did'),
@@ -27,40 +26,34 @@ GPU_P: List[PT] = [
     (r'(SharedSystemMemory\s*=\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;', 'gpu_mem'),
 ]
 
-# Shader Model 6_7
 SM_P: List[PT] = [
-    (mk_asgn('data->HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_7;', 'sm'),
-    (mk_asgn('info.HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_7;', 'sm_info'),
+    (mk_asgn('data->HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_8;', 'sm'),
+    (mk_asgn('info.HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_8;', 'sm_info'),
 ]
 
-# Wave ops
 WV_P: List[PT] = [
     (mk_asgn('options1.WaveOps'), r'\g<1>TRUE;', 'wv0'),
     (mk_asgn('options1.WaveLaneCountMin'), r'\g<1>32;', 'wv1'),
     (mk_asgn('options1.WaveLaneCountMax'), r'\g<1>128;', 'wv2'),
 ]
 
-# Resource binding
 RB_P: List[PT] = [
     (mk_asgn('options.ResourceBindingTier'), r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;', 'rb0'),
     (mk_asgn('options.TiledResourcesTier'), r'\g<1>D3D12_TILED_RESOURCES_TIER_4;', 'rb1'),
     (mk_asgn('options.ResourceHeapTier'), r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;', 'rb2'),
 ]
 
-# Shader ops
 SO_P: List[PT] = [
     (mk_asgn('options.DoublePrecisionFloatShaderOps'), r'\g<1>TRUE;', 'so0'),
     (mk_asgn('options1.Int64ShaderOps'), r'\g<1>TRUE;', 'so1'),
     (mk_asgn('options4.Native16BitShaderOpsSupported'), r'\g<1>TRUE;', 'so2'),
 ]
 
-# Mesh shaders
 MS_P: List[PT] = [
     (mk_asgn('options7.MeshShaderTier'), r'\g<1>D3D12_MESH_SHADER_TIER_1;', 'ms0'),
     (mk_asgn('options12.EnhancedBarriersSupported'), r'\g<1>TRUE;', 'ms7'),
 ]
 
-# Ray tracing
 RT_P: List[PT] = [
     (mk_asgn('options5.RaytracingTier'), r'\g<1>D3D12_RAYTRACING_TIER_1_1;', 'rt0'),
     (mk_asgn('options5.RenderPassesTier'), r'\g<1>D3D12_RENDER_PASS_TIER_2;', 'rt1'),
@@ -69,23 +62,20 @@ RT_P: List[PT] = [
     (mk_asgn('options6.BackgroundProcessingSupported'), r'\g<1>TRUE;', 'rt4'),
 ]
 
-# Sampler feedback
 SF_P: List[PT] = [
     (mk_asgn('options7.SamplerFeedbackTier'), r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;', 'sf0'),
     (mk_asgn('options2.DepthBoundsTestSupported'), r'\g<1>TRUE;', 'sf1'),
 ]
 
-# Textures
 TX_P: List[PT] = [
     (mk_asgn('options8.UnalignedBlockTexturesSupported'), r'\g<1>TRUE;', 'tx0'),
 ]
 
-# Triangle fan
 RN_P: List[PT] = [
     (mk_asgn('options15.TriangleFanSupported'), r'\g<1>TRUE;', 'rn4'),
 ]
 
-class V3XPatcher:
+class Vkd3dPatcher:
     CAP_F = ['device.c']
     EX_D = ['tests', 'demos', 'include', '.git']
     VER = "3.2.0"

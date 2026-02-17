@@ -189,7 +189,7 @@ def main() -> int:
     parser.add_argument('--report', action='store_true')
     args = parser.parse_args()
 
-    patcher = V3XPatcher(profile=args.profile, gpu=not args.no_gpu, dry=args.dry_run, verb=args.verbose)
+    patcher = Vkd3dPatcher(profile=args.profile, gpu=not args.no_gpu, dry=args.dry_run, verb=args.verbose)
     success = patcher.apply(args.src)
 
     if args.report:

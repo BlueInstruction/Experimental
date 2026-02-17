@@ -207,7 +207,7 @@ jobs:
           SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
           [[ -z "$SRC" ]] && { echo "Build not found"; exit 1; }
           
-          PKG="v3x-${VER}-${COMMIT}-p"
+          PKG="vkd3d-${VER}-${COMMIT}-p"
           
           mkdir -p pkg/system32 pkg/syswow64
           cp "$SRC/x64/"*.dll pkg/system32/

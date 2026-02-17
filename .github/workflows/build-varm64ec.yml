@@ -30,7 +30,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -153,7 +152,7 @@ jobs:
           report = {
               "v": "2.1.0",
               "t": datetime.utcnow().isoformat(),
-              "gpu": {"vid": "0x1002", "did": "0x163f", "name": "D3MU"},
+              "gpu": {"vid": "0x1002", "did": "0x163f", "name": "p"},
               "applied": applied,
               "errors": len(errors)
           }
@@ -162,7 +161,7 @@ jobs:
               json.dump(report, f, indent=2)
 
           print(f"Applied {applied} patches")
-          print(f"GPU: 0x1002:0x163f (D3MU)")
+          print(f"GPU: 0x1002:0x163f (p)")
           if errors:
               print(f"Errors: {len(errors)}")
               for e in errors[:5]:
@@ -252,7 +251,7 @@ jobs:
             "type": "VKD3D",
             "versionName": "arm64ec-${{ env.VER }}",
             "versionCode": ${{ env.BUILD_DATE }},
-            "description": "VKD3D Proton ARM64EC D3MU (0x1002:0x163f)",
+            "description": "VKD3D Proton ARM64EC",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},

@@ -122,7 +122,7 @@ jobs:
               (mk('options5.RenderPassesTier'), r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
               (mk('options6.VariableShadingRateTier'), r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
               (mk('options6.ShadingRateImageTileSize'), r'\g<1>8;'),
-              (mk('options7.SamplerFeedbackTier'), r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_1;'),
+              (mk('options7.SamplerFeedbackTier'), r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
               (mk('options2.DepthBoundsTestSupported'), r'\g<1>TRUE;'),
               (mk('options8.UnalignedBlockTexturesSupported'), r'\g<1>TRUE;'),
           ]

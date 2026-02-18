@@ -1,4 +1,4 @@
-name: Build DXVK (x64)
+name: Build DXVK (x86_64)
 
 on:
   schedule:
@@ -41,10 +41,49 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache llvm-mingw
+        id: cache-llvm
         uses: actions/cache@v4
         with:
           path: /opt/llvm-mingw
-          key: llvm-mingw-${{ runner.os }}-v1
+          key: llvm-mingw-${{ runner.os }}-v2
+
+      - name: Install llvm-mingw
+        if: steps.cache-llvm.outputs.cache-hit != 'true'
+        run: |
+          # ── Fetch the EXACT download URL from the GitHub API ──────
+          # Avoids hardcoding a filename that changes between releases.
+          ASSET_URL=$(curl -sL \
+            https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+            | jq -r '
+                .assets[]
+                | select(
+                    .name | test("ucrt-ubuntu.*x86_64\\.tar\\.xz$")
+                  )
+                | .browser_download_url' \
+            | head -1)
+
+          [[ -z "$ASSET_URL" ]] && {
+            echo "ERROR: Could not find llvm-mingw ubuntu/x86_64 asset"
+            echo "Available assets:"
+            curl -sL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+              | jq -r '.assets[].name'
+            exit 1
+          }
+
+          echo "Downloading: $ASSET_URL"
+          curl -L "$ASSET_URL" -o /tmp/llvm-mingw.tar.xz
+
+          # Verify it is actually an xz archive before extracting
+          file /tmp/llvm-mingw.tar.xz | grep -q 'XZ compressed' || {
+            echo "ERROR: Downloaded file is not a valid XZ archive"
+            ls -lh /tmp/llvm-mingw.tar.xz
+            exit 1
+          }
+
+          sudo mkdir -p /opt/llvm-mingw
+          sudo tar -xf /tmp/llvm-mingw.tar.xz --strip-components=1 -C /opt/llvm-mingw
+          rm /tmp/llvm-mingw.tar.xz
+          echo "llvm-mingw installed at /opt/llvm-mingw"
 
       - name: Setup Dependencies
         run: |
@@ -53,39 +92,22 @@ jobs:
             git curl jq python3 python3-venv \
             ninja-build glslang-tools spirv-tools zstd perl
 
-          # ── Install llvm-mingw (supports x86_64, i686, arm64ec) ──
-          if [[ ! -x /opt/llvm-mingw/bin/i686-w64-mingw32-clang ]]; then
-            LLVM_VER=$(curl -sL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
-              | jq -r '.tag_name')
-            echo "Installing llvm-mingw $LLVM_VER …"
-            curl -L \
-              "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_VER}/llvm-mingw-${LLVM_VER}-ucrt-ubuntu-20.04-x86_64.tar.xz" \
-              -o /tmp/llvm-mingw.tar.xz
-            sudo mkdir -p /opt/llvm-mingw
-            sudo tar -xf /tmp/llvm-mingw.tar.xz --strip-components=1 -C /opt/llvm-mingw
-            rm /tmp/llvm-mingw.tar.xz
-          fi
-
           echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
 
-          # ── meson in a venv (same pattern as setup-llvm-meson.sh) ──
           python3 -m venv .venv
           .venv/bin/pip install --quiet meson
 
-          # ── sanity checks ──
           echo "int main(){return 0;}" > /tmp/test.c
-          i686-w64-mingw32-clang     /tmp/test.c -o /tmp/t32.exe  && echo "i686   OK"
-          x86_64-w64-mingw32-clang   /tmp/test.c -o /tmp/t64.exe  && echo "x86_64 OK"
+          /opt/llvm-mingw/bin/i686-w64-mingw32-clang   /tmp/test.c -o /tmp/t32.exe \
+            && echo "i686   clang OK"
+          /opt/llvm-mingw/bin/x86_64-w64-mingw32-clang /tmp/test.c -o /tmp/t64.exe \
+            && echo "x86_64 clang OK"
           .venv/bin/meson --version
 
       - name: Generate Patch Number
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          LAST=$(gh release list --repo ${{ github.repository }} \
-            --limit 100 --json tagName -q '.[].tagName' \
-            | grep -oP '(?<=dxvk-)[0-9.]+(?=-p[0-9]+)' \
-            | head -1 || echo "")
           LAST_P=$(gh release list --repo ${{ github.repository }} \
             --limit 100 --json tagName -q '.[].tagName' \
             | grep -oP 'p\K[0-9]+' | sort -n | tail -1 || echo "")
@@ -102,15 +124,17 @@ jobs:
             VER="${{ inputs.VERSION }}"
             [[ "$VER" =~ ^v ]] || VER="v$VER"
           else
-            VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases/latest \
+            VER=$(curl -sL \
+              https://api.github.com/repos/doitsujin/dxvk/releases/latest \
               | jq -r '.tag_name // empty')
             [[ -z "$VER" ]] && \
-              VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases \
+              VER=$(curl -sL \
+                https://api.github.com/repos/doitsujin/dxvk/releases \
                 | jq -r '.[0].tag_name')
           fi
-          echo "TAG=$VER"                      >> $GITHUB_ENV
-          echo "VER=${VER#v}"                  >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date +%Y%m%d)"   >> $GITHUB_ENV
+          echo "TAG=$VER"                     >> $GITHUB_ENV
+          echo "VER=${VER#v}"                 >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)"  >> $GITHUB_ENV
 
       - name: Check Release
         id: check
@@ -121,10 +145,11 @@ jobs:
           EXISTS=$(gh release view "$TAG" --repo ${{ github.repository }} \
             2>/dev/null && echo "true" || echo "false")
           [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
-          echo "SKIP=$EXISTS"                 >> $GITHUB_OUTPUT
-          echo "RELEASE_TAG=$TAG"             >> $GITHUB_ENV
-          echo "BUILD_ID=${{ env.VER }}-p${{ env.PATCH_NUM }}" >> $GITHUB_ENV
+          echo "SKIP=$EXISTS"                                          >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$TAG"                                      >> $GITHUB_ENV
+          echo "BUILD_ID=${{ env.VER }}-p${{ env.PATCH_NUM }}"        >> $GITHUB_ENV
 
+      # ── Source ──────────────────────────────────────────────────
       - name: Clone Source
         if: steps.check.outputs.SKIP == 'false'
         run: |
@@ -135,6 +160,7 @@ jobs:
           git -C src config user.email "bot@noreply"
           chmod +x src/package-release.sh
 
+      # ── llvm-mingw compatibility patches ────────────────────────
       - name: Apply Compatibility Patches
         if: steps.check.outputs.SKIP == 'false'
         env:
@@ -143,39 +169,44 @@ jobs:
           cd src
 
           HAS_DEVINFO=false
-          compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h >/dev/null 2>&1 && \
+          if compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h >/dev/null 2>&1; then
             grep -q "_D3DDEVINFO_RESOURCEMANAGER" \
-              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h 2>/dev/null && \
-            HAS_DEVINFO=true && echo "Toolchain has D3DDEVINFO_RESOURCEMANAGER"
+              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h 2>/dev/null \
+              && HAS_DEVINFO=true && echo "Toolchain has D3DDEVINFO_RESOURCEMANAGER"
+          fi
 
           HAS_D3D10_SB=false
-          compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10*.h >/dev/null 2>&1 && \
+          if compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10*.h >/dev/null 2>&1; then
             grep -Rqs 'ID3D10StateBlock' \
-              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10* 2>/dev/null && \
-            HAS_D3D10_SB=true && echo "Toolchain has ID3D10StateBlock"
+              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10* 2>/dev/null \
+              && HAS_D3D10_SB=true && echo "Toolchain has ID3D10StateBlock"
+          fi
 
           INC="src/d3d9/d3d9_include.h"
-          [[ "$HAS_DEVINFO" == true && -f "$INC" ]] && \
+          if [[ "$HAS_DEVINFO" == true && -f "$INC" ]]; then
             grep -q 'typedef struct _D3DDEVINFO_RESOURCEMANAGER' "$INC" && \
             perl -i -0777 -pe \
               's/typedef\s+struct\s+_D3DDEVINFO_RESOURCEMANAGER\s*\{.*?\}\s*D3DDEVINFO_RESOURCEMANAGER[^;]*;//s' \
               "$INC" && echo "Patched D3DDEVINFO_RESOURCEMANAGER"
+          fi
 
           TEX="src/d3d11/d3d11_texture.h"
-          [[ -f "$TEX" ]] && grep -q 'UnmappedSubresource' "$TEX" && \
+          if [[ -f "$TEX" ]] && grep -q 'UnmappedSubresource' "$TEX"; then
             perl -i -pe \
               's/static\s+(?:constexpr\s+)?D3D11_MAP\s+UnmappedSubresource\s*=.*/inline static const D3D11_MAP UnmappedSubresource = static_cast<D3D11_MAP>(-1);/' \
               "$TEX" && echo "Patched UnmappedSubresource"
+          fi
 
           D3D10="src/d3d10/d3d10_interfaces.h"
-          [[ "$HAS_D3D10_SB" == true && -f "$D3D10" ]] && \
+          if [[ "$HAS_D3D10_SB" == true && -f "$D3D10" ]]; then
             grep -q '__CRT_UUID_DECL(ID3D10StateBlock' "$D3D10" && \
             perl -i -pe \
               's@^\s*__CRT_UUID_DECL\(ID3D10StateBlock,\s*0x0803425a,0x57f5,0x4dd6,0x94,0x65,0xa8,0x75,0x70,0x83,0x4a,0x08\);\s*$@@' \
               "$D3D10" && echo "Patched ID3D10StateBlock UUID"
+          fi
 
           echo "Compatibility patches done"
-          
+
       - name: Apply GPU Patches
         if: steps.check.outputs.SKIP == 'false'
         run: |
@@ -185,51 +216,73 @@ jobs:
           from datetime import datetime, timezone
 
           applied, errors = 0, []
-          GPU_VENDOR_ID, GPU_DEVICE_ID = "0x1002", "0x163F"
-          GPU_NAME, GPU_VRAM_MB, GPU_SHARED_MB = "AMD Custom GPU 0405", 1024, 16384
+          GPU_VENDOR_ID  = "0x1002"
+          GPU_DEVICE_ID  = "0x163F"
+          GPU_NAME       = "AMD Custom GPU 0405"
+          GPU_VRAM_MB    = 1024
+          GPU_SHARED_MB  = 16384
 
           def patch_file(path, patches):
               global applied, errors
-              if not os.path.exists(path): errors.append(f"Not found: {path}"); return
-              c = open(path, encoding="utf-8", errors="ignore").read(); orig = c
+              if not os.path.exists(path):
+                  errors.append(f"Not found: {path}"); return
+              c = open(path, encoding="utf-8", errors="ignore").read()
+              orig = c
               for p, r in patches:
                   n = len(re.findall(p, c))
-                  if n: c = re.sub(p, r, c); applied += n
-              if c != orig: open(path, "w", encoding="utf-8").write(c)
+                  if n:
+                      c = re.sub(p, r, c)
+                      applied += n
+              if c != orig:
+                  open(path, "w", encoding="utf-8").write(c)
 
           gpu = [
-              (r'(VkVendorId\s*(?<!=)=(?!=)\s*)[^;]+;',             rf'\g<1>{GPU_VENDOR_ID};'),
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;',  rf'\g<1>{GPU_VENDOR_ID};'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;',  rf'\g<1>{GPU_DEVICE_ID};'),
-              (r'(VkDeviceId\s*(?<!=)=(?!=)\s*)[^;]+;',             rf'\g<1>{GPU_DEVICE_ID};'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;',   rf'\g<1>{GPU_VRAM_MB}ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;',     rf'\g<1>{GPU_SHARED_MB}ULL * 1024 * 1024;'),
+              (r'(VkVendorId\s*(?<!=)=(?!=)\s*)[^;]+;',            rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(VkDeviceId\s*(?<!=)=(?!=)\s*)[^;]+;',            rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;',  rf'\g<1>{GPU_VRAM_MB}ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;',    rf'\g<1>{GPU_SHARED_MB}ULL * 1024 * 1024;'),
           ]
-          mem = [(r'(DxvkMemoryAllocator::allocateChunk\([^{]*\{)',
-                  r'\1\n    const auto& props = m_device->adapter()->deviceProperties();\n'
-                  r'    if (props.core.properties.vendorID == 0x1002 &&\n'
-                  r'        props.core.properties.deviceID == 0x163F &&\n'
-                  r'        size > (128 << 20)) { size = 128 << 20;\n'
-                  r'      Logger::info("DXVK: 128MB chunk for Steam Deck APU"); }')]
-          pipe = [(r'(uint32_t\s+numCompilers\s*=\s*\(cpuCount\s*-\s*1\)\s*/\s*2;)',
-                   r'\1\n    const auto& props = m_device->adapter()->deviceProperties();\n'
-                   r'    if (props.core.properties.vendorID == 0x1002 &&\n'
-                   r'        props.core.properties.deviceID == 0x163F &&\n'
-                   r'        numCompilers > 3) { numCompilers = 3;\n'
-                   r'      Logger::info("DXVK: limit 3 compiler threads for Steam Deck"); }')]
+          mem = [(
+              r'(DxvkMemoryAllocator::allocateChunk\([^{]*\{)',
+              r'\1\n'
+              r'    // Steam Deck: limit chunk size for APU shared memory\n'
+              r'    const auto& props = m_device->adapter()->deviceProperties();\n'
+              r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+              r'        props.core.properties.deviceID == 0x163F &&\n'
+              r'        size > (128 << 20)) {\n'
+              r'      size = 128 << 20;\n'
+              r'      Logger::info("DXVK: 128MB chunk for Steam Deck APU");\n'
+              r'    }'
+          )]
+          pipe = [(
+              r'(uint32_t\s+numCompilers\s*=\s*\(cpuCount\s*-\s*1\)\s*/\s*2;)',
+              r'\1\n'
+              r'    // Steam Deck: limit compiler threads on Zen 2 4C/8T\n'
+              r'    const auto& props = m_device->adapter()->deviceProperties();\n'
+              r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+              r'        props.core.properties.deviceID == 0x163F &&\n'
+              r'        numCompilers > 3) {\n'
+              r'      numCompilers = 3;\n'
+              r'      Logger::info("DXVK: limit 3 compiler threads for Steam Deck");\n'
+              r'    }'
+          )]
 
           for root, _, files in os.walk("."):
               for f in files:
-                  if not f.endswith((".cpp",".h",".c")): continue
+                  if not f.endswith((".cpp", ".h", ".c")): continue
                   p = os.path.join(root, f)
-                  if "dxvk_memory" in f:      patch_file(p, mem)
+                  if "dxvk_memory"      in f: patch_file(p, mem)
                   if "dxvk_pipemanager" in f: patch_file(p, pipe)
                   if any(k in f for k in ["adapter","device","d3d9","d3d11","dxgi"]):
                       patch_file(p, gpu)
 
-          json.dump({"applied": applied, "errors": len(errors),
-                     "t": datetime.now(timezone.utc).isoformat()},
-                    open("../patch-report.json","w"), indent=2)
+          json.dump({
+              "applied": applied, "errors": len(errors),
+              "arch": "x86_64",
+              "t": datetime.now(timezone.utc).isoformat()
+          }, open("../patch-report.json","w"), indent=2)
           print(f"Applied {applied} patches, {len(errors)} warnings")
           PYSCRIPT
 
@@ -237,6 +290,7 @@ jobs:
         if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
+
           git config --global --add safe.directory "$(pwd)"
           if ! git diff-index --quiet HEAD --; then
             git add -u
@@ -253,24 +307,30 @@ jobs:
 
           bash ./package-release.sh "${{ env.TAG }}" ../pkg_temp --no-package \
             2>&1 | tee ../build.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -100 ../build.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -150 ../build.log; exit 1; }
 
           echo "── Output structure ──"
           find ../pkg_temp -type f | sort
 
-      - name: Verify Build
-        if: steps.check.outputs.SKIP == 'false'
-        run: |
+          if: steps.check.outputs.SKIP == 'false'
+          run: |
           SRC=$(find pkg_temp -maxdepth 1 -type d -name "dxvk-*" | head -1)
-          [[ -z "$SRC" ]] && { echo "pkg_temp/dxvk-* not found"; exit 1; }
+          [[ -z "$SRC" ]] && { echo "ERROR: pkg_temp/dxvk-* not found"; exit 1; }
 
-          SRC_64="$SRC/x64"; [[ -d "$SRC/x64/bin" ]] && SRC_64="$SRC/x64/bin"
+          # llvm-mingw puts 32-bit output in x32/ not x86/
+          SRC_64="$SRC/x64"
+          [[ -d "$SRC/x64/bin" ]] && SRC_64="$SRC/x64/bin"
 
           SRC_32=""
-          [[ -d "$SRC/x32/bin" ]] && SRC_32="$SRC/x32/bin" \
-          || { [[ -d "$SRC/x32" ]] && SRC_32="$SRC/x32"; } \
-          || { [[ -d "$SRC/x86" ]] && SRC_32="$SRC/x86"; }
-          [[ -z "$SRC_32" ]] && { echo "32-bit dir not found under $SRC"; exit 1; }
+          if   [[ -d "$SRC/x32/bin" ]]; then SRC_32="$SRC/x32/bin"
+          elif [[ -d "$SRC/x32"     ]]; then SRC_32="$SRC/x32"
+          elif [[ -d "$SRC/x86"     ]]; then SRC_32="$SRC/x86"
+          fi
+          [[ -z "$SRC_32" ]] && {
+            echo "ERROR: 32-bit dir not found. Contents of $SRC:"
+            find "$SRC" -type d
+            exit 1
+          }
 
           echo "x64 → $SRC_64"
           echo "x86 → $SRC_32"
@@ -323,8 +383,8 @@ jobs:
 
           PKG="dxvk-${{ env.BUILD_ID }}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
-          echo "PKG=$PKG"                                  >> $GITHUB_ENV
-          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)"   >> $GITHUB_ENV
+          echo "PKG=$PKG"                                >> $GITHUB_ENV
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
         if: steps.check.outputs.SKIP == 'false'

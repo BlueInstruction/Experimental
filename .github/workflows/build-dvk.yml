@@ -1,31 +1,28 @@
-name: Build DXVK
+name: Build DXVK (Steam Deck)
 
 on:
+  schedule:
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
-      version:
-        description: 'DXVK version'
-        required: false
-        default: 'v2.7.1'
-      
-      apply_patches:
-        description: 'Apply patches'
-        required: false
-        default: true
+      FORCE_MODE:
         type: boolean
-      
-      apply_adreno_optimizations:
-        description: 'Apply Adreno GPU optimizations'
+        default: false
+      VERSION:
+        description: "Version"
         required: false
-        default: true
-        type: boolean
+        default: ""
+      BUILD_TYPE:
+        type: choice
+        default: "release"
+        options: ["release", "debug"]
 
   workflow_call:
     inputs:
-      version:
+      VERSION:
         type: string
         required: false
-        default: 'v2.7.1'
+        default: ""
     outputs:
       version:
         value: ${{ jobs.build.outputs.version }}
@@ -33,142 +30,294 @@ on:
         value: ${{ jobs.build.outputs.artifact_name }}
 
 concurrency:
-  group: build-dxvk-${{ github.ref }}-${{ inputs.version || 'latest' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.clone.outputs.version }}
-      commit: ${{ steps.clone.outputs.commit }}
-      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      version: ${{ env.VER }}
+      artifact_name: ${{ env.PKG }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            /var/cache/apt
+          key: ${{ runner.os }}-dxvk-deps-${{ hashFiles('**/workflow.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-dxvk-deps-
 
       - name: Setup Dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git meson ninja-build \
-            glslang-tools spirv-tools \
+            git meson ninja-build curl jq python3 \
+            glslang-tools spirv-tools zstd \
             gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
             g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
-            mingw-w64 mingw-w64-tools \
+            mingw-w64 mingw-w64-tools binutils-mingw-w64 \
             wine64 wine32
-          
-          # Set mingw to use posix threads
-          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
-          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
-          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix
-          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
+          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
 
-      - name: Clone DXVK
-        id: clone
+      - name: Fetch Version
         run: |
-          VERSION="${{ inputs.version }}"
-          if [[ -z "$VERSION" ]] || [[ "$VERSION" == "latest" ]]; then
-            echo "Fetching latest DXVK release..."
-            VERSION=$(curl -s https://api.github.com/repos/doitsujin/dxvk/releases/latest | jq -r '.tag_name')
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases/latest | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases | jq -r '.[0].tag_name')
           fi
-          
-          echo "Cloning DXVK $VERSION..."
-          git clone --branch "$VERSION" --depth 1 --recursive https://github.com/doitsujin/dxvk.git
-          
-          cd dxvk
-          COMMIT=$(git rev-parse --short=8 HEAD)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
-          
-          echo "DXVK $VERSION ($COMMIT) cloned"
+          echo "TAG=$VER" >> $GITHUB_ENV
+          echo "VER=${VER#v}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
+
+      - name: Check Release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="dxvk-steamdeck-${{ env.VER }}"
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
+          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+
+      - name: Clone Source
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
+            https://github.com/doitsujin/dxvk.git src
+          cd src && chmod +x ./package-release.sh
+          COMMIT=$(git rev-parse --short HEAD)
+          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "BUILD_ID=${{ env.VER }}-${COMMIT:0:7}" >> $GITHUB_ENV
 
       - name: Apply Patches
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          cd dxvk
-          
+          cd src
+          cat > patch.py << 'PYSCRIPT'
+          import re, os, sys, json, glob
+          from datetime import datetime
+
+          applied = 0
+          errors = []
+
+          # ===== Steam Deck GPU Profile =====
+          # AMD Custom GPU 0405 (Van Gogh APU)
+          # Vendor ID: 0x1002 (AMD)
+          # Device ID: 0x163F (Van Gogh / Aerith)
+          # VRAM: 1GB dedicated (shared with system RAM, 16GB total)
+
+          GPU_VENDOR_ID = "0x1002"
+          GPU_DEVICE_ID = "0x163F"
+          GPU_NAME = "AMD Custom GPU 0405"
+          GPU_VRAM_MB = 1024
+          GPU_SHARED_MB = 16384
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path):
+                  errors.append(f"File not found: {path}")
+                  return
+              try:
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f:
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}")
+                  return
+
+              orig = c
+              for p, r in patches:
+                  m = len(re.findall(p, c))
+                  if m > 0:
+                      c = re.sub(p, r, c)
+                      applied += m
+
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding='utf-8') as f:
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          # ----- GPU Spoofing Patches -----
+          gpu_spoof = [
+              # Vendor ID -> AMD
+              (r'(VkVendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(vendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(adapter_id\.vendor_id\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(VendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
+
+              # Device ID -> Van Gogh
+              (r'(VkDeviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(deviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(adapter_id\.device_id\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(DeviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
+
+              # Memory
+              (r'(DedicatedVideoMemory\s*=\s*)[^;]+;', rf'\g<1>{GPU_VRAM_MB}ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*=\s*)[^;]+;', rf'\g<1>{GPU_SHARED_MB}ULL * 1024 * 1024;'),
+          ]
+
+          # ----- Memory Optimization (Van Gogh has limited VRAM) -----
+           memory_patches = [
+              (r'(DxvkMemoryAllocator::allocateChunk\([^{]*\{)',
+               r'''\1
+          // Steam Deck optimization: Limit chunk size for APU shared memory
+          const auto& props = m_device->adapter()->deviceProperties();
+          if (props.core.properties.vendorID == 0x1002 &&
+          props.core.properties.deviceID == 0x163F && size > (128 << 20)) {
+          size = 128 << 20;
+            Logger::info("DXVK: Using 128MB chunk size for Steam Deck APU");
+             }'''),
+          ]
+
+          # ----- Pipeline Compiler Threads (Steam Deck has 4C/8T) -----
+          pipeline_patches = [
+              (r'(uint32_t\s+numCompilers\s*=\s*\(cpuCount\s*-\s*1\)\s*/\s*2;)',
+               r'''\1
+          // Steam Deck: Zen 2 4C/8T - limit to 3 compiler threads
+          const auto& props = m_device->adapter()->deviceProperties();
+          if (props.core.properties.vendorID == 0x1002 &&
+          props.core.properties.deviceID == 0x163F && numCompilers > 3) {
+          numCompilers = 3;
+          Logger::info("DXVK: Limiting compiler threads to 3 for Steam Deck");
+          }'''),
+           ]
+
           # Apply patches
-          if [[ "${{ inputs.apply_patches }}" == "true" ]]; then
-            echo "Applying patches..."
-            git apply ../patches/dvk/fix.patch || echo "Patch already applied or not applicable"
-          fi
-          
-          # Apply Adreno optimizations
-          if [[ "${{ inputs.apply_adreno_optimizations }}" == "true" ]]; then
-            echo "Applying Adreno GPU optimizations..."
-            git apply ../patches/dvk/adreno_optimizations.patch || echo "Patch already applied or not applicable"
-          fi
-          
-          echo "Patches applied"
+          for root, dirs, files in os.walk("."):
+              for f in files:
+                  if not f.endswith((".cpp", ".h", ".c")):
+                      continue
+                  path = os.path.join(root, f)
 
-      - name: Build DXVK
-        run: |
-          cd dxvk
-          
-          # Build x64
-          ./package-release.sh \
-            ${{ steps.clone.outputs.version }} \
-            ../dxvk-build \
-            --no-package
-          
-          echo "Build complete"
+                  if "dxvk_memory" in f:
+                      patch_file(path, memory_patches)
+                  if "dxvk_pipemanager" in f:
+                      patch_file(path, pipeline_patches)
+                  if any(k in f for k in ["adapter", "device", "d3d9", "d3d11", "dxgi"]):
+                      patch_file(path, gpu_spoof)
 
-      - name: Verify Build
+          report = {
+              "v": "2.1.0",
+              "t": datetime.utcnow().isoformat(),
+              "target": "dxvk",
+              "profile": "steam-deck",
+              "gpu": {
+                  "vid": GPU_VENDOR_ID,
+                  "did": GPU_DEVICE_ID,
+                  "name": GPU_NAME,
+                  "vram_mb": GPU_VRAM_MB,
+                  "shared_mb": GPU_SHARED_MB
+              },
+              "applied": applied,
+              "errors": len(errors)
+          }
+
+          with open("../patch-report.json", "w") as f:
+              json.dump(report, f, indent=2)
+
+          print(f"Profile: Steam Deck ({GPU_NAME})")
+          print(f"GPU: {GPU_VENDOR_ID}:{GPU_DEVICE_ID}")
+          print(f"Applied {applied} patches")
+          if errors:
+              print(f"Warnings: {len(errors)}")
+              for e in errors[:10]:
+                  print(f"  - {e}")
+          PYSCRIPT
+          python3 patch.py
+
+      - name: Build
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          cd dxvk-build
-          BUILD_DIR=$(find . -maxdepth 1 -type d -name "dxvk-*" | head -1)
-          
-          echo "Verifying build in $BUILD_DIR..."
-          
-          ERROR_COUNT=0
-          for arch in x64 x86; do
-            for dll in d3d9.dll d3d10core.dll d3d11.dll dxgi.dll; do
-              FILE="$BUILD_DIR/$arch/$dll"
-              if [[ -f "$FILE" ]]; then
-                SIZE=$(stat -c%s "$FILE")
-                echo "✓ $FILE ($SIZE bytes)"
-              else
-                echo "✗ Missing: $FILE"
-                ((ERROR_COUNT++))
-              fi
-            done
-          done
-          
-          if [[ $ERROR_COUNT -gt 0 ]]; then
-            echo "Build verification failed: $ERROR_COUNT files missing"
+          cd src
+          BUILD_FLAGS="-O3 -DNDEBUG -march=znver2 -mtune=znver2"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
+
+          export CFLAGS="$BUILD_FLAGS"
+          export CXXFLAGS="$BUILD_FLAGS"
+          export LDFLAGS="-s"
+
+          bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
+
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "Build failed"
+            tail -n 100 build.log
             exit 1
           fi
-          
-          echo "Build verified successfully"
 
-      - name: Package
-        id: package
+      - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          VERSION="${{ steps.clone.outputs.version }}"
-          COMMIT="${{ steps.clone.outputs.commit }}"
-          
-          cd dxvk-build
-          BUILD_DIR=$(find . -maxdepth 1 -type d -name "dxvk-*" | head -1)
-          
-          # Create package directory
-          mkdir -p ../dxvk-package/system32 ../dxvk-package/syswow64
-          
-          # Copy DLLs
-          cp "$BUILD_DIR/x64"/*.dll ../dxvk-package/system32/
-          cp "$BUILD_DIR/x86"/*.dll ../dxvk-package/syswow64/
-          
-          # Create profile.json for Winlator
-          cat > ../dxvk-package/profile.json << EOF
+          SRC=$(find out -maxdepth 1 -type d -name "dxvk-*" | head -1)
+          [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
+
+          for a in x64 x86; do
+            for d in d3d9.dll d3d10core.dll d3d11.dll dxgi.dll; do
+              DLL="$SRC/$a/$d"
+              if [[ ! -f "$DLL" ]]; then
+                echo "Missing: $DLL"
+                exit 1
+              fi
+              SIZE=$(stat -c%s "$DLL" 2>/dev/null || stat -f%z "$DLL")
+              echo "$DLL: ${SIZE} bytes"
+            done
+          done
+
+          echo "SRC_PATH=$SRC" >> $GITHUB_ENV
+
+      - name: Generate Checksums
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd "${{ env.SRC_PATH }}"
+          find . -name "*.dll" -type f -exec sha256sum {} \; > ../../checksums.txt
+          cd ../..
+          cat checksums.txt
+
+      - name: Create Package
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          mkdir -p pkg/system32 pkg/syswow64
+          cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
+          cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
+          cp checksums.txt pkg/
+          [[ -f patch-report.json ]] && cp patch-report.json pkg/
+
+          cat > pkg/profile.json << JSONEOF
           {
             "type": "DXVK",
-            "versionName": "${VERSION#v}-${COMMIT}-patched",
-            "versionCode": $(date +%Y%m%d),
-            "description": "DXVK ${VERSION#v}",
+            "versionName": "${{ env.VER }}-${{ env.COMMIT }}-steamdeck",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "buildId": "${{ env.BUILD_ID }}",
+            "description": "DXVK ${{ env.VER }} - Steam Deck (AMD Van Gogh)",
+            "gpu": {
+              "vendor": "AMD",
+              "vendorId": "0x1002",
+              "device": "AMD Custom GPU 0405 (Van Gogh)",
+              "deviceId": "0x163F"
+            },
             "files": [
               {"source": "system32/d3d9.dll", "target": "\${system32}/d3d9.dll"},
               {"source": "system32/d3d10core.dll", "target": "\${system32}/d3d10core.dll"},
@@ -180,41 +329,28 @@ jobs:
               {"source": "syswow64/dxgi.dll", "target": "\${syswow64}/dxgi.dll"}
             ]
           }
-          EOF
-          
-          # Create .wcp archive
-          ARTIFACT_NAME="dxvk-${VERSION#v}-${COMMIT}-patched"
-          cd ../dxvk-package
-          tar --zstd -cf "../${ARTIFACT_NAME}.wcp" .
-          
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          echo "Package: ${ARTIFACT_NAME}.wcp ($(du -h ../${ARTIFACT_NAME}.wcp | cut -f1))"
+          JSONEOF
+
+          PKG="dxvk-${{ env.BUILD_ID }}-steamdeck"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
 
       - name: Upload Artifact
+        if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: "*.wcp"
-          retention-days: 90
-          compression-level: 0
+          name: ${{ env.PKG }}
+          path: |
+            ${{ env.PKG }}.wcp
+            checksums.txt
+            patch-report.json
+          retention-days: 30
+          compression-level: 9
 
-      - name: Create Release
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: dxvk-${{ steps.clone.outputs.version }}-${{ steps.clone.outputs.commit }}
-          name: "DXVK ${{ steps.clone.outputs.version }} (Patched)"
-          body: |
-            ## DXVK with Custom Patches
-            
-            ### Version Information
-            - **DXVK**: ${{ steps.clone.outputs.version }}
-            - **Commit**: ${{ steps.clone.outputs.commit }}
-            - **Build Date**: ${{ github.event.repository.updated_at }}
-            
-            See [TROUBLESHOOTING.md](https://github.com/BlueInstruction/Experimental/blob/main/docs/TROUBLESHOOTING.md) for more.
-          files: "*.wcp"
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf src out pkg
+          echo "Cleanup completed"

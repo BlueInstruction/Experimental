@@ -1,4 +1,4 @@
-name: Build DXVK 
+name: Build DXVK (Steam Deck)
 
 on:
   schedule:
@@ -16,7 +16,6 @@ on:
         type: choice
         default: "release"
         options: ["release", "debug"]
-
   workflow_call:
     inputs:
       VERSION:
@@ -123,12 +122,6 @@ jobs:
           applied = 0
           errors = []
 
-          # ===== Steam Deck GPU Profile =====
-          # AMD Custom GPU 0405 (Van Gogh APU)
-          # Vendor ID: 0x1002 (AMD)
-          # Device ID: 0x163F (Van Gogh / Aerith)
-          # VRAM: 1GB dedicated (shared with system RAM, 16GB total)
-
           GPU_VENDOR_ID = "0x1002"
           GPU_DEVICE_ID = "0x163F"
           GPU_NAME = "AMD Custom GPU 0405"
@@ -146,14 +139,12 @@ jobs:
               except Exception as e:
                   errors.append(f"Read error {path}: {e}")
                   return
-
               orig = c
               for p, r in patches:
                   m = len(re.findall(p, c))
                   if m > 0:
                       c = re.sub(p, r, c)
                       applied += m
-
               if c != orig:
                   try:
                       with open(path, "w", encoding='utf-8') as f:
@@ -161,58 +152,50 @@ jobs:
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
-          # ----- GPU Spoofing Patches -----
           gpu_spoof = [
-              # Vendor ID -> AMD
               (r'(VkVendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
               (r'(vendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
               (r'(adapter_id\.vendor_id\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
               (r'(VendorId\s*=\s*)[^;]+;', rf'\g<1>{GPU_VENDOR_ID};'),
-
-              # Device ID -> Van Gogh
               (r'(VkDeviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
               (r'(deviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
               (r'(adapter_id\.device_id\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
               (r'(DeviceId\s*=\s*)[^;]+;', rf'\g<1>{GPU_DEVICE_ID};'),
-
-              # Memory
               (r'(DedicatedVideoMemory\s*=\s*)[^;]+;', rf'\g<1>{GPU_VRAM_MB}ULL * 1024 * 1024;'),
               (r'(SharedSystemMemory\s*=\s*)[^;]+;', rf'\g<1>{GPU_SHARED_MB}ULL * 1024 * 1024;'),
           ]
 
-          # ----- Memory Optimization (Van Gogh has limited VRAM) -----
-           memory_patches = [
+          memory_patches = [
               (r'(DxvkMemoryAllocator::allocateChunk\([^{]*\{)',
-               r'''\1
-          // Steam Deck optimization: Limit chunk size for APU shared memory
-          const auto& props = m_device->adapter()->deviceProperties();
-          if (props.core.properties.vendorID == 0x1002 &&
-          props.core.properties.deviceID == 0x163F && size > (128 << 20)) {
-          size = 128 << 20;
-            Logger::info("DXVK: Using 128MB chunk size for Steam Deck APU");
-             }'''),
+               r'\1\n'
+               r'    // Steam Deck optimization: Limit chunk size for APU shared memory\n'
+               r'    const auto& props = m_device->adapter()->deviceProperties();\n'
+               r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+               r'        props.core.properties.deviceID == 0x163F &&\n'
+               r'        size > (128 << 20)) {\n'
+               r'      size = 128 << 20;\n'
+               r'      Logger::info("DXVK: Using 128MB chunk size for Steam Deck APU");\n'
+               r'    }'),
           ]
 
-          # ----- Pipeline Compiler Threads (Steam Deck has 4C/8T) -----
           pipeline_patches = [
               (r'(uint32_t\s+numCompilers\s*=\s*\(cpuCount\s*-\s*1\)\s*/\s*2;)',
-               r'''\1
-          // Steam Deck: Zen 2 4C/8T - limit to 3 compiler threads
-          const auto& props = m_device->adapter()->deviceProperties();
-          if (props.core.properties.vendorID == 0x1002 &&
-          props.core.properties.deviceID == 0x163F && numCompilers > 3) {
-          numCompilers = 3;
-          Logger::info("DXVK: Limiting compiler threads to 3 for Steam Deck");
-          }'''),
-           ]
+               r'\1\n'
+               r'    // Steam Deck: Zen 2 4C/8T - limit to 3 compiler threads\n'
+               r'    const auto& props = m_device->adapter()->deviceProperties();\n'
+               r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+               r'        props.core.properties.deviceID == 0x163F &&\n'
+               r'        numCompilers > 3) {\n'
+               r'      numCompilers = 3;\n'
+               r'      Logger::info("DXVK: Limiting compiler threads to 3 for Steam Deck");\n'
+               r'    }'),
+          ]
 
-          # Apply patches
           for root, dirs, files in os.walk("."):
               for f in files:
                   if not f.endswith((".cpp", ".h", ".c")):
                       continue
                   path = os.path.join(root, f)
-
                   if "dxvk_memory" in f:
                       patch_file(path, memory_patches)
                   if "dxvk_pipemanager" in f:
@@ -255,13 +238,10 @@ jobs:
           cd src
           BUILD_FLAGS="-O3 -DNDEBUG -march=znver2 -mtune=znver2"
           [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
-
           export CFLAGS="$BUILD_FLAGS"
           export CXXFLAGS="$BUILD_FLAGS"
           export LDFLAGS="-s"
-
           bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
-
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             echo "Build failed"
             tail -n 100 build.log
@@ -273,7 +253,6 @@ jobs:
         run: |
           SRC=$(find out -maxdepth 1 -type d -name "dxvk-*" | head -1)
           [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
-
           for a in x64 x86; do
             for d in d3d9.dll d3d10core.dll d3d11.dll dxgi.dll; do
               DLL="$SRC/$a/$d"
@@ -285,7 +264,6 @@ jobs:
               echo "$DLL: ${SIZE} bytes"
             done
           done
-
           echo "SRC_PATH=$SRC" >> $GITHUB_ENV
 
       - name: Generate Checksums
@@ -304,7 +282,6 @@ jobs:
           cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
           cp checksums.txt pkg/
           [[ -f patch-report.json ]] && cp patch-report.json pkg/
-
           cat > pkg/profile.json << JSONEOF
           {
             "type": "DXVK",
@@ -330,10 +307,8 @@ jobs:
             ]
           }
           JSONEOF
-
           PKG="dxvk-${{ env.BUILD_ID }}-steamdeck"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
-
           echo "PKG=$PKG" >> $GITHUB_ENV
           echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
 

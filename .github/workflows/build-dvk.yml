@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.clone.outputs.version }}
       commit: ${{ steps.clone.outputs.commit }}
@@ -205,43 +205,12 @@ jobs:
           tag_name: dxvk-${{ steps.clone.outputs.version }}-${{ steps.clone.outputs.commit }}
           name: "DXVK ${{ steps.clone.outputs.version }} (Patched)"
           body: |
-            ## DXVK with Custom Patches for Winlator/Android
+            ## DXVK with Custom Patches
             
             ### Version Information
             - **DXVK**: ${{ steps.clone.outputs.version }}
             - **Commit**: ${{ steps.clone.outputs.commit }}
             - **Build Date**: ${{ github.event.repository.updated_at }}
-            
-            tar --zstd -xf dxvk-*.wcp
-            
-            cp system32/*.dll ~/.wine/drive_c/windows/system32/
-            cp syswow64/*.dll ~/.wine/drive_c/windows/syswow64/
-            
-            wine reg add 'HKCU\Software\Wine\DllOverrides' /v d3d9 /d native /f
-            wine reg add 'HKCU\Software\Wine\DllOverrides' /v d3d11 /d native /f
-            wine reg add 'HKCU\Software\Wine\DllOverrides' /v dxgi /d native /f
-            ```
-            ### Configuration
-            
-            create `dxvk.conf` in game directory:
-            ```ini
-            dxvk.enableDescriptorBuffer = False
-            dxvk.useRenderPassBarriers = True
-            dxvk.numCompilerThreads = 2
-            ```
-            
-            ### Verification
-            Check DXVK logs in `~/.wine/drive_c/windows/temp/` for:
-            ```
-            info: DXVK: v${{ steps.clone.outputs.version }}-${{ steps.clone.outputs.commit }}
-            info: Using tiled GPU optimizations
-            info: Render pass barriers enabled
-            ```
-            
-            ### Known Issues
-            - May cause slight FPS regression in some GPU-bound scenarios
-            - Async pipeline compilation can cause initial stutters
-            - Some games may need `dxvk.enableStateCache = True`
             
             See [TROUBLESHOOTING.md](https://github.com/BlueInstruction/Experimental/blob/main/docs/TROUBLESHOOTING.md) for more.
           files: "*.wcp"

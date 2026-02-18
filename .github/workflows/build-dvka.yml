@@ -1,0 +1,397 @@
+name: Build DXVK (arm64ec)
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+    inputs:
+      FORCE_MODE:
+        type: boolean
+        default: false
+      VERSION:
+        description: "Version (e.g. v2.7.1). Empty = latest"
+        required: false
+        default: ""
+      BUILD_TYPE:
+        type: choice
+        default: "release"
+        options: ["release", "debug"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version:       ${{ env.VER }}
+      artifact_name: ${{ env.PKG }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: /opt/llvm-mingw
+          key: llvm-mingw-${{ runner.os }}-v1
+
+      - name: Setup Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git curl jq python3 python3-venv \
+            ninja-build glslang-tools spirv-tools zstd perl
+
+          # llvm-mingw is the only toolchain that supports arm64ec cross-compilation
+          if [[ ! -x /opt/llvm-mingw/bin/arm64ec-w64-mingw32-clang ]]; then
+            LLVM_VER=$(curl -sL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+              | jq -r '.tag_name')
+            echo "Installing llvm-mingw $LLVM_VER …"
+            curl -L \
+              "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_VER}/llvm-mingw-${LLVM_VER}-ucrt-ubuntu-20.04-x86_64.tar.xz" \
+              -o /tmp/llvm-mingw.tar.xz
+            sudo mkdir -p /opt/llvm-mingw
+            sudo tar -xf /tmp/llvm-mingw.tar.xz --strip-components=1 -C /opt/llvm-mingw
+            rm /tmp/llvm-mingw.tar.xz
+          fi
+
+          echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
+
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet meson
+
+          # Sanity checks for all three targets
+          echo "int main(){return 0;}" > /tmp/test.c
+          arm64ec-w64-mingw32-clang /tmp/test.c -o /tmp/t_arm64ec.exe && echo "arm64ec OK"
+          i686-w64-mingw32-clang    /tmp/test.c -o /tmp/t_x86.exe     && echo "i686    OK"
+          .venv/bin/meson --version
+
+      - name: Generate Patch Number
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST_P=$(gh release list --repo ${{ github.repository }} \
+            --limit 100 --json tagName -q '.[].tagName' \
+            | grep -oP 'p\K[0-9]+' | sort -n | tail -1 || echo "")
+          if [[ -z "$LAST_P" ]]; then PATCH_NUM=1
+          else
+            PATCH_NUM=$((LAST_P + 1))
+            [[ $PATCH_NUM -gt 100 ]] && PATCH_NUM=1
+          fi
+          echo "PATCH_NUM=$PATCH_NUM" >> $GITHUB_ENV
+
+      # ── Version ──────────────────────────────────────────────────
+      - name: Fetch Version
+        run: |
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases/latest \
+              | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && \
+              VER=$(curl -sL https://api.github.com/repos/doitsujin/dxvk/releases \
+                | jq -r '.[0].tag_name')
+          fi
+          echo "TAG=$VER"                     >> $GITHUB_ENV
+          echo "VER=${VER#v}"                 >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)"  >> $GITHUB_ENV
+
+      - name: Check Release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="dxvk-arm64ec-${{ env.VER }}-p${{ env.PATCH_NUM }}"
+          EXISTS=$(gh release view "$TAG" --repo ${{ github.repository }} \
+            2>/dev/null && echo "true" || echo "false")
+          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
+          echo "SKIP=$EXISTS"                     >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$TAG"                 >> $GITHUB_ENV
+          echo "BUILD_ID=arm64ec-${{ env.VER }}-p${{ env.PATCH_NUM }}" >> $GITHUB_ENV
+
+      - name: Clone Source
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          git clone --recurse-submodules --recursive \
+            --branch ${{ env.TAG }} --depth 1 \
+            https://github.com/doitsujin/dxvk.git src
+          git -C src config user.name  "Builder"
+          git -C src config user.email "bot@noreply"
+
+      - name: Apply Compatibility Patches
+        if: steps.check.outputs.SKIP == 'false'
+        env:
+          TOOLCHAIN_DIR: /opt/llvm-mingw
+        run: |
+          cd src
+
+          HAS_DEVINFO=false
+          compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h >/dev/null 2>&1 && \
+            grep -q "_D3DDEVINFO_RESOURCEMANAGER" \
+              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d9types.h 2>/dev/null && \
+            HAS_DEVINFO=true && echo "Toolchain has D3DDEVINFO_RESOURCEMANAGER"
+
+          HAS_D3D10_SB=false
+          compgen -G "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10*.h >/dev/null 2>&1 && \
+            grep -Rqs 'ID3D10StateBlock' \
+              "$TOOLCHAIN_DIR"/*-w64-mingw32/include/d3d10* 2>/dev/null && \
+            HAS_D3D10_SB=true && echo "Toolchain has ID3D10StateBlock"
+
+          INC="src/d3d9/d3d9_include.h"
+          [[ "$HAS_DEVINFO" == true && -f "$INC" ]] && \
+            grep -q 'typedef struct _D3DDEVINFO_RESOURCEMANAGER' "$INC" && \
+            perl -i -0777 -pe \
+              's/typedef\s+struct\s+_D3DDEVINFO_RESOURCEMANAGER\s*\{.*?\}\s*D3DDEVINFO_RESOURCEMANAGER[^;]*;//s' \
+              "$INC" && echo "Patched D3DDEVINFO_RESOURCEMANAGER"
+
+          TEX="src/d3d11/d3d11_texture.h"
+          [[ -f "$TEX" ]] && grep -q 'UnmappedSubresource' "$TEX" && \
+            perl -i -pe \
+              's/static\s+(?:constexpr\s+)?D3D11_MAP\s+UnmappedSubresource\s*=.*/inline static const D3D11_MAP UnmappedSubresource = static_cast<D3D11_MAP>(-1);/' \
+              "$TEX" && echo "Patched UnmappedSubresource"
+
+          D3D10="src/d3d10/d3d10_interfaces.h"
+          [[ "$HAS_D3D10_SB" == true && -f "$D3D10" ]] && \
+            grep -q '__CRT_UUID_DECL(ID3D10StateBlock' "$D3D10" && \
+            perl -i -pe \
+              's@^\s*__CRT_UUID_DECL\(ID3D10StateBlock,\s*0x0803425a,0x57f5,0x4dd6,0x94,0x65,0xa8,0x75,0x70,0x83,0x4a,0x08\);\s*$@@' \
+              "$D3D10" && echo "Patched ID3D10StateBlock UUID"
+
+          echo "Compatibility patches done"
+
+      - name: Apply GPU Patches
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+          python3 - << 'PYSCRIPT'
+          import re, os, json
+          from datetime import datetime, timezone
+
+          applied, errors = 0, []
+          GPU_VENDOR_ID, GPU_DEVICE_ID = "0x1002", "0x163F"
+          GPU_NAME, GPU_VRAM_MB, GPU_SHARED_MB = "AMD Custom GPU 0405", 1024, 16384
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path): errors.append(f"Not found: {path}"); return
+              c = open(path, encoding="utf-8", errors="ignore").read(); orig = c
+              for p, r in patches:
+                  n = len(re.findall(p, c))
+                  if n: c = re.sub(p, r, c); applied += n
+              if c != orig: open(path, "w", encoding="utf-8").write(c)
+
+          gpu = [
+              (r'(VkVendorId\s*(?<!=)=(?!=)\s*)[^;]+;',             rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;',  rf'\g<1>{GPU_VENDOR_ID};'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;',  rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(VkDeviceId\s*(?<!=)=(?!=)\s*)[^;]+;',             rf'\g<1>{GPU_DEVICE_ID};'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;',   rf'\g<1>{GPU_VRAM_MB}ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;',     rf'\g<1>{GPU_SHARED_MB}ULL * 1024 * 1024;'),
+          ]
+          mem = [(r'(DxvkMemoryAllocator::allocateChunk\([^{]*\{)',
+                  r'\1\n    const auto& props = m_device->adapter()->deviceProperties();\n'
+                  r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+                  r'        props.core.properties.deviceID == 0x163F &&\n'
+                  r'        size > (128 << 20)) { size = 128 << 20;\n'
+                  r'      Logger::info("DXVK: 128MB chunk for Steam Deck APU"); }')]
+          pipe = [(r'(uint32_t\s+numCompilers\s*=\s*\(cpuCount\s*-\s*1\)\s*/\s*2;)',
+                   r'\1\n    const auto& props = m_device->adapter()->deviceProperties();\n'
+                   r'    if (props.core.properties.vendorID == 0x1002 &&\n'
+                   r'        props.core.properties.deviceID == 0x163F &&\n'
+                   r'        numCompilers > 3) { numCompilers = 3;\n'
+                   r'      Logger::info("DXVK: limit 3 compiler threads for Steam Deck"); }')]
+
+          for root, _, files in os.walk("."):
+              for f in files:
+                  if not f.endswith((".cpp",".h",".c")): continue
+                  p = os.path.join(root, f)
+                  if "dxvk_memory" in f:      patch_file(p, mem)
+                  if "dxvk_pipemanager" in f: patch_file(p, pipe)
+                  if any(k in f for k in ["adapter","device","d3d9","d3d11","dxgi"]):
+                      patch_file(p, gpu)
+
+          json.dump({"applied": applied, "errors": len(errors),
+                     "arch": "arm64ec",
+                     "t": datetime.now(timezone.utc).isoformat()},
+                    open("../patch-report.json","w"), indent=2)
+          print(f"Applied {applied} patches, {len(errors)} warnings")
+          PYSCRIPT
+
+      - name: Build arm64ec DLLs (system32)
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+
+          git config --global --add safe.directory "$(pwd)"
+          if ! git diff-index --quiet HEAD --; then
+            git add -u
+            git commit -m "CI patches for ${{ env.TAG }} arm64ec"
+          fi
+
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] \
+            && OPT="-O0 -g -DDEBUG" || OPT="-O3 -DNDEBUG"
+
+          # Write arm64ec meson cross file
+          cat > /tmp/cross-arm64ec.txt << EOF
+          [binaries]
+          c        = 'arm64ec-w64-mingw32-clang'
+          cpp      = 'arm64ec-w64-mingw32-clang++'
+          ar       = 'llvm-ar'
+          strip    = 'arm64ec-w64-mingw32-strip'
+          windres  = 'arm64ec-w64-mingw32-windres'
+
+          [properties]
+          c_args   = ['${OPT// /', '}']
+          cpp_args = ['${OPT// /', '}']
+
+          [host_machine]
+          system     = 'windows'
+          cpu_family = 'aarch64'
+          cpu        = 'aarch64'
+          endian     = 'little'
+          EOF
+
+          export PATH="/opt/llvm-mingw/bin:$(pwd)/../.venv/bin:$PATH"
+
+          ../.venv/bin/meson setup build-arm64ec \
+            --cross-file /tmp/cross-arm64ec.txt \
+            --buildtype release \
+            --strip \
+            -Denable_tests=false
+
+          ninja -C build-arm64ec -j$(nproc) 2>&1 | tee ../build-arm64ec.log
+          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -100 ../build-arm64ec.log; exit 1; }
+
+          mkdir -p ../out_arm64ec
+          find build-arm64ec -name "*.dll" -exec cp {} ../out_arm64ec/ \;
+          echo "── arm64ec DLLs ──"
+          ls -lh ../out_arm64ec/
+
+      - name: Build x86 DLLs (syswow64)
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] \
+            && OPT="-O0 -g -DDEBUG" || OPT="-O3 -DNDEBUG"
+
+          cat > /tmp/cross-x86.txt << EOF
+          [binaries]
+          c        = 'i686-w64-mingw32-clang'
+          cpp      = 'i686-w64-mingw32-clang++'
+          ar       = 'llvm-ar'
+          strip    = 'i686-w64-mingw32-strip'
+          windres  = 'i686-w64-mingw32-windres'
+
+          [properties]
+          c_args   = ['${OPT// /', '}']
+          cpp_args = ['${OPT// /', '}']
+
+          [host_machine]
+          system     = 'windows'
+          cpu_family = 'x86'
+          cpu        = 'i686'
+          endian     = 'little'
+          EOF
+
+          export PATH="/opt/llvm-mingw/bin:$(pwd)/../.venv/bin:$PATH"
+
+          ../.venv/bin/meson setup build-x86 \
+            --cross-file /tmp/cross-x86.txt \
+            --buildtype release \
+            --strip \
+            -Denable_tests=false
+
+          ninja -C build-x86 -j$(nproc) 2>&1 | tee ../build-x86.log
+          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -100 ../build-x86.log; exit 1; }
+
+          mkdir -p ../out_x86
+          find build-x86 -name "*.dll" -exec cp {} ../out_x86/ \;
+          echo "── x86 DLLs ──"
+          ls -lh ../out_x86/
+
+      - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          echo "── Checking arm64ec (system32) ──"
+          for d in d3d9.dll d3d10core.dll d3d11.dll dxgi.dll; do
+            F="out_arm64ec/$d"
+            [[ ! -f "$F" ]] && { echo "Missing arm64ec: $F"; exit 1; }
+            echo "$F: $(stat -c%s "$F") bytes"
+          done
+
+          echo "── Checking x86 (syswow64) ──"
+          for d in d3d9.dll d3d10core.dll d3d11.dll dxgi.dll; do
+            F="out_x86/$d"
+            [[ ! -f "$F" ]] && { echo "Missing x86: $F"; exit 1; }
+            echo "$F: $(stat -c%s "$F") bytes"
+          done
+
+          echo "All DLLs verified ✓"
+
+      - name: Create Package
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          find out_arm64ec out_x86 -name "*.dll" -exec sha256sum {} \; > checksums.txt
+          cat checksums.txt
+
+          mkdir -p pkg/system32 pkg/syswow64
+          cp out_arm64ec/*.dll pkg/system32/   # arm64ec → system32 (FEXCore)
+          cp out_x86/*.dll     pkg/syswow64/   # x86     → syswow64 (WowBox64)
+          cp checksums.txt pkg/
+          [[ -f patch-report.json ]] && cp patch-report.json pkg/
+
+          cat > pkg/profile.json << JSONEOF
+          {
+            "type": "DXVK",
+            "arch": "arm64ec",
+            "emulator": "FEXCore",
+            "versionName": "${{ env.VER }}-arm64ec-p${{ env.PATCH_NUM }}",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "buildId": "${{ env.BUILD_ID }}",
+            "description": "DXVK ${{ env.VER }} arm64ec — for FEXCore (Winlator ARM64EC mode)",
+            "files": [
+              {"source": "system32/d3d9.dll",      "target": "\${system32}/d3d9.dll"},
+              {"source": "system32/d3d10core.dll",  "target": "\${system32}/d3d10core.dll"},
+              {"source": "system32/d3d11.dll",      "target": "\${system32}/d3d11.dll"},
+              {"source": "system32/dxgi.dll",       "target": "\${system32}/dxgi.dll"},
+              {"source": "syswow64/d3d9.dll",       "target": "\${syswow64}/d3d9.dll"},
+              {"source": "syswow64/d3d10core.dll",  "target": "\${syswow64}/d3d10core.dll"},
+              {"source": "syswow64/d3d11.dll",      "target": "\${syswow64}/d3d11.dll"},
+              {"source": "syswow64/dxgi.dll",       "target": "\${syswow64}/dxgi.dll"}
+            ]
+          }
+          JSONEOF
+
+          PKG="dxvk-arm64ec-${{ env.VER }}-p${{ env.PATCH_NUM }}"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+          echo "PKG=$PKG"                                  >> $GITHUB_ENV
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)"   >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        if: steps.check.outputs.SKIP == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: |
+            ${{ env.PKG }}.wcp
+            checksums.txt
+            patch-report.json
+          retention-days: 30
+          compression-level: 9
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf src out_arm64ec out_x86 pkg build-arm64ec.log build-x86.log && echo "Done"

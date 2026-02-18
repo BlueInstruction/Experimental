@@ -1,4 +1,4 @@
-name: Build DXVK (Steam Deck)
+name: Build DXVK 
 
 on:
   schedule:

@@ -1,21 +1,20 @@
-name: Vkd3d Build
+name: Build VKD3D
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version"
-        required: false
-        default: ""
-      profile:
-        type: choice
-        default: "p7"
-        options: ["p3", "p7", "p9"]
-      force:
+      FORCE_MODE:
         type: boolean
         default: false
+      VERSION:
+        required: false
+        default: ""
+      BUILD_TYPE:
+        type: choice
+        default: "release"
+        options: ["release", "debug"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,251 +22,338 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
+
+defaults:
+  run:
+    shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            /var/cache/apt
+          key: ${{ runner.os }}-vkd3d-deps-${{ hashFiles('**/workflow.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-vkd3d-deps-
+
+      - name: Setup Dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            git meson ninja-build python3 curl jq \
-            glslang-tools spirv-tools zstd \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
-            g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+          sudo apt-get install -y git meson ninja-build curl jq python3 glslang-tools spirv-tools zstd \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
             mingw-w64 mingw-w64-tools binutils-mingw-w64
-          
           sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
           sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
           sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
           sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
 
       - name: Fetch Version
-        id: version
         run: |
-          if [[ -n "${{ inputs.version }}" ]]; then
-            TAG="${{ inputs.version }}"
-            [[ "$TAG" =~ ^v ]] || TAG="v$TAG"
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
           else
-            TAG=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
-            [[ -z "$TAG" ]] && TAG=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
+            VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
           fi
-          
-          echo "TAG=$TAG" >> $GITHUB_OUTPUT
-          echo "VER=${TAG#v}" >> $GITHUB_OUTPUT
+          echo "TAG=$VER" >> $GITHUB_ENV
+          echo "VER=${VER#v}" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
       - name: Check Release
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_TAG="v3x-${{ steps.version.outputs.VER }}-p"
+          RELEASE_TAG="vkd3d-proton-3.0b-${{ env.BUILD_DATE }}"
           EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
-          [[ "${{ inputs.force }}" == "true" ]] && EXISTS="false"
-          echo "skip=$EXISTS" >> $GITHUB_OUTPUT
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
+          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
-      - name: Clone
-        if: steps.check.outputs.skip == 'false'
+      - name: Clone Source
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          git clone --branch ${{ steps.version.outputs.TAG }} --depth 1 --recursive --shallow-submodules \
+          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
-          
-          cd src
-          COMMIT=$(git rev-parse --short=8 HEAD)
-          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          cd src && chmod +x ./package-release.sh
+          echo "BUILD_ID=3.0b-${{ env.BUILD_DATE }}" >> $GITHUB_ENV
 
-      - name: Patch
-        if: steps.check.outputs.skip == 'false'
+      - name: Apply Patches
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          cat > patcher.py << 'EOF'
-          import re, os, glob, json, sys
-          from datetime import datetime
-
-          PROFILE = os.environ.get('PROFILE', 'p7')
-
-          def mk(v):
-              return rf'(\b{re.escape(v)}\s*=\s*)([^;]+);'
-
-          GPU = [
-              (mk('adapter_id.vendor_id'), r'\g<1>0x1002;'),
-              (mk('adapter_id.device_id'), r'\g<1>0x163f;'),
-              (r'(VendorId\s*=\s*)[^;]+;', r'\g<1>0x1002;'),
-              (r'(DeviceId\s*=\s*)[^;]+;', r'\g<1>0x163f;'),
-          ]
-
-          BASE = [
-              (mk('data->HighestShaderModel'), r'\g<1>D3D_SHADER_MODEL_6_8;'),
-              (mk('options1.WaveOps'), r'\g<1>TRUE;'),
-              (mk('options1.WaveLaneCountMin'), r'\g<1>32;'),
-              (mk('options1.WaveLaneCountMax'), r'\g<1>128;'),
-              (mk('options.ResourceBindingTier'), r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
-              (mk('options.TiledResourcesTier'), r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
-              (mk('options.ResourceHeapTier'), r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
-              (mk('options.DoublePrecisionFloatShaderOps'), r'\g<1>TRUE;'),
-              (mk('options1.Int64ShaderOps'), r'\g<1>TRUE;'),
-              (mk('options4.Native16BitShaderOpsSupported'), r'\g<1>TRUE;'),
-          ]
-
-          EXT = [
-              (mk('options7.MeshShaderTier'), r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
-              (mk('options12.EnhancedBarriersSupported'), r'\g<1>TRUE;'),
-              (mk('options5.RaytracingTier'), r'\g<1>D3D12_RAYTRACING_TIER_1_2;'),
-              (mk('options5.RenderPassesTier'), r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
-              (mk('options6.VariableShadingRateTier'), r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
-              (mk('options6.ShadingRateImageTileSize'), r'\g<1>8;'),
-              (mk('options7.SamplerFeedbackTier'), r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
-              (mk('options2.DepthBoundsTestSupported'), r'\g<1>TRUE;'),
-              (mk('options8.UnalignedBlockTexturesSupported'), r'\g<1>TRUE;'),
-          ]
-
-          FULL = [
-              (mk('options15.TriangleFanSupported'), r'\g<1>TRUE;'),
-          ]
+          cd src
+          cat > patch.py << 'PYSCRIPT'
+          import re, os, sys
 
           applied = 0
           errors = []
 
-          def patch(path, patches):
+          def patch_file(path, patches):
               global applied, errors
               if not os.path.exists(path):
                   return
               try:
-                  with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f:
                       c = f.read()
               except Exception as e:
-                  errors.append(f"R:{path}:{e}")
+                  errors.append(f"Read error {path}: {e}")
                   return
-              
               orig = c
               for p, r in patches:
                   m = len(re.findall(p, c))
                   if m > 0:
                       c = re.sub(p, r, c)
                       applied += m
-              
               if c != orig:
                   try:
-                      with open(path, 'w', encoding='utf-8') as f:
+                      with open(path, "w", encoding='utf-8') as f:
                           f.write(c)
                   except Exception as e:
-                      errors.append(f"W:{path}:{e}")
+                      errors.append(f"Write error {path}: {e}")
 
-          patches = GPU + BASE
-          if PROFILE in ['p7', 'p9']:
-              patches += EXT
-          if PROFILE == 'p9':
-              patches += FULL
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1024ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+              (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+          ]
 
-          for f in glob.glob('src/**/device.c', recursive=True):
-              if 'test' not in f and 'demo' not in f:
-                  patch(f, patches)
-                  print(f"Patched: {f}")
+          dev = [
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
+              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>618;'),
 
-          report = {
-              'v': '2.0.1',
-              't': datetime.utcnow().isoformat(),
-              'p': PROFILE,
-              'gpu': '0x1002:0x163f',
-              'a': applied,
-              'e': len(errors)
-          }
+              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
 
-          with open('patch-report.json', 'w') as f:
-              json.dump(report, f, indent=2)
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_2;'),
 
-          print(f"Applied: {applied}")
-          print(f"Errors: {len(errors)}")
+              (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
 
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_2;'),
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
+              (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
+
+              (r'(options8\.UnalignedBlockTexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options9\.AdvancedTextureOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.WriteableMSAATexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options10\.VariableRateShadingSumCombinerSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options10\.MeshShaderPerPrimitiveShadingRateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options11\.AtomicInt64OnDescriptorHeapResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnGroupSharedSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnTypedResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.DerivativesInMeshAndAmplificationShadersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.MSPrimitivesPipelineStatisticIncludesCulledPrimitives\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options13\.UnrestrictedBufferTextureCopyPitchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.UnrestrictedVertexElementAlignmentSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportHeightFlipsYSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
+              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
+              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.OpacityMicromapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.IndependentFrontAndBackStencilRefMaskSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DynamicIndexBufferStripCutSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PointSamplingAddressesNeverRoundUp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.RasterizerDesc2Supported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.SharedResourceCompatibilityTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SHARED_RESOURCE_COMPATIBILITY_TIER_2;'),
+              (r'(options\.DepthBiasControlSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ComputeShaderDerivativesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DestructionNotifierSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PageableDeviceLocalMemorySupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + dev)
+
+          for root, dirs, files in os.walk("libs/vkd3d"):
+              for f in files:
+                  if not f.endswith((".c", ".h")):
+                      continue
+                  if f == "device.c":
+                      continue
+                  path = os.path.join(root, f)
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12", "device_vkd3d"]):
+                      patch_file(path, gpu + dev)
+
+          print(f"Applied {applied} patches")
           if errors:
-              for e in errors[:5]:
+              print(f"Errors: {len(errors)}")
+              for e in errors[:10]:
                   print(f"  {e}")
               sys.exit(1)
-          EOF
-          
-          PROFILE=${{ inputs.profile || 'p7' }} python3 patcher.py
+          PYSCRIPT
+          python3 patch.py
 
       - name: Build
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
-          chmod +x ./package-release.sh
-          ./package-release.sh ${{ steps.version.outputs.TAG }} ../out --no-package
+          BUILD_FLAGS="-O3 -DNDEBUG -march=znver2 -mtune=znver2 -mno-avx -mno-avx2 -mno-avx512f -mno-fma"
+          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
+          export CFLAGS="$BUILD_FLAGS"
+          export CXXFLAGS="$BUILD_FLAGS"
+          export LDFLAGS="-s"
+          bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
+          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+            echo "Build failed"
+            tail -n 100 build.log
+            exit 1
+          fi
 
-      - name: Package
-        if: steps.check.outputs.skip == 'false'
+      - name: Verify Build
+        if: steps.check.outputs.SKIP == 'false'
         run: |
-          VER="${{ steps.version.outputs.VER }}"
           SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
-          [[ -z "$SRC" ]] && { echo "Build not found"; exit 1; }
-          
-          PKG="vkd3d-${VER}-${COMMIT}-p"
-          
+          [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
+          for a in x64 x86; do
+            for d in d3d12.dll d3d12core.dll; do
+              DLL="$SRC/$a/$d"
+              if [[ ! -f "$DLL" ]]; then
+                echo "Missing: $DLL"
+                exit 1
+              fi
+              SIZE=$(stat -c%s "$DLL" 2>/dev/null || stat -f%z "$DLL")
+              echo "$DLL: ${SIZE} bytes"
+            done
+          done
+          echo "SRC_PATH=$SRC" >> $GITHUB_ENV
+
+      - name: Create Package
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
           mkdir -p pkg/system32 pkg/syswow64
-          cp "$SRC/x64/"*.dll pkg/system32/
-          cp "$SRC/x86/"*.dll pkg/syswow64/
-          
-          cat > pkg/profile.json << PJSON
+          cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
+          cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
+          cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}-p",
-            "versionCode": $(date +%Y%m%d),
-            "description": "Vkd3d ${VER} p",
+            "versionName": "3.0b-${{ env.BUILD_DATE }}",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "buildId": "${{ env.BUILD_ID }}",
+            "sdkVersion": 618,
+            "description": "VKD3D-Proton 3.0b (AMD Van Gogh) - FL 12.2 / SM 6.7 / DXR 1.1 / WG 1.0 / FSR4 / UIL",
+            "featureLevel": "12_2",
+            "shaderModel": "6.7",
+            "raytracingTier": "1_1",
+            "meshShaderTier": "1",
+            "workGraphsTier": "1_0",
+            "executeIndirectTier": "1_1",
+            "variableShadingRateTier": "2",
+            "samplerFeedbackTier": "1_0",
+            "conservativeRasterizationTier": "3",
+            "resourceBindingTier": "3",
+            "tiledResourcesTier": "4",
+            "renderPassesTier": "2",
             "files": [
-              {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
-              {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
-              {"source": "syswow64/d3d12.dll", "target": "\${syswow64}/d3d12.dll"},
-              {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
+              {"source": "system32/d3d12.dll", "target": "${system32}/d3d12.dll"},
+              {"source": "system32/d3d12core.dll", "target": "${system32}/d3d12core.dll"},
+              {"source": "syswow64/d3d12.dll", "target": "${syswow64}/d3d12.dll"},
+              {"source": "syswow64/d3d12core.dll", "target": "${syswow64}/d3d12core.dll"}
             ]
           }
-          PJSON
-          
-          for f in pkg/system32/*.dll pkg/syswow64/*.dll; do
-            [[ -f "$f" ]] && echo "OK: $f ($(stat -c%s "$f") bytes)"
-          done
-          
+          JSONEOF
+          PKG="vkd3d-proton-3.0b-${{ env.BUILD_DATE }}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
-          
           echo "PKG=$PKG" >> $GITHUB_ENV
-          echo "Size: $(du -h ${PKG}.wcp | cut -f1)"
+          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
 
-      - name: Upload
-        if: steps.check.outputs.skip == 'false'
+      - name: Upload Artifact
+        if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG }}
-          path: |
-            ${{ env.PKG }}.wcp
-            patch-report.json
+          path: ${{ env.PKG }}.wcp
           retention-days: 30
+          compression-level: 9
 
-#      - name: Release
-#        if: steps.check.outputs.skip == 'false'
-#        uses: softprops/action-gh-release@v2
-#        with:
-#          tag_name: ${{ steps.check.outputs.release_tag }}-${{ env.COMMIT }}
-#          name: Vkd3d ${{ steps.version.outputs.VER }} D3MU
-#          files: |
-#            ${{ env.PKG }}.wcp
-#            patch-report.json
-#          body: |
-            ## Vkd3d ${{ steps.version.outputs.VER }} - p
-            
-#            **Build:** `${{ env.COMMIT }}`
-#            **Profile:** ${{ inputs.profile || 'p7' }}
-            
-#            [Source](https://github.com/HansKristian-Work/vkd3d-proton)
-          draft: false
-          prerelease: false
+      - name: Create GitHub Release
+        if: steps.check.outputs.SKIP == 'false'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" \
+            --repo "${{ github.repository }}" \
+            --title "VKD3D-Proton 3.0b — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ${{ env.VER }} - ${{ env.BUILD_DATE }}
+
+          **Build:** \`${{ env.TAG }}\`
+
+          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
+            "${{ env.PKG }}.wcp"
+
       - name: Cleanup
         if: always()
-        run: rm -rf src out pkg patcher.py
+        run: |
+          rm -rf src out pkg

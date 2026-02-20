@@ -296,26 +296,13 @@ jobs:
           mkdir -p pkg/system32 pkg/syswow64
           cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
           cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
-          cat > pkg/profile.json << JSONEOF
+          cat > pkg/profile.json << 'JSONEOF'
           {
             "type": "VKD3D",
             "versionName": "3.0b-${{ env.BUILD_DATE }}",
             "versionCode": ${{ env.BUILD_DATE }},
             "buildId": "${{ env.BUILD_ID }}",
-            "sdkVersion": 618,
-            "description": "VKD3D-Proton 3.0b (AMD Van Gogh) - FL 12.2 / SM 6.7 / DXR 1.1 / WG 1.0 / FSR4 / UIL",
-            "featureLevel": "12_2",
-            "shaderModel": "6.7",
-            "raytracingTier": "1_1",
-            "meshShaderTier": "1",
-            "workGraphsTier": "1_0",
-            "executeIndirectTier": "1_1",
-            "variableShadingRateTier": "2",
-            "samplerFeedbackTier": "1_0",
-            "conservativeRasterizationTier": "3",
-            "resourceBindingTier": "3",
-            "tiledResourcesTier": "4",
-            "renderPassesTier": "2",
+            "description": "VKD3D-Proton-3.0b",
             "files": [
               {"source": "system32/d3d12.dll", "target": "${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "${system32}/d3d12core.dll"},
@@ -327,8 +314,7 @@ jobs:
           PKG="vkd3d-proton-3.0b-${{ env.BUILD_DATE }}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
-          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
-
+        
       - name: Upload Artifact
         if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4

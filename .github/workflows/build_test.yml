@@ -300,8 +300,8 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "3.0b",
-            "versionCode": ${{ env.BUILD_DATE }},,
-            "description": "VKD3D-Proton-3.0b",
+            "versionCode": ${{ env.BUILD_DATE }},
+            "description": "VKD3D-Proton",
             "files": [
               {"source": "system32/d3d12.dll", "target": "${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "${system32}/d3d12core.dll"},

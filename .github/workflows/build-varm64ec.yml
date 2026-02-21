@@ -68,7 +68,7 @@ jobs:
           echo "TAG=$VER" >> $GITHUB_ENV
           echo "VER=${VER#v}" >> $GITHUB_ENV
           echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-
+        
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
@@ -424,11 +424,9 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "arm64ec-${{ env.VER }}",
+            "versionName": "arm64ec",
             "versionCode": ${{ env.BUILD_DATE }},
-            "buildId": "${{ env.BUILD_ID }}",
-            "sdkVersion": 618,
-            "description": "VKD3D-Proton ${{ env.VER }} ARM64EC Steam Deck (AMD Van Gogh) - FL 12.2 / SM 6.8 / DXR 1.2",
+            "description": "VKD3D-Proton ${{ env.VER }} ARM64EC",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -437,8 +435,8 @@ jobs:
             ]
           }
           JSONEOF
-
-          PKG="vkd3d-proton-${{ env.BUILD_ID }}-arm64ec"
+          
+          PKG="vkd3d-proton-${{ env.VER }}-arm64ec-${{ env.BUILD_DATE }}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
 
           echo "PKG=$PKG" >> $GITHUB_ENV
@@ -446,6 +444,7 @@ jobs:
 
           echo "=== Package created ==="
           ls -lh ${PKG}.wcp
+          
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -456,6 +455,25 @@ jobs:
           retention-days: 30
           compression-level: 9
 
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="vkd3d-proton-${{ env.VER }}-arm64ec-${{ env.BUILD_DATE }}"
+          
+          gh release delete "$RELEASE_TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          git push --delete origin "$RELEASE_TAG" 2>/dev/null || true
+          
+          gh release create "$RELEASE_TAG" \
+            --repo "${{ github.repository }}" \
+            --title "VKD3D-Proton ${{ env.VER }} ARM64EC — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ${{ env.VER }} ARM64EC - ${{ env.BUILD_DATE }}
+
+          **Build:** \`${{ env.TAG }}\`
+
+          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
+            "${{ env.PKG }}.wcp"
+      
       - name: Cleanup
         if: always()
         run: |

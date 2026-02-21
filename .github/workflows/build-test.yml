@@ -77,11 +77,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="vkd3d-proton-3.0b-${{ env.BUILD_DATE }}"
-          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} > /dev/null 2>&1 && echo "true" || echo "false")
           [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
           echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-
+    
       - name: Clone Source
         if: steps.check.outputs.SKIP == 'false'
         run: |

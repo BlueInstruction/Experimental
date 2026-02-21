@@ -29,7 +29,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -83,76 +83,238 @@ jobs:
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
-          import re, os, glob, sys, json
-          from datetime import datetime
+          import re, os, sys, json
+          from datetime import datetime, timezone
 
           applied = 0
           errors = []
 
           def patch_file(path, patches):
               global applied, errors
-              if not os.path.exists(path): 
+              if not os.path.exists(path):
                   return
               try:
-                  with open(path, "r", encoding='utf-8', errors='ignore') as f: 
+                  with open(path, "r", encoding='utf-8', errors='ignore') as f:
                       c = f.read()
               except Exception as e:
                   errors.append(f"Read error {path}: {e}")
                   return
-              
               orig = c
               for p, r in patches:
                   m = len(re.findall(p, c))
                   if m > 0:
                       c = re.sub(p, r, c)
                       applied += m
-              
               if c != orig:
                   try:
-                      with open(path, "w", encoding='utf-8') as f: 
+                      with open(path, "w", encoding='utf-8') as f:
                           f.write(c)
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
+          # ===== Steam Deck GPU (AMD Van Gogh APU) =====
           gpu = [
-              (r'(adapter_id\.vendor_id\s*=\s*)[^;]+;', r'\g<1>0x1002;'),
-              (r'(adapter_id\.device_id\s*=\s*)[^;]+;', r'\g<1>0x163f;'),
-              (r'(VendorId\s*=\s*)[^;]+;', r'\g<1>0x1002;'),
-              (r'(DeviceId\s*=\s*)[^;]+;', r'\g<1>0x163f;'),
-              (r'(SharedSystemMemory\s*=\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1024ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+              (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
+          # ===== D3D12 Feature Patches (v3.0b / SDK 618 / Vulkan 1.4) =====
           dev = [
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              # --- Shader Model 6.8 ---
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+
+              # --- Feature Level 12.2 / DX Ultimate ---
               (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
+
+              # --- D3D12 SDK Version 618 ---
+              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>618;'),
+
+              # --- Wave Operations ---
               (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
-              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>128;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
-              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
-              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
-              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Depth Bounds & Programmable Sample Positions ---
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_2;'),
+
+              # --- Barycentrics ---
+              (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Native 16-bit & MSAA ---
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Ray Tracing 1.2 / Render Passes Tier 2 ---
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_2;'),
               (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+              (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Variable Rate Shading Tier 2 ---
               (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
               (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Mesh Shaders Tier 1 / Sampler Feedback ---
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
               (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
-              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Unaligned Block Textures ---
               (r'(options8\.UnalignedBlockTexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Advanced Texture Ops / MSAA Writeable ---
+              (r'(options9\.AdvancedTextureOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.WriteableMSAATexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options9\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- VRS Sum Combiner / Mesh Shader Per Primitive ---
+              (r'(options10\.VariableRateShadingSumCombinerSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options10\.MeshShaderPerPrimitiveShadingRateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Atomic Int64 / Derivatives in Mesh Shaders ---
+              (r'(options11\.AtomicInt64OnDescriptorHeapResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnGroupSharedSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.AtomicInt64OnTypedResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options11\.DerivativesInMeshAndAmplificationShadersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Enhanced Barriers / Relaxed Format Casting ---
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.MSPrimitivesPipelineStatisticIncludesCulledPrimitives\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Options 13 ---
+              (r'(options13\.UnrestrictedBufferTextureCopyPitchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.UnrestrictedVertexElementAlignmentSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportHeightFlipsYSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- GPU Upload Heap ---
+              (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Options 17 ---
+              (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Work Graphs / Execute Indirect ---
+              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
+              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
+              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Resource Tiers ---
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+
+              # --- Precision & Shader Ops ---
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Cooperative Matrix / FSR4 ---
+              (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.OpacityMicromapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Vulkan-on-D3D12 features ---
+              (r'(options\.IndependentFrontAndBackStencilRefMaskSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DynamicIndexBufferStripCutSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PointSamplingAddressesNeverRoundUp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.RasterizerDesc2Supported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # --- Anti-Lag / Shared Resources ---
+              (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.SharedResourceCompatibilityTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SHARED_RESOURCE_COMPATIBILITY_TIER_2;'),
+
+              # --- Depth Bias / Compute Shader Derivatives ---
+              (r'(options\.DepthBiasControlSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.ComputeShaderDerivativesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DestructionNotifierSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.PageableDeviceLocalMemorySupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
+          # Apply to main device file
           patch_file("libs/vkd3d/device.c", gpu + dev)
 
+          # Scan additional feature/capability files
+          for root, dirs, files in os.walk("libs/vkd3d"):
+              for f in files:
+                  if not f.endswith((".c", ".h")):
+                      continue
+                  if f == "device.c":
+                      continue
+                  path = os.path.join(root, f)
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12", "device_vkd3d"]):
+                      patch_file(path, gpu + dev)
+
           report = {
-              "v": "2.1.0",
-              "t": datetime.utcnow().isoformat(),
-              "gpu": {"vid": "0x1002", "did": "0x163f", "name": "p"},
+              "v": "3.0.0",
+              "t": datetime.now(timezone.utc).isoformat(),
+              "target": "vkd3d-proton-arm64ec",
+              "profile": "steam-deck",
+              "sdk_version": 618,
+              "gpu": {
+                  "vid": "0x1002",
+                  "did": "0x163f",
+                  "name": "AMD Custom GPU 0405 (Van Gogh)",
+                  "vram_mb": 1024,
+                  "shared_mb": 16384
+              },
+              "features": {
+                  "feature_level": "12_2",
+                  "shader_model": "6.8",
+                  "raytracing": "1.2",
+                  "mesh_shaders": "tier_1",
+                  "vrs": "tier_2",
+                  "sampler_feedback": "tier_1_0",
+                  "enhanced_barriers": True,
+                  "relaxed_format_casting": True,
+                  "work_graphs": "tier_1_0",
+                  "execute_indirect": "tier_1_1",
+                  "render_passes": "tier_2",
+                  "conservative_rasterization": "tier_3",
+                  "resource_binding": "tier_3",
+                  "tiled_resources": "tier_4",
+                  "cooperative_matrix": True,
+                  "advanced_texture_ops": True,
+                  "opacity_micromaps": True,
+                  "gpu_upload_heap": True,
+                  "gdeflate": True,
+                  "barycentrics": True,
+                  "rov": True,
+                  "native_16bit": True,
+                  "double_precision": True,
+                  "int64": True,
+                  "depth_bounds": True,
+                  "anti_lag": True,
+                  "depth_bias_control": True,
+                  "compute_shader_derivatives": True
+              },
               "applied": applied,
               "errors": len(errors)
           }
@@ -160,11 +322,16 @@ jobs:
           with open("../patch-report.json", "w") as f:
               json.dump(report, f, indent=2)
 
+          print(f"=== VKD3D-Proton ARM64EC Steam Deck Patch Report ===")
+          print(f"GPU: AMD Van Gogh (0x1002:0x163f)")
+          print(f"SDK: 618 | FL: 12.2 | SM: 6.8")
+          print(f"DXR: 1.2 | Mesh: T1 | VRS: T2 | RT Passes: T2")
+          print(f"Work Graphs: T1.0 | ExecIndirect: T1.1")
+          print(f"Enhanced Barriers | Sampler Feedback | FSR4/CoopMatrix")
           print(f"Applied {applied} patches")
-          print(f"GPU: 0x1002:0x163f (p)")
           if errors:
               print(f"Errors: {len(errors)}")
-              for e in errors[:5]:
+              for e in errors[:10]:
                   print(f"  - {e}")
               sys.exit(1)
           PYSCRIPT
@@ -193,18 +360,18 @@ jobs:
         run: |
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
-          
+
           BUILD_FLAGS="-O3 -DNDEBUG"
           [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
-          
+
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
             -Dc_args="$BUILD_FLAGS" \
             -Dcpp_args="$BUILD_FLAGS"
-          
+
           ninja -C build-arm64ec 2>&1 | tee build.log
-          
+
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             echo "Build failed"
             tail -n 100 build.log
@@ -215,11 +382,12 @@ jobs:
         run: |
           echo "=== Build output ==="
           find src/build-arm64ec -name "*.dll" -type f
-          
+
           for dll in d3d12.dll d3d12core.dll; do
             DLL_PATH=$(find src/build-arm64ec -name "$dll" -type f | head -1)
             if [[ -z "$DLL_PATH" ]]; then
-              echo "Warning: $dll not found"
+              echo "ERROR: $dll not found"
+              exit 1
             else
               SIZE=$(stat -c%s "$DLL_PATH" 2>/dev/null || stat -f%z "$DLL_PATH")
               echo "$dll: ${SIZE} bytes"
@@ -234,24 +402,33 @@ jobs:
       - name: Create Package
         run: |
           mkdir -p pkg/system32 pkg/syswow64
-          
-          # Copy ARM64EC DLLs to system32 (64-bit)
-          find src/build-arm64ec -name "*.dll" -type f -exec cp {} pkg/system32/ \;
-          
-          # Copy to syswow64 (32-bit)
-          find src/build-arm64ec -name "*.dll" -type f -exec cp {} pkg/syswow64/ \;
-          
-          # List what we're packaging
+
+          for dll in d3d12.dll d3d12core.dll; do
+            DLL_PATH=$(find src/build-arm64ec -name "$dll" -type f | head -1)
+            if [[ -n "$DLL_PATH" ]]; then
+              cp "$DLL_PATH" pkg/system32/
+              cp "$DLL_PATH" pkg/syswow64/
+            else
+              echo "ERROR: $dll not found in build output"
+              exit 1
+            fi
+          done
+
+          cp checksums.txt pkg/
+          [[ -f patch-report.json ]] && cp patch-report.json pkg/
+
           echo "=== Package contents ==="
           ls -la pkg/system32/
           ls -la pkg/syswow64/
-          
+
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
             "versionName": "arm64ec-${{ env.VER }}",
             "versionCode": ${{ env.BUILD_DATE }},
-            "description": "VKD3D Proton ARM64EC",
+            "buildId": "${{ env.BUILD_ID }}",
+            "sdkVersion": 618,
+            "description": "VKD3D-Proton ${{ env.VER }} ARM64EC Steam Deck (AMD Van Gogh) - FL 12.2 / SM 6.8 / DXR 1.2",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -260,13 +437,13 @@ jobs:
             ]
           }
           JSONEOF
-          
-          PKG="vkd3d-proton-${{ env.BUILD_ID }}-arm64ec-d3mu"
+
+          PKG="vkd3d-proton-${{ env.BUILD_ID }}-arm64ec"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
-          
+
           echo "PKG=$PKG" >> $GITHUB_ENV
           echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
-          
+
           echo "=== Package created ==="
           ls -lh ${PKG}.wcp
 

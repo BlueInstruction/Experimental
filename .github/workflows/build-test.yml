@@ -35,17 +35,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Cache Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            /var/cache/apt
-          key: ${{ runner.os }}-vkd3d-deps-${{ hashFiles('**/workflow.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-vkd3d-deps-
-
+      
       - name: Setup Dependencies
         run: |
           sudo dpkg --add-architecture i386
@@ -77,30 +67,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="vkd3d-proton-3.0b-${{ env.BUILD_DATE }}"
+          echo "Checking for release: $RELEASE_TAG"
           set +e
           gh release view "$RELEASE_TAG" --repo ${{ github.repository }} > /dev/null 2>&1
           RC=$?
           set -e
+          echo "gh exit code: $RC"
           if [[ $RC -eq 0 ]]; then
-            EXISTS="true"
+            SKIP="true"
           else
-            EXISTS="false"
+            SKIP="false"
           fi
-          if [[ "${{ inputs.FORCE_MODE }}" == "true" ]]; then
-            EXISTS="false"
+          FORCE="${{ inputs.FORCE_MODE }}"
+          echo "FORCE_MODE=$FORCE"
+          if [[ "$FORCE" == "true" ]]; then
+            SKIP="false"
           fi
-          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
+          echo "Final SKIP=$SKIP"
+          echo "SKIP=$SKIP" >> $GITHUB_OUTPUT
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-    
+
       - name: Clone Source
-        if: steps.check.outputs.SKIP == 'false'
+        if: steps.check.outputs.SKIP != 'true'
         run: |
           git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src && chmod +x ./package-release.sh
           echo "BUILD_ID=3.0b-${{ env.BUILD_DATE }}" >> $GITHUB_ENV
 
-      
       - name: Apply Patches
         if: steps.check.outputs.SKIP == 'false'
         run: |

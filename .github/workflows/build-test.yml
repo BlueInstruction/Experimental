@@ -97,14 +97,12 @@ jobs:
           cd src
           
           cat > performance_patch.diff << 'EOF'
-
           diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
           --- a/libs/vkd3d/command.c
           +++ b/libs/vkd3d/command.c
           @@ -1,1 +1,1 @@
           -    device->use_batch_submission = true;
           +    device->use_batch_submission = false;
-          
           diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
           --- a/libs/vkd3d/device.c
           +++ b/libs/vkd3d/device.c
@@ -117,9 +115,7 @@ jobs:
           @@ -1,1 +1,1 @@
           -    device->enable_strict_barriers = true;
           +    device->enable_strict_barriers = false;
-          
           EOF
-          
           git apply performance_patch.diff || true
           
           cat > patch.py << 'PYSCRIPT'
@@ -342,26 +338,21 @@ jobs:
       - name: Build
         if: steps.check.outputs.SKIP == 'false'
         run: |
-         cd src
-
-         BUILD_FLAGS="-O3 -DNDEBUG -march=x86-64-v2 -fno-math-errno -fno-trapping-math -mno-avx -mno-avx2 -mno-avx512f -mno-fma -mno-f16c -mno-bmi -mno-bmi2 -fno-tree-vectorize"
-
-         if [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]]; then
+          cd src
+          BUILD_FLAGS="-O3 -DNDEBUG -march=x86-64-v2 -fno-math-errno -fno-trapping-math -mno-avx -mno-avx2 -mno-avx512f -mno-fma -mno-f16c -mno-bmi -mno-bmi2 -fno-tree-vectorize"
+          if [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]]; then
             BUILD_FLAGS="-O0 -g -DDEBUG -mno-avx -mno-avx2"
-         fi
-
+          fi
           export CFLAGS="$BUILD_FLAGS"
           export CXXFLAGS="$BUILD_FLAGS"
           export LDFLAGS="-s"
-
           bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
-
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-             echo "Build failed"
-             tail -n 100 build.log
-             exit 1
+            echo "Build failed"
+            tail -n 100 build.log
+            exit 1
           fi
-
+          
       - name: Verify Build
         if: steps.check.outputs.SKIP == 'false'
         run: |

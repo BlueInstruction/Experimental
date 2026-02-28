@@ -420,7 +420,7 @@ device_id    = int(sys.argv[6], 16)
 with open(filepath, 'r') as f:
     content = f.read()
 
-# Build injection code — placed at the end of get_physical_device_properties_1_2
+# Build injection code
 injection = f"""
    if (TU_DEBUG(DECK_EMU)) {{
       /* GPU identity spoof for driver compatibility */
@@ -432,28 +432,34 @@ injection = f"""
    }}
 """
 
-# Try to find the function and inject after its last statement
-func_patterns = [
-    r'(tu_get_physical_device_properties_1_2[^}]+?\})',
-    r'(get_physical_device_properties_1_2[^}]+?\})',
-]
-
 injected = False
-for pattern in func_patterns:
-    m = re.search(pattern, content, re.DOTALL)
-    if m:
-        pos = m.end()
-        content = content[:pos] + '\n' + injection + content[pos:]
-        print(f"[OK] deck_emu {driver_id} injection applied")
-        injected = True
-        break
 
+# Primary: inject BEFORE p->denormBehaviorIndependence (reliable anchor in Mesa)
+m = re.search(r'(\n[ \t]*p->denormBehaviorIndependence\s*=)', content)
+if m:
+    content = content[:m.start()] + '\n' + injection + content[m.start():]
+    print(f"[OK] deck_emu {driver_id} injection applied (denorm anchor)")
+    injected = True
+
+# Fallback: find the closing of tu_get_physical_device_properties_1_2 by
+# locating the function, then counting braces to find real end
 if not injected:
-    # Fallback: find denormBehaviorIndependence and inject before it
-    m = re.search(r'(\s*p->denormBehaviorIndependence\s*=)', content)
-    if m:
-        content = content[:m.start()] + '\n' + injection + content[m.start():]
-        print(f"[OK] deck_emu injection via fallback (denorm marker)")
+    func_m = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', content)
+    if func_m:
+        start = func_m.end()
+        depth = 1
+        pos = start
+        while pos < len(content) and depth > 0:
+            if content[pos] == '{':
+                depth += 1
+            elif content[pos] == '}':
+                depth -= 1
+            pos += 1
+        # pos is now just after the closing } of the function
+        # inject the block just before that closing }
+        insert_at = pos - 1
+        content = content[:insert_at] + '\n' + injection + content[insert_at:]
+        print(f"[OK] deck_emu {driver_id} injection applied (brace-counting)")
         injected = True
 
 if not injected:
@@ -538,7 +544,7 @@ new_exts = {
     '"VK_KHR_present_id2"':   35,
     '"VK_KHR_swapchain_maintenance1"': 35,
     '"VK_EXT_swapchain_maintenance1"': 35,
-    '"VK_KHR_surface_maintenance1"':   35,
+    '"VK_KHR_surface_maintenance1"':   35,  # instance-level — kept in vk_extensions.py only
     # Pipeline
     '"VK_KHR_pipeline_binary"':             35,
     '"VK_EXT_graphics_pipeline_library"':   33,
@@ -728,12 +734,11 @@ try:
     {ext_var}->KHR_maintenance7 = true; {ext_var}->KHR_maintenance8 = true;
     {ext_var}->KHR_maintenance9 = true; {ext_var}->KHR_maintenance10 = true;
 
-    // Present & Swapchain
+    // Present & Swapchain (device-level only — KHR_surface_maintenance1 is instance-level, excluded)
     {ext_var}->KHR_present_wait = true;  {ext_var}->KHR_present_id = true;
     {ext_var}->KHR_present_wait2 = true; {ext_var}->KHR_present_id2 = true;
     {ext_var}->KHR_swapchain_maintenance1 = true;
     {ext_var}->EXT_swapchain_maintenance1 = true;
-    {ext_var}->KHR_surface_maintenance1 = true;
 
     // Pipeline
     {ext_var}->KHR_pipeline_binary = true;
@@ -807,8 +812,6 @@ try:
     {ext_var}->EXT_primitives_generated_query = true;
     {ext_var}->EXT_primitive_topology_list_restart = true;
     {ext_var}->EXT_device_fault = true;
-    {ext_var}->KHR_unified_image_layouts = true;
-    {ext_var}->KHR_robustness2 = true;
     // === END INJECTED ===
 """
 

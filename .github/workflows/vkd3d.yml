@@ -212,37 +212,39 @@ jobs:
         if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
-          
-          # OPTIMIZED & SAFE COMPILER FLAGS FOR VKD3D:
-          # -march=x86-64-v3: Keeps AVX2/FMA for modern CPU performance.
-          # -flto: Link Time Optimization for smaller/faster binaries.
-          # !! REMOVED -ffast-math: Prevents rendering artifacts and precision bugs.
-          # !! REMOVED -fno-semantic-interposition: Ensures stable interaction with DXVK/DXGI.
-          
-          COMMON_FLAGS="-O3 -pipe -DNDEBUG"
-          ARCH_FLAGS="-march=x86-64-v3 -mtune=generic" 
-          OPT_FLAGS="-flto=auto -ffat-lto-objects -fno-math-errno -fno-trapping-math -fno-stack-protector -fno-ident"
-          
-          # Disable AVX for x86 (32-bit) to ensure max compatibility
+          cd src
+
+          # COMMON FLAGS
+          COMMON_FLAGS="-O3 -DNDEBUG -pipe"
+
+          # ARCHITECTURE FLAGS
+          ARCH_FLAGS="-march=x86-64-v3 -mtune=generic"
+
+          # OPTIMIZATION FLAGS
+          OPT_FLAGS="-fno-math-errno -fno-trapping-math -fno-stack-protector -fno-ident"
+
+          # LINKER FLAGS
+          LDFLAGS="-Wl,--gc-sections -Wl,--as-needed -s -flto=thin"
+
+          # x86 32-bit fallback
           X86_FLAGS="-march=i686 -mtune=generic -msse2 -mfpmath=sse"
 
           export CFLAGS="$COMMON_FLAGS $ARCH_FLAGS $OPT_FLAGS"
           export CXXFLAGS="$COMMON_FLAGS $ARCH_FLAGS $OPT_FLAGS"
-          
-          export LDFLAGS="-Wl,--gc-sections -Wl,--as-needed -s -flto=auto"
-          
+          export LDFLAGS="$LDFLAGS"
+
           export CFLAGS_x86="$COMMON_FLAGS $X86_FLAGS $OPT_FLAGS"
           export CXXFLAGS_x86="$COMMON_FLAGS $X86_FLAGS $OPT_FLAGS"
-          export LDFLAGS_x86="-Wl,--gc-sections -s -flto=auto"
+          export LDFLAGS_x86="-Wl,--gc-sections -s -flto=thin"
 
           bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
-          
+
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-            echo "Build failed"
-            tail -n 100 build.log
-            exit 1
+             echo "Build failed"
+             tail -n 100 build.log
+             exit 1
           fi
-          
+         
       - name: Verify Build
         if: steps.check.outputs.SKIP == 'false'
         run: |

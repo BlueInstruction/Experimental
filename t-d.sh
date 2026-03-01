@@ -485,136 +485,161 @@ apply_a6xx_query_fix() {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# apply_vulkan_extensions_support
+#
+# Fix 1: vk_extensions.py — handle both single AND double quote styles
+#         (Mesa 26.x uses single quotes → was causing "0 extensions known")
+# Fix 2: inject ALL extensions AFTER the struct initialiser so they cannot
+#         be overridden back to false by the struct assignment
+# Fix 3: TARGET_EXTS list is comprehensive (250+ names) → well above 198
+# ═══════════════════════════════════════════════════════════════════════════════
 apply_vulkan_extensions_support() {
     log_info "Enabling ALL Vulkan extensions via Python injection"
     local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local vk_exts_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
     [[ ! -f "$tu_device" ]] && { log_warn "tu_device.cc not found"; return 0; }
 
+    # ── Step 1: patch vk_extensions.py (API-level lowering + add missing entries)
     if [[ -f "$vk_exts_py" ]]; then
         python3 - "$vk_exts_py" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
-with open(fp) as f: c = f.read()
+with open(fp, encoding='utf-8', errors='ignore') as f:
+    c = f.read()
 
-# Lower ALL API levels to 1
+# Lower ALL API levels to 1 — handle BOTH single-quoted AND double-quoted keys
+# Mesa 26.x: 'VK_XXX': 26,   older Mesa: "VK_XXX": 26,
 n = 0
 def lo(m):
     global n; n += 1
-    return m.group(1)+'1'+m.group(3)
-c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lo, c)
-print(f"[OK] Lowered {n} entries to API 1")
+    return m.group(1) + '1' + m.group(3)
+c, n1 = re.subn(r'("VK_[A-Z0-9_]+"\s*:\s*)(\d+)(,)', lo, c)
+c, n2 = re.subn(r"('VK_[A-Z0-9_]+'\s*:\s*)(\d+)(,)", lo, c)
+print(f"[OK] Lowered {n1+n2} entries to API 1 ({n1} double-quoted, {n2} single-quoted)")
 
-ALL=[
-"VK_KHR_acceleration_structure","VK_KHR_android_surface","VK_KHR_calibrated_timestamps",
-"VK_KHR_compute_shader_derivatives","VK_KHR_cooperative_matrix","VK_KHR_copy_memory_indirect",
-"VK_KHR_deferred_host_operations","VK_KHR_depth_clamp_zero_one","VK_KHR_display",
-"VK_KHR_display_swapchain","VK_KHR_external_fence_fd","VK_KHR_external_fence_win32",
-"VK_KHR_external_memory_fd","VK_KHR_external_memory_win32","VK_KHR_external_semaphore_fd",
-"VK_KHR_external_semaphore_win32","VK_KHR_fragment_shader_barycentric",
-"VK_KHR_fragment_shading_rate","VK_KHR_get_display_properties2",
-"VK_KHR_get_surface_capabilities2","VK_KHR_incremental_present",
-"VK_KHR_internally_synchronized_queues","VK_KHR_maintenance7","VK_KHR_maintenance8",
-"VK_KHR_maintenance9","VK_KHR_maintenance10","VK_KHR_performance_query",
+# Detect dominant quote style so we insert in the same style
+sq = len(re.findall(r"'VK_[A-Z0-9_]+'\s*:\s*\d+", c))
+dq = len(re.findall(r'"VK_[A-Z0-9_]+"\s*:\s*\d+', c))
+Q = "'" if sq >= dq else '"'
+print(f"[INFO] Quote style: {'single' if Q==\"'\" else 'double'} ({sq} sq, {dq} dq)")
+
+# Master extension list -------------------------------------------------------
+ALL = [
+"VK_KHR_16bit_storage","VK_KHR_8bit_storage","VK_KHR_acceleration_structure",
+"VK_KHR_android_surface","VK_KHR_bind_memory2","VK_KHR_buffer_device_address",
+"VK_KHR_calibrated_timestamps","VK_KHR_compute_shader_derivatives",
+"VK_KHR_cooperative_matrix","VK_KHR_copy_commands2","VK_KHR_copy_memory_indirect",
+"VK_KHR_create_renderpass2","VK_KHR_dedicated_allocation","VK_KHR_deferred_host_operations",
+"VK_KHR_depth_clamp_zero_one","VK_KHR_depth_stencil_resolve",
+"VK_KHR_descriptor_update_template","VK_KHR_device_group","VK_KHR_device_group_creation",
+"VK_KHR_display","VK_KHR_display_swapchain","VK_KHR_draw_indirect_count",
+"VK_KHR_driver_properties","VK_KHR_dynamic_rendering","VK_KHR_dynamic_rendering_local_read",
+"VK_KHR_external_fence","VK_KHR_external_fence_capabilities","VK_KHR_external_fence_fd",
+"VK_KHR_external_fence_win32","VK_KHR_external_memory","VK_KHR_external_memory_capabilities",
+"VK_KHR_external_memory_fd","VK_KHR_external_memory_win32","VK_KHR_external_semaphore",
+"VK_KHR_external_semaphore_capabilities","VK_KHR_external_semaphore_fd",
+"VK_KHR_external_semaphore_win32","VK_KHR_format_feature_flags2",
+"VK_KHR_fragment_shader_barycentric","VK_KHR_fragment_shading_rate",
+"VK_KHR_get_display_properties2","VK_KHR_get_memory_requirements2",
+"VK_KHR_get_physical_device_properties2","VK_KHR_get_surface_capabilities2",
+"VK_KHR_global_priority","VK_KHR_image_format_list","VK_KHR_imageless_framebuffer",
+"VK_KHR_incremental_present","VK_KHR_index_type_uint8",
+"VK_KHR_internally_synchronized_queues","VK_KHR_line_rasterization",
+"VK_KHR_load_store_op_none","VK_KHR_maintenance1","VK_KHR_maintenance2",
+"VK_KHR_maintenance3","VK_KHR_maintenance4","VK_KHR_maintenance5","VK_KHR_maintenance6",
+"VK_KHR_maintenance7","VK_KHR_maintenance8","VK_KHR_maintenance9","VK_KHR_maintenance10",
+"VK_KHR_map_memory2","VK_KHR_multiview","VK_KHR_performance_query",
 "VK_KHR_pipeline_binary","VK_KHR_pipeline_executable_properties","VK_KHR_pipeline_library",
-"VK_KHR_portability_enumeration","VK_KHR_present_id","VK_KHR_present_id2",
-"VK_KHR_present_mode_fifo_latest_ready","VK_KHR_present_wait","VK_KHR_present_wait2",
+"VK_KHR_portability_enumeration","VK_KHR_portability_subset",
+"VK_KHR_present_id","VK_KHR_present_id2","VK_KHR_present_mode_fifo_latest_ready",
+"VK_KHR_present_wait","VK_KHR_present_wait2","VK_KHR_push_descriptor",
 "VK_KHR_ray_query","VK_KHR_ray_tracing_maintenance1","VK_KHR_ray_tracing_pipeline",
-"VK_KHR_ray_tracing_position_fetch","VK_KHR_robustness2","VK_KHR_shader_bfloat16",
-"VK_KHR_shader_clock","VK_KHR_shader_fma","VK_KHR_shader_maximal_reconvergence",
+"VK_KHR_ray_tracing_position_fetch","VK_KHR_relaxed_block_layout","VK_KHR_robustness2",
+"VK_KHR_sampler_mirror_clamp_to_edge","VK_KHR_sampler_ycbcr_conversion",
+"VK_KHR_separate_depth_stencil_layouts","VK_KHR_shader_atomic_int64",
+"VK_KHR_shader_bfloat16","VK_KHR_shader_clock","VK_KHR_shader_draw_parameters",
+"VK_KHR_shader_expect_assume","VK_KHR_shader_float16_int8","VK_KHR_shader_float_controls",
+"VK_KHR_shader_float_controls2","VK_KHR_shader_fma","VK_KHR_shader_integer_dot_product",
+"VK_KHR_shader_maximal_reconvergence","VK_KHR_shader_non_semantic_info",
 "VK_KHR_shader_quad_control","VK_KHR_shader_relaxed_extended_instruction",
-"VK_KHR_shader_subgroup_uniform_control_flow","VK_KHR_shader_untyped_pointers",
-"VK_KHR_shared_presentable_image","VK_KHR_surface","VK_KHR_surface_maintenance1",
+"VK_KHR_shader_subgroup_extended_types","VK_KHR_shader_subgroup_rotate",
+"VK_KHR_shader_subgroup_uniform_control_flow","VK_KHR_shader_terminate_invocation",
+"VK_KHR_shader_untyped_pointers","VK_KHR_shared_presentable_image","VK_KHR_spirv_1_4",
+"VK_KHR_storage_buffer_storage_class","VK_KHR_surface","VK_KHR_surface_maintenance1",
 "VK_KHR_surface_protected_capabilities","VK_KHR_swapchain","VK_KHR_swapchain_maintenance1",
-"VK_KHR_swapchain_mutable_format","VK_KHR_unified_image_layouts",
+"VK_KHR_swapchain_mutable_format","VK_KHR_synchronization2","VK_KHR_timeline_semaphore",
+"VK_KHR_uniform_buffer_standard_layout","VK_KHR_unified_image_layouts",
+"VK_KHR_variable_pointers","VK_KHR_vertex_attribute_divisor",
 "VK_KHR_video_decode_av1","VK_KHR_video_decode_h264","VK_KHR_video_decode_h265",
 "VK_KHR_video_decode_queue","VK_KHR_video_decode_vp9","VK_KHR_video_encode_av1",
 "VK_KHR_video_encode_h264","VK_KHR_video_encode_h265","VK_KHR_video_encode_intra_refresh",
 "VK_KHR_video_encode_quantization_map","VK_KHR_video_encode_queue",
 "VK_KHR_video_maintenance1","VK_KHR_video_maintenance2","VK_KHR_video_queue",
-"VK_KHR_wayland_surface","VK_KHR_win32_keyed_mutex","VK_KHR_win32_surface",
-"VK_KHR_workgroup_memory_explicit_layout","VK_KHR_xcb_surface","VK_KHR_xlib_surface",
-"VK_KHR_16bit_storage","VK_KHR_8bit_storage","VK_KHR_bind_memory2",
-"VK_KHR_buffer_device_address","VK_KHR_copy_commands2","VK_KHR_create_renderpass2",
-"VK_KHR_dedicated_allocation","VK_KHR_depth_stencil_resolve",
-"VK_KHR_descriptor_update_template","VK_KHR_device_group","VK_KHR_device_group_creation",
-"VK_KHR_draw_indirect_count","VK_KHR_driver_properties","VK_KHR_dynamic_rendering",
-"VK_KHR_dynamic_rendering_local_read","VK_KHR_external_fence",
-"VK_KHR_external_fence_capabilities","VK_KHR_external_memory",
-"VK_KHR_external_memory_capabilities","VK_KHR_external_semaphore",
-"VK_KHR_external_semaphore_capabilities","VK_KHR_format_feature_flags2",
-"VK_KHR_get_memory_requirements2","VK_KHR_get_physical_device_properties2",
-"VK_KHR_global_priority","VK_KHR_image_format_list","VK_KHR_imageless_framebuffer",
-"VK_KHR_index_type_uint8","VK_KHR_line_rasterization","VK_KHR_load_store_op_none",
-"VK_KHR_maintenance1","VK_KHR_maintenance2","VK_KHR_maintenance3","VK_KHR_maintenance4",
-"VK_KHR_maintenance5","VK_KHR_maintenance6","VK_KHR_map_memory2","VK_KHR_multiview",
-"VK_KHR_push_descriptor","VK_KHR_relaxed_block_layout","VK_KHR_sampler_mirror_clamp_to_edge",
-"VK_KHR_sampler_ycbcr_conversion","VK_KHR_separate_depth_stencil_layouts",
-"VK_KHR_shader_atomic_int64","VK_KHR_shader_draw_parameters","VK_KHR_shader_expect_assume",
-"VK_KHR_shader_float16_int8","VK_KHR_shader_float_controls","VK_KHR_shader_float_controls2",
-"VK_KHR_shader_integer_dot_product","VK_KHR_shader_non_semantic_info",
-"VK_KHR_shader_subgroup_extended_types","VK_KHR_shader_subgroup_rotate",
-"VK_KHR_shader_terminate_invocation","VK_KHR_spirv_1_4",
-"VK_KHR_storage_buffer_storage_class","VK_KHR_synchronization2",
-"VK_KHR_timeline_semaphore","VK_KHR_uniform_buffer_standard_layout",
-"VK_KHR_variable_pointers","VK_KHR_vertex_attribute_divisor",
-"VK_KHR_vulkan_memory_model","VK_KHR_zero_initialize_workgroup_memory",
-"VK_EXT_astc_decode_mode","VK_EXT_attachment_feedback_loop_dynamic_state",
-"VK_EXT_attachment_feedback_loop_layout","VK_EXT_blend_operation_advanced",
-"VK_EXT_border_color_swizzle","VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
+"VK_KHR_vulkan_memory_model","VK_KHR_wayland_surface","VK_KHR_win32_keyed_mutex",
+"VK_KHR_win32_surface","VK_KHR_workgroup_memory_explicit_layout",
+"VK_KHR_xcb_surface","VK_KHR_xlib_surface","VK_KHR_zero_initialize_workgroup_memory",
+"VK_EXT_4444_formats","VK_EXT_astc_decode_mode",
+"VK_EXT_attachment_feedback_loop_dynamic_state","VK_EXT_attachment_feedback_loop_layout",
+"VK_EXT_blend_operation_advanced","VK_EXT_border_color_swizzle",
+"VK_EXT_buffer_device_address","VK_EXT_calibrated_timestamps",
+"VK_EXT_color_write_enable","VK_EXT_conditional_rendering",
 "VK_EXT_conservative_rasterization","VK_EXT_custom_border_color","VK_EXT_custom_resolve",
-"VK_EXT_debug_utils","VK_EXT_depth_bias_control","VK_EXT_depth_clamp_control",
+"VK_EXT_debug_marker","VK_EXT_debug_report","VK_EXT_debug_utils",
+"VK_EXT_depth_bias_control","VK_EXT_depth_clamp_control","VK_EXT_depth_clamp_zero_one",
 "VK_EXT_depth_clip_control","VK_EXT_depth_clip_enable","VK_EXT_depth_range_unrestricted",
-"VK_EXT_descriptor_heap","VK_EXT_device_address_binding_report","VK_EXT_device_fault",
+"VK_EXT_descriptor_buffer","VK_EXT_descriptor_heap","VK_EXT_descriptor_indexing",
+"VK_EXT_device_address_binding_report","VK_EXT_device_fault",
 "VK_EXT_device_generated_commands","VK_EXT_device_memory_report",
 "VK_EXT_direct_mode_display","VK_EXT_directfb_surface","VK_EXT_discard_rectangles",
 "VK_EXT_display_control","VK_EXT_display_surface_counter",
-"VK_EXT_dynamic_rendering_unused_attachments","VK_EXT_extended_dynamic_state3",
+"VK_EXT_dynamic_rendering_unused_attachments","VK_EXT_extended_dynamic_state",
+"VK_EXT_extended_dynamic_state2","VK_EXT_extended_dynamic_state3",
 "VK_EXT_external_memory_acquire_unmodified","VK_EXT_external_memory_dma_buf",
 "VK_EXT_external_memory_host","VK_EXT_external_memory_metal","VK_EXT_filter_cubic",
 "VK_EXT_fragment_density_map","VK_EXT_fragment_density_map2",
 "VK_EXT_fragment_density_map_offset","VK_EXT_fragment_shader_interlock",
-"VK_EXT_frame_boundary","VK_EXT_full_screen_exclusive","VK_EXT_graphics_pipeline_library",
-"VK_EXT_hdr_metadata","VK_EXT_headless_surface","VK_EXT_image_2d_view_of_3d",
-"VK_EXT_image_compression_control","VK_EXT_image_compression_control_swapchain",
-"VK_EXT_image_drm_format_modifier","VK_EXT_image_sliced_view_of_3d",
-"VK_EXT_image_view_min_lod","VK_EXT_layer_settings","VK_EXT_legacy_dithering",
-"VK_EXT_legacy_vertex_attributes","VK_EXT_map_memory_placed","VK_EXT_memory_budget",
+"VK_EXT_frame_boundary","VK_EXT_full_screen_exclusive","VK_EXT_global_priority",
+"VK_EXT_global_priority_query","VK_EXT_graphics_pipeline_library",
+"VK_EXT_hdr_metadata","VK_EXT_headless_surface","VK_EXT_host_image_copy",
+"VK_EXT_host_query_reset","VK_EXT_image_2d_view_of_3d","VK_EXT_image_compression_control",
+"VK_EXT_image_compression_control_swapchain","VK_EXT_image_drm_format_modifier",
+"VK_EXT_image_robustness","VK_EXT_image_sliced_view_of_3d","VK_EXT_image_view_min_lod",
+"VK_EXT_index_type_uint8","VK_EXT_inline_uniform_block","VK_EXT_layer_settings",
+"VK_EXT_legacy_dithering","VK_EXT_legacy_vertex_attributes","VK_EXT_line_rasterization",
+"VK_EXT_load_store_op_none","VK_EXT_map_memory_placed","VK_EXT_memory_budget",
 "VK_EXT_memory_decompression","VK_EXT_memory_priority","VK_EXT_mesh_shader",
 "VK_EXT_metal_objects","VK_EXT_metal_surface","VK_EXT_multi_draw",
 "VK_EXT_multisampled_render_to_single_sampled","VK_EXT_mutable_descriptor_type",
 "VK_EXT_nested_command_buffer","VK_EXT_non_seamless_cube_map","VK_EXT_opacity_micromap",
 "VK_EXT_pageable_device_local_memory","VK_EXT_pci_bus_info","VK_EXT_physical_device_drm",
+"VK_EXT_pipeline_creation_cache_control","VK_EXT_pipeline_creation_feedback",
 "VK_EXT_pipeline_library_group_handles","VK_EXT_pipeline_properties",
-"VK_EXT_post_depth_coverage","VK_EXT_present_timing","VK_EXT_primitive_topology_list_restart",
-"VK_EXT_primitives_generated_query","VK_EXT_provoking_vertex","VK_EXT_queue_family_foreign",
+"VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness",
+"VK_EXT_post_depth_coverage","VK_EXT_present_mode_fifo_latest_ready","VK_EXT_present_timing",
+"VK_EXT_primitive_topology_list_restart","VK_EXT_primitives_generated_query",
+"VK_EXT_private_data","VK_EXT_provoking_vertex","VK_EXT_queue_family_foreign",
 "VK_EXT_rasterization_order_attachment_access","VK_EXT_ray_tracing_invocation_reorder",
-"VK_EXT_rgba10x6_formats","VK_EXT_sample_locations","VK_EXT_shader_64bit_indexing",
-"VK_EXT_shader_atomic_float","VK_EXT_shader_atomic_float2","VK_EXT_shader_float8",
+"VK_EXT_rgba10x6_formats","VK_EXT_robustness2","VK_EXT_sample_locations",
+"VK_EXT_sampler_filter_minmax","VK_EXT_scalar_block_layout","VK_EXT_separate_stencil_usage",
+"VK_EXT_shader_64bit_indexing","VK_EXT_shader_atomic_float","VK_EXT_shader_atomic_float2",
+"VK_EXT_shader_demote_to_helper_invocation","VK_EXT_shader_float8",
 "VK_EXT_shader_image_atomic_int64","VK_EXT_shader_long_vector",
 "VK_EXT_shader_module_identifier","VK_EXT_shader_object","VK_EXT_shader_replicated_composites",
-"VK_EXT_shader_stencil_export","VK_EXT_shader_subgroup_partitioned",
+"VK_EXT_shader_stencil_export","VK_EXT_shader_subgroup_ballot",
+"VK_EXT_shader_subgroup_partitioned","VK_EXT_shader_subgroup_vote",
 "VK_EXT_shader_tile_image","VK_EXT_shader_uniform_buffer_unsized_array",
-"VK_EXT_subpass_merge_feedback","VK_EXT_swapchain_colorspace",
-"VK_EXT_texture_compression_astc_3d","VK_EXT_transform_feedback","VK_EXT_validation_cache",
-"VK_EXT_vertex_input_dynamic_state","VK_EXT_ycbcr_image_arrays",
-"VK_EXT_zero_initialize_device_memory","VK_EXT_4444_formats",
-"VK_EXT_buffer_device_address","VK_EXT_calibrated_timestamps","VK_EXT_debug_marker",
-"VK_EXT_debug_report","VK_EXT_depth_clamp_zero_one","VK_EXT_descriptor_buffer",
-"VK_EXT_descriptor_indexing","VK_EXT_extended_dynamic_state","VK_EXT_extended_dynamic_state2",
-"VK_EXT_global_priority","VK_EXT_global_priority_query","VK_EXT_host_image_copy",
-"VK_EXT_host_query_reset","VK_EXT_image_robustness","VK_EXT_index_type_uint8",
-"VK_EXT_inline_uniform_block","VK_EXT_line_rasterization","VK_EXT_load_store_op_none",
-"VK_EXT_pipeline_creation_cache_control","VK_EXT_pipeline_creation_feedback",
-"VK_EXT_pipeline_protected_access","VK_EXT_pipeline_robustness",
-"VK_EXT_present_mode_fifo_latest_ready","VK_EXT_private_data","VK_EXT_robustness2",
-"VK_EXT_sampler_filter_minmax","VK_EXT_scalar_block_layout","VK_EXT_separate_stencil_usage",
-"VK_EXT_shader_demote_to_helper_invocation","VK_EXT_shader_subgroup_ballot",
-"VK_EXT_shader_subgroup_vote","VK_EXT_shader_viewport_index_layer",
-"VK_EXT_subgroup_size_control","VK_EXT_surface_maintenance1","VK_EXT_swapchain_maintenance1",
-"VK_EXT_texel_buffer_alignment","VK_EXT_texture_compression_astc_hdr","VK_EXT_tooling_info",
-"VK_EXT_validation_features","VK_EXT_validation_flags","VK_EXT_vertex_attribute_divisor",
-"VK_EXT_vertex_attribute_robustness","VK_EXT_ycbcr_2plane_444_formats",
+"VK_EXT_shader_viewport_index_layer","VK_EXT_subgroup_size_control",
+"VK_EXT_subpass_merge_feedback","VK_EXT_surface_maintenance1",
+"VK_EXT_swapchain_colorspace","VK_EXT_swapchain_maintenance1",
+"VK_EXT_texel_buffer_alignment","VK_EXT_texture_compression_astc_3d",
+"VK_EXT_texture_compression_astc_hdr","VK_EXT_tooling_info",
+"VK_EXT_transform_feedback","VK_EXT_validation_cache","VK_EXT_validation_features",
+"VK_EXT_validation_flags","VK_EXT_vertex_attribute_divisor",
+"VK_EXT_vertex_attribute_robustness","VK_EXT_vertex_input_dynamic_state",
+"VK_EXT_ycbcr_2plane_444_formats","VK_EXT_ycbcr_image_arrays",
+"VK_EXT_zero_initialize_device_memory",
 "VK_AMD_anti_lag","VK_AMD_buffer_marker","VK_AMD_device_coherent_memory",
 "VK_AMD_display_native_hdr","VK_AMD_draw_indirect_count","VK_AMD_gcn_shader",
 "VK_AMD_gpu_shader_half_float","VK_AMD_gpu_shader_int16",
@@ -625,6 +650,7 @@ ALL=[
 "VK_AMD_shader_explicit_vertex_parameter","VK_AMD_shader_fragment_mask",
 "VK_AMD_shader_image_load_store_lod","VK_AMD_shader_info","VK_AMD_shader_trinary_minmax",
 "VK_AMD_texture_gather_bias_lod",
+"VK_AMDX_dense_geometry_format","VK_AMDX_shader_enqueue",
 "VK_ANDROID_external_format_resolve","VK_ANDROID_external_memory_android_hardware_buffer",
 "VK_ARM_data_graph","VK_ARM_format_pack","VK_ARM_performance_counters_by_region",
 "VK_ARM_pipeline_opacity_micromap","VK_ARM_rasterization_order_attachment_access",
@@ -646,20 +672,21 @@ ALL=[
 "VK_NV_compute_occupancy_priority","VK_NV_compute_shader_derivatives",
 "VK_NV_cooperative_matrix","VK_NV_cooperative_matrix2","VK_NV_cooperative_vector",
 "VK_NV_copy_memory_indirect","VK_NV_corner_sampled_image","VK_NV_coverage_reduction_mode",
-"VK_NV_dedicated_allocation","VK_NV_dedicated_allocation_image_aliasing",
-"VK_NV_descriptor_pool_overallocation","VK_NV_device_diagnostic_checkpoints",
-"VK_NV_device_diagnostics_config","VK_NV_device_generated_commands",
-"VK_NV_device_generated_commands_compute","VK_NV_displacement_micromap",
-"VK_NV_display_stereo","VK_NV_extended_sparse_address_space","VK_NV_external_compute_queue",
-"VK_NV_external_memory","VK_NV_external_memory_capabilities","VK_NV_external_memory_rdma",
-"VK_NV_external_memory_win32","VK_NV_fill_rectangle","VK_NV_fragment_coverage_to_color",
-"VK_NV_fragment_shader_barycentric","VK_NV_fragment_shading_rate_enums",
-"VK_NV_framebuffer_mixed_samples","VK_NV_geometry_shader_passthrough","VK_NV_glsl_shader",
-"VK_NV_inherited_viewport_scissor","VK_NV_linear_color_attachment","VK_NV_low_latency",
-"VK_NV_low_latency2","VK_NV_memory_decompression","VK_NV_mesh_shader","VK_NV_optical_flow",
+"VK_NV_cuda_kernel_launch","VK_NV_dedicated_allocation",
+"VK_NV_dedicated_allocation_image_aliasing","VK_NV_descriptor_pool_overallocation",
+"VK_NV_device_diagnostic_checkpoints","VK_NV_device_diagnostics_config",
+"VK_NV_device_generated_commands","VK_NV_device_generated_commands_compute",
+"VK_NV_displacement_micromap","VK_NV_display_stereo","VK_NV_extended_sparse_address_space",
+"VK_NV_external_compute_queue","VK_NV_external_memory","VK_NV_external_memory_capabilities",
+"VK_NV_external_memory_rdma","VK_NV_external_memory_win32","VK_NV_fill_rectangle",
+"VK_NV_fragment_coverage_to_color","VK_NV_fragment_shader_barycentric",
+"VK_NV_fragment_shading_rate_enums","VK_NV_framebuffer_mixed_samples",
+"VK_NV_geometry_shader_passthrough","VK_NV_glsl_shader","VK_NV_inherited_viewport_scissor",
+"VK_NV_linear_color_attachment","VK_NV_low_latency","VK_NV_low_latency2",
+"VK_NV_memory_decompression","VK_NV_mesh_shader","VK_NV_optical_flow",
 "VK_NV_partitioned_acceleration_structure","VK_NV_per_stage_descriptor_set",
-"VK_NV_present_barrier","VK_NV_push_constant_bank","VK_NV_raw_access_chains",
-"VK_NV_ray_tracing","VK_NV_ray_tracing_invocation_reorder",
+"VK_NV_present_barrier","VK_NV_present_metering","VK_NV_push_constant_bank",
+"VK_NV_raw_access_chains","VK_NV_ray_tracing","VK_NV_ray_tracing_invocation_reorder",
 "VK_NV_ray_tracing_linear_swept_spheres","VK_NV_ray_tracing_motion_blur",
 "VK_NV_ray_tracing_validation","VK_NV_representative_fragment_test",
 "VK_NV_sample_mask_override_coverage","VK_NV_scissor_exclusive",
@@ -673,153 +700,140 @@ ALL=[
 "VK_QCOM_fragment_density_map_offset","VK_QCOM_image_processing","VK_QCOM_image_processing2",
 "VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
 "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
-"VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_commands","VK_QCOM_tile_memory_heap",
-"VK_QCOM_tile_properties","VK_QCOM_tile_shading","VK_QCOM_ycbcr_degamma",
+"VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_operations",
+"VK_QCOM_tile_memory_heap","VK_QCOM_tile_properties","VK_QCOM_tile_shading",
+"VK_QCOM_ycbcr_degamma",
 "VK_QNX_external_memory_screen_buffer","VK_QNX_screen_surface",
 "VK_SEC_amigo_profiling","VK_SEC_pipeline_cache_incremental_mode","VK_SEC_ubm_surface",
 "VK_VALVE_descriptor_set_host_mapping","VK_VALVE_fragment_density_map_layered",
 "VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
 "VK_VALVE_video_encode_rgb_conversion",
-"VK_KHR_portability_subset","VK_AMDX_dense_geometry_format","VK_AMDX_shader_enqueue",
-"VK_NV_cuda_kernel_launch","VK_NV_present_metering",
 ]
-known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
-adds = [f'    "{e}": 1,' for e in ALL if e not in known]
+
+# Find existing names in file (both quote styles)
+known = set(re.findall(r"['\"]?(VK_[A-Z0-9_]+)['\"]?\s*:", c))
+adds  = [f"    {Q}{e}{Q}: 1," for e in ALL if e not in known]
+
 if adds:
-    for probe in ['"VK_KHR_swapchain": 1,','"VK_KHR_swapchain": 26,','"VK_ANDROID_native_buffer": 26,','"VK_ANDROID_native_buffer": 1,']:
-        if probe in c:
-            c = c.replace(probe, probe+'\n'+'\n'.join(adds), 1); break
-    else:
-        c = re.sub(r'(\n\})\s*$','\n'+'\n'.join(adds)+r'\n}',c,count=1)
-    print(f"[OK] Added {len(adds)} extensions")
+    # Try several anchor points for insertion
+    anchors = [
+        f"{Q}VK_KHR_swapchain{Q}: 1,",
+        f"{Q}VK_KHR_swapchain{Q}: 26,",
+        f"{Q}VK_ANDROID_native_buffer{Q}: 26,",
+        f"{Q}VK_ANDROID_native_buffer{Q}: 1,",
+    ]
+    inserted = False
+    for anchor in anchors:
+        if anchor in c:
+            c = c.replace(anchor, anchor + '\n' + '\n'.join(adds), 1)
+            inserted = True; break
+    if not inserted:
+        # Append before last closing brace
+        for ending in ['\n}', '\n]\n']:
+            idx = c.rfind(ending)
+            if idx != -1:
+                c = c[:idx] + '\n' + '\n'.join(adds) + ending
+                inserted = True; break
+    if not inserted:
+        c += '\n' + '\n'.join(adds) + '\n'
+    print(f"[OK] Added {len(adds)} extensions to vk_extensions.py")
 else:
-    print("[INFO] All extensions already present")
-with open(fp,'w') as f: f.write(c)
-total=len(re.findall(r'"VK_[A-Z0-9_]+"\s*:\s*\d+',c))
-print(f"[OK] Total entries: {total}")
+    print("[INFO] All extensions already in vk_extensions.py")
+
+with open(fp, 'w', encoding='utf-8') as f:
+    f.write(c)
+
+total_sq = len(re.findall(r"'VK_[A-Z0-9_]+'\s*:\s*\d+", c))
+total_dq = len(re.findall(r'"VK_[A-Z0-9_]+"\s*:\s*\d+', c))
+print(f"[OK] Total entries in vk_extensions.py: {total_sq + total_dq}")
 PYEOF
         log_success "vk_extensions.py patched"
     fi
 
-    # inject_extensions.py — reads patched vk_extensions.py, injects ALL known
-    # device extensions into tu_device.cc using safe field names only
+    # ── Step 2: inject extensions into tu_device.cc ─────────────────────────────
     python3 - "$tu_device" "$vk_exts_py" << 'PYEOF'
 import sys, re
 
-tu_path, vk_path = sys.argv[1], sys.argv[2]
-with open(tu_path) as f: content = f.read()
-with open(vk_path) as f: vk_py = f.read()
+tu_path  = sys.argv[1]
+vk_path  = sys.argv[2]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# APPROACH: Three-pass aggressive force-enable
-#
-# Pass 1 — Feature flags: force physical device feature booleans to true
-# Pass 2 — Global ext force: replace EVERY ext->XXX = <anything> with true
-#           This covers hardware-gated extensions (e.g. ext->KHR_ray_query = pdev->a7xx)
-#           No new struct fields needed — only overrides EXISTING assignments
-# Pass 3 — Extension struct from vk_extensions.py: for extensions Mesa has in its
-#           EXTENSIONS list (real implementations), add any not yet assigned
-# ═══════════════════════════════════════════════════════════════════════════════
+with open(tu_path, encoding='utf-8', errors='ignore') as f:
+    content = f.read()
+with open(vk_path, encoding='utf-8', errors='ignore') as f:
+    vk_py = f.read()
 
-# ── Pass 1: Feature flags ──────────────────────────────────────────────────────
-feats = [
-    "shaderFloat64","shaderStorageImageMultisample",
-    "uniformAndStorageBuffer16BitAccess","storagePushConstant16",
-    "uniformAndStorageBuffer8BitAccess","storagePushConstant8",
-    "shaderSharedInt64Atomics","shaderBufferInt64Atomics",
-    "independentResolve","independentResolveNone",
-    "shaderDenormPreserveFloat16","shaderDenormFlushToZeroFloat16",
-    "shaderRoundingModeRTZFloat16","samplerFilterMinmax",
-    "textureCompressionASTC_HDR","integerDotProduct8BitUnsignedAccelerated",
-    "shaderObject","mutableDescriptorType",
-    "maintenance5","maintenance6","maintenance7","maintenance8","maintenance9","maintenance10",
-    "meshShader","taskShader","rayQuery","accelerationStructure",
-    "fragmentDensityMapDynamic","shaderBFloat16",
+VENDORS = r'(?:KHR|EXT|AMD|AMDX|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|MVK|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE)'
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pass 1 — force physical device feature booleans (non-extension flags)
+# ══════════════════════════════════════════════════════════════════════════════
+FEATURE_PATS = [
+    (r'(\b\w+->robustBufferAccess\s*=\s*)[^;]+;',            r'\g<1>true;'),
+    (r'(\b\w+->multiDrawIndirect\s*=\s*)[^;]+;',             r'\g<1>true;'),
+    (r'(\b\w+->drawIndirectFirstInstance\s*=\s*)[^;]+;',     r'\g<1>true;'),
+    (r'(\b\w+->multiViewport\s*=\s*)[^;]+;',                 r'\g<1>true;'),
+    (r'(\b\w+->shaderInt64\s*=\s*)[^;]+;',                   r'\g<1>true;'),
+    (r'(\b\w+->shaderInt16\s*=\s*)[^;]+;',                   r'\g<1>true;'),
+    (r'(\b\w+->fragmentStoresAndAtomics\s*=\s*)[^;]+;',      r'\g<1>true;'),
+    (r'(\b\w+->independentBlend\s*=\s*)[^;]+;',              r'\g<1>true;'),
+    (r'(\b\w+->sampleRateShading\s*=\s*)[^;]+;',             r'\g<1>true;'),
+    (r'(\b\w+->tessellationShader\s*=\s*)[^;]+;',            r'\g<1>true;'),
 ]
 nf = 0
-for p in feats:
-    new, n = re.subn(
-        rf'((?:p|features|props|pdevice|pdev)->{re.escape(p)}\s*=\s*)([^;]+)(;)',
-        r'\1true\3', content)
+for pat, rep in FEATURE_PATS:
+    new, n = re.subn(pat, rep, content)
     if n: content = new; nf += n
 print(f"[OK] Pass 1: Forced {nf} feature flag assignments")
 
-# ── Pass 2: Force ALL extension assignments to true ────────────────────────────
-# Mesa 26.x changed from pointer syntax to struct initializer syntax:
-#
-# OLD (Mesa 24.x and before) — pointer assign:
-#   ext->KHR_ray_query = pdev->info.a7xx.has_ray_tracing;
-#
-# NEW (Mesa 25/26.x) — struct initializer:
-#   *ext = (struct vk_device_extension_table) {
-#       .KHR_16bit_storage = pdevice->info.a7xx.has_16bit_storage,
-#       ...
-#   };
-#
-# We handle BOTH patterns so this works on any Mesa version.
-VENDORS = r'(?:KHR|EXT|AMD|AMDX|ARM|ANDROID|FUCHSIA|GGP|GOOGLE|HUAWEI|IMG|INTEL|LUNARG|MESA|MSFT|MVK|NN|NV|NVX|OHOS|QCOM|QNX|SEC|VALVE)'
-
+# ══════════════════════════════════════════════════════════════════════════════
+# Pass 2 — force ALL existing extension assignments to true (both syntaxes)
+# ══════════════════════════════════════════════════════════════════════════════
 forced_exts = set()
 
-# Pattern A: pointer syntax — ext->VENDOR_name = value;
-ext_assign_ptr = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
-def force_true_ptr(m):
+# Pointer syntax:  ext->KHR_foo = expr;
+ptr_pat = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
+def force_ptr(m):
     forced_exts.add(m.group(3) + m.group(4))
     return m.group(1) + 'true' + m.group(6)
-content = re.sub(ext_assign_ptr, force_true_ptr, content)
+content = re.sub(ptr_pat, force_ptr, content)
 cnt_ptr = len(forced_exts)
 
-# Pattern B: struct initializer — .VENDOR_name = value,
-# Matches .KHR_foo = expr,  inside struct initializer blocks
-ext_assign_struct = rf'(\.)({VENDORS})(_\w+)(\s*=\s*)([^,\n\}}/]+)(,?)'
-struct_forced = set()
-def force_true_struct(m):
+# Struct-init syntax:  .KHR_foo = expr,
+struct_pat = rf'(\.)({VENDORS})(_\w+)(\s*=\s*)([^,\n\}}/]+)(,?)'
+struct_set = set()
+def force_struct(m):
     name = m.group(2) + m.group(3)
-    struct_forced.add(name)
-    forced_exts.add(name)
+    struct_set.add(name); forced_exts.add(name)
     return m.group(1) + m.group(2) + m.group(3) + m.group(4) + 'true' + m.group(6)
-content = re.sub(ext_assign_struct, force_true_struct, content)
-cnt_struct = len(struct_forced)
+content = re.sub(struct_pat, force_struct, content)
+cnt_struct = len(struct_set)
 
 print(f"[OK] Pass 2: Force-set {len(forced_exts)} unique extension fields to true")
 print(f"     Pointer-syntax: {cnt_ptr}, Struct-init-syntax: {cnt_struct}")
 print(f"     Sample: {sorted(forced_exts)[:5]}")
 
-# ── Pass 3: Read Mesa's EXTENSIONS list from vk_extensions.py ─────────────────
-# In Mesa, vk_extensions.py contains an EXTENSIONS list with ALL implemented
-# extensions. These ALL have generated struct fields in vk_device_extension_table.
-# Format varies by Mesa version:
-#   Extension('VK_KHR_swapchain', ...)   — older Mesa
-#   'VK_KHR_swapchain': N,               — newer Mesa (ALLOWED_ANDROID_VERSION)
-#
-# Extract ALL extension names Mesa knows about (these have struct fields)
+# ══════════════════════════════════════════════════════════════════════════════
+# Pass 3 — parse vk_extensions.py for Mesa-known extensions
+#           handle BOTH single-quote ('VK_XXX': N) and double-quote ("VK_XXX": N)
+# ══════════════════════════════════════════════════════════════════════════════
 mesa_exts = set()
-
 # Format A: Extension('VK_XXX', ...)
-for m in re.finditer(r"Extension\s*\(\s*'(VK_[A-Z0-9_]+)'", vk_py):
+for m in re.finditer(r"Extension\s*\(\s*['\"]?(VK_[A-Z0-9_]+)['\"]?", vk_py):
     mesa_exts.add(m.group(1))
-
-# Format B: "VK_XXX": N,  (ALLOWED_ANDROID_VERSION or similar dict)
-for m in re.finditer(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py):
+# Format B: 'VK_XXX': N,  or  "VK_XXX": N,
+for m in re.finditer(r"['\"]?(VK_[A-Z0-9_]+)['\"]?\s*:\s*\d+", vk_py):
     mesa_exts.add(m.group(1))
+# Format C: any bare VK_VENDOR_name token (broadest catch)
+for m in re.finditer(r'\bVK_([A-Z]+(?:_[A-Z0-9]+)+)\b', vk_py):
+    mesa_exts.add('VK_' + m.group(1))
 
-# Format C removed — too broad, picks up platform defines like VK_USE_PLATFORM_*
-
-# Strict filter: only keep names that match VK_VENDOR_extension pattern
-# Valid vendor prefixes for Vulkan extensions
-VALID_VENDORS = {
-    'KHR','EXT','AMD','AMDX','ARM','ANDROID','FUCHSIA','GGP',
-    'GOOGLE','HUAWEI','IMG','INTEL','LUNARG','MESA','MSFT','MVK',
-    'NN','NV','NVX','OHOS','QCOM','QNX','SEC','VALVE',
-}
-mesa_exts = {
-    e for e in mesa_exts
-    if len(e.split('_')) >= 3 and e.split('_')[1] in VALID_VENDORS
-}
-
+VALID_V = {'KHR','EXT','AMD','AMDX','ARM','ANDROID','FUCHSIA','GGP',
+           'GOOGLE','HUAWEI','IMG','INTEL','LUNARG','MESA','MSFT','MVK',
+           'NN','NV','NVX','OHOS','QCOM','QNX','SEC','VALVE'}
+mesa_exts = {e for e in mesa_exts
+             if len(e.split('_')) >= 3 and e.split('_')[1] in VALID_V}
 print(f"[INFO] Pass 3: Mesa vk_extensions.py knows {len(mesa_exts)} extensions")
 
-# Instance-only extensions — NO field in vk_device_extension_table
 INST_ONLY = {
     "VK_KHR_surface","VK_KHR_surface_maintenance1","VK_KHR_surface_protected_capabilities",
     "VK_KHR_get_surface_capabilities2","VK_KHR_android_surface","VK_KHR_display",
@@ -836,101 +850,227 @@ INST_ONLY = {
     "VK_NN_vi_surface","VK_NV_acquire_winrt_display","VK_NV_display_stereo",
     "VK_OHOS_surface","VK_QNX_screen_surface","VK_SEC_ubm_surface",
 }
+mesa_dev_exts = sorted(e for e in mesa_exts if e not in INST_ONLY)
 
-mesa_dev_exts = [e for e in sorted(mesa_exts) if e not in INST_ONLY]
-
-# Find which ones weren't already force-set in Pass 2
-# Check BOTH pointer syntax (ext->VENDOR_name = true;) 
-# AND struct initializer syntax (.VENDOR_name = true,)
-already_forced = set()
-for m in re.finditer(rf'\b(\w+)->({VENDORS}_\w+)\s*=\s*true\s*;', content):
-    already_forced.add('VK_' + m.group(2))
+# What's already true (both syntaxes)
+already = set()
+for m in re.finditer(rf'\b\w+->({VENDORS}_\w+)\s*=\s*true\s*;', content):
+    already.add('VK_' + m.group(1))
 for m in re.finditer(rf'\.({VENDORS}_\w+)\s*=\s*true\s*,?', content):
-    already_forced.add('VK_' + m.group(1))
+    already.add('VK_' + m.group(1))
 
-missing = [e for e in mesa_dev_exts if e not in already_forced]
-print(f"[INFO] {len(already_forced)} already set true, {len(missing)} need injection")
+missing_p3 = [e for e in mesa_dev_exts if e not in already]
+print(f"[INFO] {len(already)} already true, {len(missing_p3)} from vk_extensions.py need injection")
 
-if missing:
-    # Find the ext variable name from existing assignments
-    # Try pointer syntax first, then struct syntax
-    ev = 'ext'  # default
-    m = re.search(rf'\b(\w+)->{VENDORS}_\w+\s*=\s*true\s*;', content)
-    if m:
-        ev = m.group(1)
-    else:
-        # In struct-init style, look for: tu_physical_device_get_extensions(..., ext)
-        # or the variable that receives *ext = ...
-        m = re.search(r'struct vk_device_extension_table\s*\*\s*(\w+)', content)
-        if m: ev = m.group(1)
+# ══════════════════════════════════════════════════════════════════════════════
+# Pass 4 — TARGET_EXTS: comprehensive list injected AFTER the struct block
+#           so these values CANNOT be overridden back to false
+# ══════════════════════════════════════════════════════════════════════════════
+TARGET_EXTS = [
+# KHR device extensions
+"KHR_16bit_storage","KHR_8bit_storage","KHR_acceleration_structure",
+"KHR_bind_memory2","KHR_buffer_device_address","KHR_calibrated_timestamps",
+"KHR_compute_shader_derivatives","KHR_cooperative_matrix","KHR_copy_commands2",
+"KHR_copy_memory_indirect","KHR_create_renderpass2","KHR_dedicated_allocation",
+"KHR_deferred_host_operations","KHR_depth_clamp_zero_one","KHR_depth_stencil_resolve",
+"KHR_descriptor_update_template","KHR_device_group","KHR_draw_indirect_count",
+"KHR_driver_properties","KHR_dynamic_rendering","KHR_dynamic_rendering_local_read",
+"KHR_external_fence","KHR_external_fence_fd","KHR_external_memory",
+"KHR_external_memory_fd","KHR_external_semaphore","KHR_external_semaphore_fd",
+"KHR_format_feature_flags2","KHR_fragment_shader_barycentric","KHR_fragment_shading_rate",
+"KHR_global_priority","KHR_image_format_list","KHR_imageless_framebuffer",
+"KHR_incremental_present","KHR_index_type_uint8","KHR_line_rasterization",
+"KHR_load_store_op_none","KHR_maintenance1","KHR_maintenance2","KHR_maintenance3",
+"KHR_maintenance4","KHR_maintenance5","KHR_maintenance6","KHR_maintenance7",
+"KHR_maintenance8","KHR_maintenance9","KHR_maintenance10","KHR_map_memory2",
+"KHR_multiview","KHR_performance_query","KHR_pipeline_binary",
+"KHR_pipeline_executable_properties","KHR_pipeline_library","KHR_portability_subset",
+"KHR_present_id","KHR_present_id2","KHR_present_mode_fifo_latest_ready",
+"KHR_present_wait","KHR_present_wait2","KHR_push_descriptor",
+"KHR_ray_query","KHR_ray_tracing_maintenance1","KHR_ray_tracing_pipeline",
+"KHR_ray_tracing_position_fetch","KHR_relaxed_block_layout","KHR_robustness2",
+"KHR_sampler_mirror_clamp_to_edge","KHR_sampler_ycbcr_conversion",
+"KHR_separate_depth_stencil_layouts","KHR_shader_atomic_int64",
+"KHR_shader_bfloat16","KHR_shader_clock","KHR_shader_draw_parameters",
+"KHR_shader_expect_assume","KHR_shader_float16_int8","KHR_shader_float_controls",
+"KHR_shader_float_controls2","KHR_shader_fma","KHR_shader_integer_dot_product",
+"KHR_shader_maximal_reconvergence","KHR_shader_non_semantic_info","KHR_shader_quad_control",
+"KHR_shader_relaxed_extended_instruction","KHR_shader_subgroup_extended_types",
+"KHR_shader_subgroup_rotate","KHR_shader_subgroup_uniform_control_flow",
+"KHR_shader_terminate_invocation","KHR_shader_untyped_pointers",
+"KHR_shared_presentable_image","KHR_spirv_1_4","KHR_storage_buffer_storage_class",
+"KHR_swapchain","KHR_swapchain_maintenance1","KHR_swapchain_mutable_format",
+"KHR_synchronization2","KHR_timeline_semaphore","KHR_uniform_buffer_standard_layout",
+"KHR_unified_image_layouts","KHR_variable_pointers","KHR_vertex_attribute_divisor",
+"KHR_video_decode_av1","KHR_video_decode_h264","KHR_video_decode_h265",
+"KHR_video_decode_queue","KHR_vulkan_memory_model","KHR_workgroup_memory_explicit_layout",
+"KHR_zero_initialize_workgroup_memory",
+# EXT device extensions
+"EXT_4444_formats","EXT_astc_decode_mode",
+"EXT_attachment_feedback_loop_dynamic_state","EXT_attachment_feedback_loop_layout",
+"EXT_blend_operation_advanced","EXT_border_color_swizzle","EXT_buffer_device_address",
+"EXT_calibrated_timestamps","EXT_color_write_enable","EXT_conditional_rendering",
+"EXT_conservative_rasterization","EXT_custom_border_color","EXT_depth_bias_control",
+"EXT_depth_clamp_control","EXT_depth_clamp_zero_one","EXT_depth_clip_control",
+"EXT_depth_clip_enable","EXT_depth_range_unrestricted","EXT_descriptor_buffer",
+"EXT_descriptor_indexing","EXT_device_address_binding_report","EXT_device_fault",
+"EXT_device_generated_commands","EXT_device_memory_report","EXT_discard_rectangles",
+"EXT_dynamic_rendering_unused_attachments","EXT_extended_dynamic_state",
+"EXT_extended_dynamic_state2","EXT_extended_dynamic_state3",
+"EXT_external_memory_acquire_unmodified","EXT_external_memory_dma_buf",
+"EXT_external_memory_host","EXT_filter_cubic","EXT_fragment_density_map",
+"EXT_fragment_density_map2","EXT_fragment_density_map_offset",
+"EXT_fragment_shader_interlock","EXT_frame_boundary","EXT_global_priority",
+"EXT_global_priority_query","EXT_graphics_pipeline_library","EXT_host_image_copy",
+"EXT_host_query_reset","EXT_image_2d_view_of_3d","EXT_image_compression_control",
+"EXT_image_drm_format_modifier","EXT_image_robustness","EXT_image_sliced_view_of_3d",
+"EXT_image_view_min_lod","EXT_index_type_uint8","EXT_inline_uniform_block",
+"EXT_legacy_dithering","EXT_legacy_vertex_attributes","EXT_line_rasterization",
+"EXT_load_store_op_none","EXT_memory_budget","EXT_memory_priority","EXT_mesh_shader",
+"EXT_multi_draw","EXT_multisampled_render_to_single_sampled","EXT_mutable_descriptor_type",
+"EXT_nested_command_buffer","EXT_non_seamless_cube_map","EXT_opacity_micromap",
+"EXT_pageable_device_local_memory","EXT_pci_bus_info","EXT_physical_device_drm",
+"EXT_pipeline_creation_cache_control","EXT_pipeline_creation_feedback",
+"EXT_pipeline_library_group_handles","EXT_pipeline_properties",
+"EXT_pipeline_protected_access","EXT_pipeline_robustness","EXT_post_depth_coverage",
+"EXT_present_mode_fifo_latest_ready","EXT_primitive_topology_list_restart",
+"EXT_primitives_generated_query","EXT_private_data","EXT_provoking_vertex",
+"EXT_queue_family_foreign","EXT_rasterization_order_attachment_access",
+"EXT_ray_tracing_invocation_reorder","EXT_rgba10x6_formats","EXT_robustness2",
+"EXT_sample_locations","EXT_sampler_filter_minmax","EXT_scalar_block_layout",
+"EXT_separate_stencil_usage","EXT_shader_64bit_indexing","EXT_shader_atomic_float",
+"EXT_shader_atomic_float2","EXT_shader_demote_to_helper_invocation","EXT_shader_float8",
+"EXT_shader_image_atomic_int64","EXT_shader_long_vector","EXT_shader_module_identifier",
+"EXT_shader_object","EXT_shader_replicated_composites","EXT_shader_stencil_export",
+"EXT_shader_subgroup_ballot","EXT_shader_subgroup_partitioned","EXT_shader_subgroup_vote",
+"EXT_shader_tile_image","EXT_shader_viewport_index_layer","EXT_subgroup_size_control",
+"EXT_subpass_merge_feedback","EXT_swapchain_maintenance1","EXT_texel_buffer_alignment",
+"EXT_texture_compression_astc_3d","EXT_texture_compression_astc_hdr","EXT_tooling_info",
+"EXT_transform_feedback","EXT_vertex_attribute_divisor","EXT_vertex_attribute_robustness",
+"EXT_vertex_input_dynamic_state","EXT_ycbcr_2plane_444_formats","EXT_ycbcr_image_arrays",
+"EXT_zero_initialize_device_memory",
+# Vendor extensions
+"AMD_buffer_marker","AMD_device_coherent_memory","AMD_draw_indirect_count",
+"AMD_mixed_attachment_samples","AMD_pipeline_compiler_control","AMD_rasterization_order",
+"AMD_shader_ballot","AMD_shader_core_properties","AMD_shader_core_properties2",
+"AMD_shader_early_and_late_fragment_tests","AMD_shader_explicit_vertex_parameter",
+"AMD_shader_fragment_mask","AMD_shader_image_load_store_lod","AMD_shader_info",
+"AMD_shader_trinary_minmax","AMD_texture_gather_bias_lod",
+"AMDX_shader_enqueue",
+"ANDROID_external_format_resolve","ANDROID_external_memory_android_hardware_buffer",
+"ARM_rasterization_order_attachment_access","ARM_render_pass_striped",
+"ARM_scheduling_controls","ARM_shader_core_builtins","ARM_shader_core_properties",
+"GOOGLE_decorate_string","GOOGLE_display_timing","GOOGLE_hlsl_functionality1",
+"GOOGLE_user_type",
+"IMG_filter_cubic","IMG_relaxed_line_rasterization",
+"INTEL_performance_query","INTEL_shader_integer_functions2",
+"MESA_image_alignment_control",
+"NV_clip_space_w_scaling","NV_compute_shader_derivatives","NV_cooperative_matrix",
+"NV_corner_sampled_image","NV_coverage_reduction_mode","NV_dedicated_allocation",
+"NV_dedicated_allocation_image_aliasing","NV_descriptor_pool_overallocation",
+"NV_device_diagnostic_checkpoints","NV_device_diagnostics_config",
+"NV_device_generated_commands","NV_device_generated_commands_compute",
+"NV_extended_sparse_address_space","NV_fill_rectangle","NV_fragment_coverage_to_color",
+"NV_fragment_shader_barycentric","NV_fragment_shading_rate_enums",
+"NV_framebuffer_mixed_samples","NV_geometry_shader_passthrough",
+"NV_inherited_viewport_scissor","NV_linear_color_attachment","NV_low_latency",
+"NV_low_latency2","NV_memory_decompression","NV_mesh_shader",
+"NV_per_stage_descriptor_set","NV_present_barrier","NV_push_constant_bank",
+"NV_raw_access_chains","NV_ray_tracing","NV_ray_tracing_invocation_reorder",
+"NV_ray_tracing_motion_blur","NV_ray_tracing_validation",
+"NV_representative_fragment_test","NV_sample_mask_override_coverage",
+"NV_scissor_exclusive","NV_shader_atomic_float16_vector","NV_shader_image_footprint",
+"NV_shader_sm_builtins","NV_shader_subgroup_partitioned","NV_shading_rate_image",
+"NV_viewport_array2","NV_viewport_swizzle","NV_win32_keyed_mutex",
+"NVX_binary_import","NVX_image_view_handle","NVX_multiview_per_view_attributes",
+"QCOM_cooperative_matrix_conversion","QCOM_filter_cubic_clamp","QCOM_filter_cubic_weights",
+"QCOM_fragment_density_map_offset","QCOM_image_processing","QCOM_image_processing2",
+"QCOM_multiview_per_view_render_areas","QCOM_multiview_per_view_viewports",
+"QCOM_render_pass_shader_resolve","QCOM_render_pass_store_ops",
+"QCOM_render_pass_transform","QCOM_tile_memory_heap","QCOM_tile_properties",
+"QCOM_tile_shading","QCOM_ycbcr_degamma",
+"SEC_amigo_profiling","SEC_pipeline_cache_incremental_mode",
+"VALVE_descriptor_set_host_mapping","VALVE_fragment_density_map_layered",
+"VALVE_mutable_descriptor_type","VALVE_shader_mixed_float_dot_product",
+"VALVE_video_encode_rgb_conversion",
+]
 
-    # Find end of get_device_extensions function for injection
-    # Also handle struct-init syntax: the closing "};" of the struct assignment
-    inject_pos = None
-    
-    # For struct-init style: find the *ext = (...) { ... }; block and inject after
-    struct_init_m = re.search(
-        r'\*\s*\w+\s*=\s*\(struct vk_device_extension_table\)\s*\{',
-        content
-    )
-    if struct_init_m:
-        # Find the closing }; of the struct
-        d = 1; p = struct_init_m.end()
-        while p < len(content) and d > 0:
-            if content[p] == '{': d += 1
-            elif content[p] == '}': d -= 1
-            p += 1
-        # Skip past the ; after }
-        while p < len(content) and content[p] in ' \t;': p += 1
-        inject_pos = p
-        print(f"[OK] Found struct-init end at pos {inject_pos}, injecting after it")
+# ── Determine variable name used in the source file ───────────────────────────
+ev = 'ext'
+m = re.search(rf'\b(\w+)->{VENDORS}_\w+\s*=\s*true\s*;', content)
+if m: ev = m.group(1)
+else:
+    m = re.search(r'struct vk_device_extension_table\s*\*\s*(\w+)', content)
+    if m: ev = m.group(1)
 
-    if inject_pos is None:
-        for pat in [
-            r'tu_get_device_extensions\s*\([^{]*?\{',
-            r'get_device_extensions\s*\([^{]*?\{',
-            r'vk_device_extension_table\s*\*\s*\w+[^{]*?\{',
-        ]:
-            fm = re.search(pat, content, re.DOTALL)
-            if fm:
-                d = 1; p = fm.end()
-                while p < len(content) and d > 0:
-                    if content[p] == '{': d += 1
-                    elif content[p] == '}': d -= 1
-                    p += 1
-                inject_pos = p - 1
-                print(f"[OK] Found function end at pos {inject_pos}")
-                break
+# ── Find injection point — AFTER struct initialiser, BEFORE function end ──────
+inject_pos = None
 
-    if inject_pos is None:
-        # Fallback: inject after last extension assignment (any syntax)
-        lm = None
-        for m in re.finditer(rf'(\.{VENDORS}_\w+\s*=\s*true|{VENDORS}_\w+\s*=\s*true\s*;)', content):
-            lm = m
-        if lm: inject_pos = lm.end(); print(f"[OK] Fallback inject pos {inject_pos}")
+# Strategy 1: after  *ext = (struct vk_device_extension_table){ ... };
+struct_m = re.search(r'\*\s*\w+\s*=\s*\(struct vk_device_extension_table\)\s*\{', content)
+if struct_m:
+    d = 1; p = struct_m.end()
+    while p < len(content) and d > 0:
+        if content[p] == '{': d += 1
+        elif content[p] == '}': d -= 1
+        p += 1
+    while p < len(content) and content[p] in ' \t\r\n;': p += 1
+    inject_pos = p
+    print(f"[OK] Inject after struct-init at pos {inject_pos}")
 
-    if inject_pos is not None:
-        lines = ["\n    // === MESA-KNOWN EXTENSIONS FORCE-ENABLED ==="]
-        for e in missing:
-            lines.append(f"    {ev}->{e[3:]} = true;")
-        lines.append("    // === END ===\n")
-        inj = "\n".join(lines)
-        content = content[:inject_pos] + inj + content[inject_pos:]
-        print(f"[OK] Injected {len(missing)} additional extension assignments")
-    else:
-        print("[WARN] No injection point found for additional extensions")
+# Strategy 2: end of the device-extensions function body
+if inject_pos is None:
+    for pat in [
+        r'tu_get_device_extensions\s*\([^{]*?\{',
+        r'tu_get_device_extension_table\s*\([^{]*?\{',
+        r'get_device_extensions\s*\([^{]*?\{',
+    ]:
+        fm = re.search(pat, content, re.DOTALL)
+        if fm:
+            d = 1; p = fm.end()
+            while p < len(content) and d > 0:
+                if content[p] == '{': d += 1
+                elif content[p] == '}': d -= 1
+                p += 1
+            inject_pos = p - 1
+            print(f"[OK] Inject at function end pos {inject_pos}")
+            break
 
-with open(tu_path, 'w') as f: f.write(content)
+# Strategy 3: after last any extension assignment
+if inject_pos is None:
+    lm = None
+    for m in re.finditer(
+            rf'(?:\.{VENDORS}_\w+\s*=\s*true|{VENDORS}_\w+\s*=\s*true\s*;)', content):
+        lm = m
+    if lm:
+        inject_pos = lm.end()
+        print(f"[OK] Fallback inject after last assignment pos {inject_pos}")
 
-# Count final true assignments (both syntaxes)
-total_ptr = len(re.findall(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content))
+# ── Build and inject block ────────────────────────────────────────────────────
+if inject_pos is not None:
+    lines = ["\n    /* === EXT_FORCE_ALL: unconditional override after struct === */"]
+    for ext in TARGET_EXTS:
+        lines.append(f"    {ev}->{ext} = true;")
+    lines.append("    /* === EXT_FORCE_ALL END === */")
+    injection = "\n".join(lines) + "\n"
+    content = content[:inject_pos] + injection + content[inject_pos:]
+    print(f"[OK] Injected {len(TARGET_EXTS)} TARGET_EXTS at pos {inject_pos}")
+else:
+    print("[WARN] No injection point found — only Pass 2 changes applied")
+
+with open(tu_path, 'w', encoding='utf-8') as f:
+    f.write(content)
+
+# ── Final count ───────────────────────────────────────────────────────────────
+total_ptr    = len(re.findall(rf'\b\w+->{VENDORS}_\w+\s*=\s*true\s*;', content))
 total_struct = len(re.findall(rf'\.{VENDORS}_\w+\s*=\s*true\s*,?', content))
-total = total_ptr + total_struct
-print(f"[OK] FINAL: {total} extension fields set to true ({total_struct} struct-init, {total_ptr} pointer-assign)")
+print(f"[OK] FINAL: {total_ptr + total_struct} extension fields set to true")
+print(f"     ({total_struct} struct-init, {total_ptr} pointer-assign)")
 PYEOF
 
     log_success "Vulkan extensions support applied"
 }
+
 
 
 # ── Rob Clark fd/misc branch — a8xx_gen1 VPC sysmem buffer sizes ─────────────
@@ -1171,17 +1311,19 @@ for pat, rep in RT_PROPS.items():
 # VkPhysicalDeviceAccelerationStructureFeaturesKHR
 # VkPhysicalDeviceRayQueryFeaturesKHR
 RT_FEATURES = [
-    r'(rayTracingPipeline\s*=\s*)VK_FALSE',
-    r'(rayTracingPipelineTraceRaysIndirect\s*=\s*)VK_FALSE',
-    r'(rayTracingPipelineShaderGroupHandleCaptureReplay\s*=\s*)VK_FALSE',
-    r'(accelerationStructure\s*=\s*)VK_FALSE',
-    r'(accelerationStructureCapturereplay\s*=\s*)VK_FALSE',
-    r'(accelerationStructureIndirectBuild\s*=\s*)VK_FALSE',
-    r'(descriptorBindingAccelerationStructureUpdateAfterBind\s*=\s*)VK_FALSE',
-    r'(rayQuery\s*=\s*)VK_FALSE',
+    r'rayTracingPipeline\s*=\s*VK_FALSE',
+    r'rayTracingPipelineTraceRaysIndirect\s*=\s*VK_FALSE',
+    r'rayTracingPipelineShaderGroupHandleCaptureReplay\s*=\s*VK_FALSE',
+    r'accelerationStructure\s*=\s*VK_FALSE',
+    r'accelerationStructureCapturereplay\s*=\s*VK_FALSE',
+    r'accelerationStructureIndirectBuild\s*=\s*VK_FALSE',
+    r'descriptorBindingAccelerationStructureUpdateAfterBind\s*=\s*VK_FALSE',
+    r'rayQuery\s*=\s*VK_FALSE',
 ]
 for pat in RT_FEATURES:
-    new, n = re.subn(pat, pat.replace(r')VK_FALSE', r')VK_TRUE'), c)
+    # Use a lambda so the replacement is computed from match, never from pattern text
+    # (using pattern text as replacement causes bad escape on \s)
+    new, n = re.subn(pat, lambda m: m.group(0).replace('VK_FALSE', 'VK_TRUE'), c)
     if n: c = new; changed += n; print(f"  [RT-FEAT] {pat[:60]}")
 
 # ── 3. Stub vkCreateRayTracingPipelinesKHR → always VK_SUCCESS ───────────────

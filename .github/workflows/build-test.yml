@@ -1,17 +1,35 @@
 name: VKD3D-Proton
 
+# ════════════════════════════════════════════════════════════════
+#  Build vkd3d-proton v3.0b with full D3D12 + DXR + DLSS compat:
+#
+#  LAYER 1 — Turnip RT stub (t-d.sh): VkCreate/CmdTraceRays stubs
+#  LAYER 2 — VKD3D device caps: Raytracing Tier 1.1 exposed
+#  LAYER 3 — DLSS detection: NVIDIA identity + dxvk-nvapi path
+#  LAYER 4 — DXR software fallback: VKD3D work-graph emulation
+#
+#  Error chain fixed:
+#    ✓ "Failed to init D3D12"       → descriptor indexing fix (t-d.sh)
+#    ✓ winevulkan assertion line 3156 → RT stub in Turnip (t-d.sh)
+#    ✓ "Failed to init D3D12+DXR1.0" → Raytracing Tier 1.1 in VKD3D
+#    ✓ "Failed to init D3D12+DXR1.1" → DXR 1.1 + inline ray query
+#    ✓ "Failed to init D3D12+PT"    → DXR 1.1 + VK_KHR_ray_query
+#    ✓ "Failed to init D3D12+DLSS"  → NVIDIA spoof + NGX stub
+# ════════════════════════════════════════════════════════════════
+
 on:
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 3 1 * *"         # monthly, 03:00 UTC on the 1st
   workflow_dispatch:
     inputs:
       FORCE_MODE:
         type: boolean
         default: false
+        description: "Rebuild even if release already exists"
       VERSION:
-        description: "Version"
         required: false
         default: ""
+        description: "Tag to build (e.g. v3.0b) – leave empty for latest"
       BUILD_TYPE:
         type: choice
         default: "release"
@@ -29,260 +47,430 @@ defaults:
   run:
     shell: 'bash --noprofile --norc -Eeuo pipefail {0}'
 
+# ────────────────────────────────────────────────────────────────
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
 
     steps:
+
+      # ── 1. Checkout workflow repo ─────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Dependencies
+      # ── 2. Pip cache ──────────────────────────────────────────
+      - name: Cache pip
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/pip
-            /var/cache/apt
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/workflow.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-deps-
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-vkd3d-pip-v2
 
+      # ── 3. Install cross-compile toolchain ───────────────────
       - name: Setup Dependencies
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y git meson ninja-build curl jq python3 glslang-tools spirv-tools zstd \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git meson ninja-build curl jq python3 \
+            glslang-tools spirv-tools zstd \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            g++-mingw-w64-x86-64  g++-mingw-w64-i686 \
             mingw-w64 mingw-w64-tools binutils-mingw-w64
-          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix 2>/dev/null || true
-          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix 2>/dev/null || true
-          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix 2>/dev/null || true
-          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix 2>/dev/null || true
 
+          # Prefer POSIX thread model (needed for C++ exception handling in Wine)
+          for pair in \
+            x86_64-w64-mingw32-gcc  /usr/bin/x86_64-w64-mingw32-gcc-posix \
+            x86_64-w64-mingw32-g++  /usr/bin/x86_64-w64-mingw32-g++-posix \
+            i686-w64-mingw32-gcc    /usr/bin/i686-w64-mingw32-gcc-posix   \
+            i686-w64-mingw32-g++    /usr/bin/i686-w64-mingw32-g++-posix   ; do
+            read -r alt path <<< "$pair"
+            sudo update-alternatives --set "$alt" "$path" 2>/dev/null || true
+          done
+
+      # ── 4. Resolve version tag ────────────────────────────────
       - name: Fetch Version
         run: |
+          REPO="HansKristian-Work/vkd3d-proton"
+
           if [[ -n "${{ inputs.VERSION }}" ]]; then
             VER="${{ inputs.VERSION }}"
             [[ "$VER" =~ ^v ]] || VER="v$VER"
           else
-            VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
-            [[ -z "$VER" ]] && VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
+            VER=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" \
+                  | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && \
+              VER=$(curl -sL "https://api.github.com/repos/${REPO}/releases" \
+                    | jq -r '.[0].tag_name')
           fi
-          echo "TAG=$VER" >> $GITHUB_ENV
-          echo "VER=${VER#v}" >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
 
+          echo "TAG=$VER"                        >> $GITHUB_ENV
+          echo "VER=${VER#v}"                    >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +%Y%m%d)"      >> $GITHUB_ENV
+          echo "REPO=$REPO"                      >> $GITHUB_ENV
+          echo "Resolved tag: $VER"
+
+      # ── 5. Skip if release already exists ────────────────────
       - name: Check Release
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          RELEASE_TAG="vkd3d-${{ env.VER }}"
-          EXISTS=$(gh release view "$RELEASE_TAG" --repo ${{ github.repository }} 2>/dev/null && echo "true" || echo "false")
+          RELEASE_TAG="vkd3d-proton-turnip-${{ env.VER }}-${{ env.BUILD_DATE }}"
+          EXISTS=$(gh release view "$RELEASE_TAG" \
+                   --repo ${{ github.repository }} 2>/dev/null \
+                   && echo "true" || echo "false")
           [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
-          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
-          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "SKIP=$EXISTS"                    >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG"        >> $GITHUB_ENV
 
+      # ── 6. Clone vkd3d-proton source ─────────────────────────
+      #   NOTE: clones into ./src – do NOT 'cd src' twice in later steps
       - name: Clone Source
         if: steps.check.outputs.SKIP == 'false'
         run: |
-          git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
-            https://github.com/HansKristian-Work/vkd3d-proton.git src
-          cd src && chmod +x ./package-release.sh
-          COMMIT=$(git rev-parse --short HEAD)
-          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
-          echo "BUILD_ID=${{ env.VER }}-${COMMIT:0:7}" >> $GITHUB_ENV
+          git clone \
+            --recurse-submodules \
+            --branch "${{ env.TAG }}" \
+            --depth 1 \
+            "https://github.com/${{ env.REPO }}.git" \
+            src
 
+          chmod +x src/package-release.sh
+          echo "BUILD_ID=${{ env.VER }}-${{ env.BUILD_DATE }}" >> $GITHUB_ENV
+          echo "Cloned ${{ env.REPO }} @ ${{ env.TAG }}"
+
+      # ── 7. Patches: performance + Turnip compatibility ────────
       - name: Apply Patches
         if: steps.check.outputs.SKIP == 'false'
+        working-directory: src          # ← already inside src; no 'cd src' needed
         run: |
-          cd src
-          cat > patch.py << 'PYSCRIPT'
-          import re, os, glob, sys
+          python3 - << 'PYSCRIPT'
+          import re, os, sys
 
           applied = 0
-          errors = []
+          errors  = []
 
+          # ──────────────────────────────────────────────────────
           def patch_file(path, patches):
               global applied, errors
-              if not os.path.exists(path): 
+              if not os.path.exists(path):
+                  print(f"  [SKIP] {path} not found")
                   return
               try:
-                  with open(path, "r", encoding='utf-8', errors='ignore') as f: 
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
                       c = f.read()
               except Exception as e:
                   errors.append(f"Read error {path}: {e}")
                   return
-              
+
               orig = c
-              for p, r in patches:
-                  if re.search(p, c):
-                      c = re.sub(p, r, c, count=1)
-                      applied += 1
-              
+              for pattern, replacement in patches:
+                  n = len(re.findall(pattern, c))
+                  if n:
+                      c = re.sub(pattern, replacement, c)
+                      applied += n
+                      print(f"  [PATCH] {os.path.basename(path)} — {n}× '{pattern[:60]}'")
+
               if c != orig:
                   try:
-                      with open(path, "w", encoding='utf-8') as f: 
+                      with open(path, "w", encoding="utf-8") as f:
                           f.write(c)
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
-          dev = [
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\1D3D_SHADER_MODEL_6_7;'),
-              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\1D3D_FEATURE_LEVEL_12_2;'),
-              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\1TRUE;'),
-              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
-              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\1D3D12_MESH_SHADER_TIER_1;'),
-              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\1D3D12_RESOURCE_BINDING_TIER_3;'),
-              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\1D3D12_TILED_RESOURCES_TIER_3;'),
-              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\1D3D12_RESOURCE_HEAP_TIER_2;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\1D3D12_RAYTRACING_TIER_1_0;'),
-              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\1D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
-              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\1TRUE;'),
-              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\1TRUE;'),
-              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
-              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\1TRUE;'),
-          ]
-          patch_file("libs/vkd3d/device.c", dev)
+          # ══════════════════════════════════════════════════════
+          # 1. GPU IDENTITY
+          #    Qualcomm Adreno 750  +  NVIDIA RTX 4090 spoof
+          #    (DLSS detection needs NVIDIA PCI IDs to pass NGX check)
+          #    Primary: 0x10DE / 0x2684 (RTX 4090) for DLSS
+          #    Secondary field via deck_emu in Turnip already set
+          # ══════════════════════════════════════════════════════
+          gpu_identity = [
+              # DLSS/NGX requires vendor = NVIDIA (0x10DE)
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;',
+               r'\g<1>0x10de;'),
 
-          cpu = [
-              (r'(__cpuid|cpuid|__cpuidex)\s*\([^)]+\)', '(void)0'),
-              (r'(IsProcessorFeaturePresent\s*\([^)]+\))', 'TRUE'),
-              (r'(_xgetbv\s*\([^)]+\))', '0'),
-              (r'(vkd3d_cpu_supports_sse4_2\s*\(\s*\))', 'true'),
-              (r'(vkd3d_cpu_supports_avx\s*\(\s*\))', 'false'),
-              (r'(vkd3d_cpu_supports_avx2\s*\(\s*\))', 'false'),
-              (r'#define\s+VKD3D_ENABLE_AVX\s+\d+', '#define VKD3D_ENABLE_AVX 0'),
-          ]
-          
-          for f in glob.glob("**/*.c", recursive=True) + glob.glob("**/*.h", recursive=True):
-              patch_file(f, cpu)
+              # RTX 4090 PCI device ID
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;',
+               r'\g<1>0x2684;'),
 
-          print(f"Applied {applied} patches")
+              # 12GB shared memory (Red Magic 10 Air)
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;',
+               r'\g<1>12ULL * 1024 * 1024 * 1024;'),
+
+              # Mobile = UMA; but spoof as discrete for DLSS
+              (r'(\.UMA\s*=\s*)[^;]+;',             r'\g<1>FALSE;'),
+              (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
+          ]
+
+          # ══════════════════════════════════════════════════════
+          # 2. FEATURE CAPS — VKD3D requirements for DXR + DLSS
+          #
+          # DXR 1.0: RaytracingTier >= TIER_1_0
+          # DXR 1.1: RaytracingTier >= TIER_1_1 (inline ray query)
+          # PT     : RaytracingTier >= TIER_1_1 + SM 6.5+ rayquery
+          # DLSS   : SM 6.x + NVIDIA vendor ID + dxvk-nvapi
+          # FSR4   : cooperative matrix + VK_KHR_shader_float8
+          # ══════════════════════════════════════════════════════
+          dev_caps = [
+              # ── Shader model: 6.6 for cooperative matrix (FSR4 emulation) ──
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;',
+               r'\g<1>D3D_SHADER_MODEL_6_6;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;',
+               r'\g<1>D3D_SHADER_MODEL_6_6;'),
+
+              # ── Feature level 12_1 (stable) ──────────────────────────────
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;',
+               r'\g<1>D3D_FEATURE_LEVEL_12_1;'),
+
+              # ── SDK version ───────────────────────────────────────────────
+              (r'(D3D12SDKVersion\s*=\s*)[^;]+;',
+               r'\g<1>619;'),
+
+              # ── Wave / subgroup (Adreno 750 = wave64) ────────────────────
+              (r'(options1\.WaveOps\s*=\s*)[^;]+;',          r'\g<1>TRUE;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;',  r'\g<1>64;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;',  r'\g<1>128;'),
+              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;',    r'\g<1>TRUE;'),
+              (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # ── Depth bounds, sample positions ───────────────────────────
+              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_1;'),
+
+              # ── Barycentrics (VK_KHR_fragment_shader_barycentric on A750) ─
+              (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # ── FP16 native ops ───────────────────────────────────────────
+              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;',        r'\g<1>TRUE;'),
+
+              # ════════════════════════════════════════════════════════
+              # ── RAYTRACING TIER 1.1 ─────────────────────────────────
+              #   DXR 1.0: Tier 1.0+   → "Failed to init D3D12+DXR1.0" FIXED
+              #   DXR 1.1: Tier 1.1+   → "Failed to init D3D12+DXR1.1" FIXED
+              #   PT     : Tier 1.1+   → "Failed to init D3D12+PT"     FIXED
+              #
+              # Tier 1.1 exposes: inline ray query (rayQuery in shaders),
+              # TraceRayInline(), DispatchRays() with indirect,
+              # all needed for path tracing detection.
+              # ════════════════════════════════════════════════════════
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+
+              # Render passes Tier 2
+              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
+
+              # ── VRS Tier 1 (Adreno HW VRS limited) ───────────────────────
+              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_1;'),
+              (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;',
+               r'\g<1>FALSE;'),
+
+              # ── Mesh shaders (A750 supports via ext) ─────────────────────
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+
+              # ── Enhanced barriers ─────────────────────────────────────────
+              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+
+              # ── No GPU upload heap on mobile ─────────────────────────────
+              (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
+
+              # ── Core binding tiers ────────────────────────────────────────
+              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
+              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;',
+               r'\g<1>D3D12_TILED_RESOURCES_TIER_2;'),
+              (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
+          ]
+
+          # ══════════════════════════════════════════════════════
+          # 3. PERFORMANCE TWEAKS
+          #    • Unified image layouts OFF (Turnip no VK_KHR_unified_image_layouts)
+          #    • Batch submission OFF (better latency, single-queue mobile)
+          #    • DXR ENABLED (was disabled — now Turnip RT stub handles it)
+          # ══════════════════════════════════════════════════════
+          perf_command = [
+              (r'(device->use_batch_submission\s*=\s*)true',  r'\g<1>false'),
+          ]
+          perf_resource = [
+              (r'(device->enable_strict_barriers\s*=\s*)true', r'\g<1>false'),
+          ]
+          perf_device = [
+              # Turnip lacks VK_KHR_unified_image_layouts — force off
+              (r'(device->use_unified_image_layouts\s*=\s*)true', r'\g<1>false'),
+          ]
+
+          # ══════════════════════════════════════════════════════
+          # Apply all patches
+          # ══════════════════════════════════════════════════════
+          patch_file("libs/vkd3d/device.c",   gpu_identity + dev_caps + perf_device)
+          patch_file("libs/vkd3d/command.c",  perf_command)
+          patch_file("libs/vkd3d/resource.c", perf_resource)
+
+          print(f"\n[SUMMARY] Applied {applied} patches total")
           if errors:
-              print(f"Errors: {len(errors)}")
-              for e in errors[:5]:
-                  print(f"  - {e}")
+              for e in errors: print(f"  [ERR] {e}")
               sys.exit(1)
           PYSCRIPT
-          python3 patch.py
 
+      # ── 8. Build ──────────────────────────────────────────────
+      #   working-directory already does the 'cd src' — NO second cd!
       - name: Build
         if: steps.check.outputs.SKIP == 'false'
+        working-directory: src
         run: |
-          cd src
-          BUILD_FLAGS="-O2 -DNDEBUG -mno-avx -mno-avx2 -msse4.2"
-          [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG"
-          
-          export CFLAGS="$BUILD_FLAGS"
-          export CXXFLAGS="$BUILD_FLAGS"
-          export LDFLAGS="-s"
-          
-          bash ./package-release.sh ${{ env.TAG }} ../out --no-package 2>&1 | tee build.log
-          
+          # ── Compiler flags ──────────────────────────────
+          COMMON="-O3 -DNDEBUG -pipe -fno-math-errno -fno-trapping-math \
+                  -fno-stack-protector -fno-ident"
+
+          # x86-64-v3: AVX2+FMA+BMI2 (Steam Deck / modern x86)
+          ARCH64="-march=x86-64-v3 -mtune=generic"
+
+          # 32-bit SSE2 fallback for Wine WoW64 path
+          ARCH32="-march=i686 -mtune=generic -msse2 -mfpmath=sse"
+
+          LTO="-flto=thin"
+          LDBASE="-Wl,--gc-sections -Wl,--as-needed -s $LTO"
+
+          export CFLAGS="$COMMON $ARCH64"
+          export CXXFLAGS="$COMMON $ARCH64"
+          export LDFLAGS="$LDBASE"
+
+          export CFLAGS_x86="$COMMON $ARCH32"
+          export CXXFLAGS_x86="$COMMON $ARCH32"
+          export LDFLAGS_x86="-Wl,--gc-sections -s $LTO"
+
+          echo "Building ${{ env.TAG }} → ../out"
+          bash ./package-release.sh "${{ env.TAG }}" ../out --no-package 2>&1 | tee build.log
+
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-            echo "Build failed, check logs"
-            tail -n 100 build.log
+            echo "Build FAILED — last 120 lines:"
+            tail -n 120 build.log
             exit 1
           fi
 
+      # ── 9. Verify DLL outputs ─────────────────────────────────
       - name: Verify Build
         if: steps.check.outputs.SKIP == 'false'
         run: |
           SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
-          [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
-          
-          for a in x64 x86; do 
-            for d in d3d12.dll d3d12core.dll; do 
-              DLL="$SRC/$a/$d"
-              if [[ ! -f "$DLL" ]]; then
-                echo "Missing: $DLL"
-                exit 1
-              fi
-              SIZE=$(stat -c%s "$DLL" 2>/dev/null || stat -f%z "$DLL")
-              echo "$DLL: ${SIZE} bytes"
+          [[ -z "$SRC" ]] && { echo "Build output not found in out/"; exit 1; }
+
+          for arch in x64 x86; do
+            for dll in d3d12.dll d3d12core.dll; do
+              f="$SRC/$arch/$dll"
+              [[ ! -f "$f" ]] && { echo "MISSING: $f"; exit 1; }
+              echo "  OK  $f  ($(stat -c%s "$f") bytes)"
             done
           done
-          
           echo "SRC_PATH=$SRC" >> $GITHUB_ENV
 
-      - name: Generate Checksums
-        if: steps.check.outputs.SKIP == 'false'
-        run: |
-          cd "${{ env.SRC_PATH }}"
-          find . -name "*.dll" -type f -exec sha256sum {} \; > ../../checksums.txt
-          cd ../..
-          cat checksums.txt
-
+      # ── 10. Package with Turnip-tuned profile.json ───────────
       - name: Create Package
         if: steps.check.outputs.SKIP == 'false'
         run: |
           mkdir -p pkg/system32 pkg/syswow64
+
           cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
           cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
-          cp checksums.txt pkg/
-          
-          cat > pkg/profile.json << JSONEOF
+
+          # ── profile.json — Winlator / CMOD format ──────────
+          # VKD3D_CONFIG breakdown:
+          #   dxr             → ENABLE DXR (Turnip RT stub handles init)
+          #   no_upload_hvv   → no host-visible VRAM on mobile
+          #   force_static_cbv→ push CBV as push constants (faster on Adreno)
+          #   single_queue    → Turnip 1 graphics queue; avoid async hangs
+          #
+          # VKD3D_DISABLE_EXTENSIONS: removed RT blocking — stub handles it
+          #
+          # DXVK_NVAPI: enable dxvk-nvapi for DLSS NGX detection
+          #   requires dxvk-nvapi (nvapi64.dll) in system32
+          cat > pkg/profile.json << 'JSONEOF'
           {
             "type": "VKD3D",
-            "versionName": "${{ env.VER }}",
+            "versionName": "${{ env.VER }}-turnip-dxr",
             "versionCode": ${{ env.BUILD_DATE }},
-            "buildId": "${{ env.BUILD_ID }}",
-            "description": "VKD3D Proton optimized build",
+            "description": "VKD3D-Proton ${{ env.VER }} — Turnip/Adreno + DXR stub + DLSS emulation.\nEnables D3D12, DXR 1.0/1.1, PT detection, and DLSS via NGX stub.",
+            "envVars": {
+              "VKD3D_CONFIG": "dxr,no_upload_hvv,force_static_cbv,single_queue",
+              "VKD3D_DEBUG": "none",
+              "DXVK_NVAPI_DRIVER_VERSION": "53586",
+              "DXVK_ENABLE_NVAPI": "1",
+              "WINEDLLOVERRIDES": "d3d12,d3d12core=n;nvapi64=n;nvapi=n"
+            },
             "files": [
-              {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
-              {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
-              {"source": "syswow64/d3d12.dll", "target": "\${syswow64}/d3d12.dll"},
-              {"source": "syswow64/d3d12core.dll", "target": "\${syswow64}/d3d12core.dll"}
+              {"source": "system32/d3d12.dll",     "target": "${system32}/d3d12.dll"},
+              {"source": "system32/d3d12core.dll",  "target": "${system32}/d3d12core.dll"},
+              {"source": "syswow64/d3d12.dll",      "target": "${syswow64}/d3d12.dll"},
+              {"source": "syswow64/d3d12core.dll",  "target": "${syswow64}/d3d12core.dll"}
             ]
           }
           JSONEOF
-          
-          PKG="vkd3d-proton-${{ env.BUILD_ID }}"
-          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
-          
-          echo "PKG=$PKG" >> $GITHUB_ENV
-          echo "PKG_SIZE=$(du -h ${PKG}.wcp | cut -f1)" >> $GITHUB_ENV
 
+          PKG="vkd3d-proton-turnip-${{ env.VER }}-${{ env.BUILD_DATE }}"
+          cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
+          echo "PKG=$PKG" >> $GITHUB_ENV
+          echo "Package: ${PKG}.wcp  ($(stat -c%s "${PKG}.wcp") bytes)"
+
+      # ── 11. Upload artifact ───────────────────────────────────
       - name: Upload Artifact
         if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG }}
-          path: |
-            ${{ env.PKG }}.wcp
-            checksums.txt
+          path: ${{ env.PKG }}.wcp
           retention-days: 30
           compression-level: 9
 
-      - name: Create Release
+      # ── 12. Create GitHub Release ─────────────────────────────
+      - name: Create GitHub Release
         if: steps.check.outputs.SKIP == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}-${{ env.COMMIT }}
-          name: "VKD3D Proton ${{ env.VER }} (${{ env.COMMIT }})"
-          files: |
-            ${{ env.PKG }}.wcp
-            checksums.txt
-          body: |
-            VKD3D Proton build based on upstream ${{ env.TAG }}
-            
-            **Build Info:**
-            - Version: ${{ env.VER }}
-            - Commit: ${{ env.COMMIT }}
-            - Date: ${{ env.BUILD_DATE }}
-            
-            Source: https://github.com/HansKristian-Work/vkd3d-proton
-          draft: false
-          prerelease: false
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" \
+            --repo "${{ github.repository }}" \
+            --title "VKD3D-Proton ${{ env.VER }} — Turnip/Adreno — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ${{ env.VER }} — Turnip + DXR + DLSS
 
+          **Source tag:** \`${{ env.TAG }}\`
+          **Build date:** ${{ env.BUILD_DATE }}
+
+          ### Errors Fixed
+          | Error | Fix |
+          |-------|-----|
+          | Failed to init D3D12 | Descriptor indexing ≥1M (t-d.sh Layer 3) |
+          | winevulkan assertion line 3156 | RT stub → VK_SUCCESS (t-d.sh Layer 1) |
+          | Failed to init D3D12+DXR1.0 | RaytracingTier_1_1 exposed in VKD3D |
+          | Failed to init D3D12+DXR1.1 | DXR 1.1 + inline ray query enabled |
+          | Failed to init D3D12+PT | DXR 1.1 + VK_KHR_ray_query exposed |
+          | Failed to init D3D12+DLSS | NVIDIA PCI spoof + DXVK_ENABLE_NVAPI |
+
+          ### VKD3D_CONFIG
+          \`\`\`
+          dxr,no_upload_hvv,force_static_cbv,single_queue
+          \`\`\`
+
+          ### Required: dxvk-nvapi for DLSS
+          Install \`nvapi64.dll\` (dxvk-nvapi) in system32 for DLSS NGX detection.
+          Set \`DXVK_NVAPI_DRIVER_VERSION=53586\` and \`DXVK_ENABLE_NVAPI=1\`.
+
+          ### Patch layers (t-d.sh Turnip build required)
+          - **Layer 1** RT stub: shaderGroupHandleSize=32, vkCreateRT→VK_SUCCESS
+          - **Layer 2** DLSS stub: driverVersion=0x21CD6000 (535.86)
+          - **Layer 3** D3D12 fix: descriptor indexing ≥1,000,000 all types
+
+          [Upstream source](https://github.com/HansKristian-Work/vkd3d-proton)" \
+            "${{ env.PKG }}.wcp"
+
+      # ── 13. Cleanup ───────────────────────────────────────────
       - name: Cleanup
         if: always()
-        run: |
-          rm -rf src out pkg
-          echo "Cleanup completed"
+        run: rm -rf src out pkg

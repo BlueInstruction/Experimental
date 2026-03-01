@@ -760,7 +760,7 @@ ext_assign_pat = rf'(\b(\w+)->({VENDORS})(_\w+)\s*=\s*)([^;{{}}]+)(;)'
 forced_exts = set()
 def force_true(m):
     forced_exts.add(m.group(3) + m.group(4))
-    return m.group(1) + 'true' + m.group(7)
+    return m.group(1) + 'true' + m.group(6)
 
 content = re.sub(ext_assign_pat, force_true, content)
 print(f"[OK] Pass 2: Force-set {len(forced_exts)} unique extension fields to true")
@@ -931,13 +931,14 @@ PYEOF
 }
 
 # ── Rob Clark fd/misc branch — Reduce advertised memory ──────────────────────
-# Mesa was over-reporting available heap size on Android; this aligns it with
-# what the kernel actually allows to map (typically 50-75% of device RAM).
-# Reduces OOM kills and improves stability on lower-RAM devices.
+# Red Magic 10 Air — SD 8 Gen 3 (A750/a8xx gen1), 12GB LPDDR5X
+# Physical: 12GB = 12884901888 bytes
+# Android usable: ~75% = 9663676416 (~9GB)
+# Mesa should advertise 9GB max, not 12GB (avoids OOM kills)
 apply_reduce_advertised_memory() {
     local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_dev" ]] && { log_warn "tu_device.cc not found"; return 0; }
-    if grep -q "reduce_advertised_mem\|REDUCED_HEAP\|heap_size.*75\|heap_size.*3.*4" "$tu_dev"; then
+    if grep -q "REDUCED_HEAP_CAP\|heap_size.*3 \/ 4\|heap_size.*75" "$tu_dev"; then
         log_info "Reduced memory already applied"
         return 0
     fi
@@ -946,36 +947,107 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-# The upstream commit reduces the advertised heap size by capping it at 75%
-# of total system memory (matching Android's actual addressable limit).
-# Pattern: find where heap_size is set from total memory and apply the cap.
+# SD 8 Gen 3 (A750) on Red Magic 10 Air has 12GB LPDDR5X
+# Android's mmap limit is ~75% of physical RAM
+# Cap all Vulkan heap size reports to 75% of what the kernel reports
 changed = 0
 
-# Strategy A: find existing heap size setting and add a 75% cap
-# Common pattern: heap_size = device->heap_size or similar
-patterns = [
-    # tu_physical_device: heap_size set from gmem or memory total
-    (r'((?:heap|memory)_size\s*=\s*)([^;]+)(;\s*\n)',
-     r'\1((\2) * 3 / 4)\3'),  # cap at 75%
-    # VkPhysicalDeviceMemoryProperties heapSize field
-    (r'(\.heapSize\s*=\s*)([^,}\n]+)([,}])',
-     r'\1((\2) * 3 / 4)\3'),
-]
+# Pattern 1: .heapSize = <expr>  in VkPhysicalDeviceMemoryProperties
+new, n = re.subn(
+    r'(\.heapSize\s*=\s*)([^,};\n]+)',
+    r'\1((\2) * 3 / 4)  /* REDUCED_HEAP_CAP: 75% of physical */',
+    c, count=2  # up to 2 heap entries (device-local + host-visible)
+)
+if n:
+    c = new; changed += n
+    print(f"[OK] .heapSize capped at 75% ({n} entries)")
 
-for pat, rep in patterns:
-    new, n = re.subn(pat, rep, c, count=1)
+# Pattern 2: explicit heap_size variable assignment
+if not changed:
+    new, n = re.subn(
+        r'((?:heap|memory)_size\s*=\s*)(total_mem\w*|avail_mem\w*|mem_size\w*|[a-z_]*size[a-z_]*\s*[^;]{0,60})(;)',
+        r'\1((\2) * 3 / 4) /* REDUCED_HEAP_CAP */\3',
+        c, count=1
+    )
     if n:
-        c = new
-        changed += n
-        print(f"[OK] Applied 75% heap cap (pattern matched {n}x)")
-        break
+        c = new; changed += n
+        print(f"[OK] heap_size variable capped at 75%")
 
 if not changed:
-    print("[WARN] No heap size pattern found — skipping reduce-memory patch")
+    print("[WARN] No heap size pattern found — memory cap skipped")
 
 with open(fp, 'w') as f: f.write(c)
 PYEOF
-    log_success "Reduced advertised memory applied"
+    log_success "Reduced advertised memory applied (SD 8 Gen 3 / 12GB optimized)"
+}
+
+
+# ── SD 8 Gen 3 (A750 / a8xx gen1) device-specific tuning ─────────────────────
+# Red Magic 10 Air: SD 8 Gen 3, 12GB LPDDR5X, Adreno 750
+# A750 supports:
+#   - 1MB GMEM (largest of any Adreno)
+#   - Hardware ray tracing (gen1 BVH engine)
+#   - AV1 HW decode + encode
+#   - Hardware mesh shaders
+#   - AFBC 4.0 / UBWC 4.0
+#   - subgroupSize = 64 (wave64)
+apply_sd8gen3_tuning() {
+    local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$devfile" ]] && { log_warn "freedreno_devices.py not found"; return 0; }
+
+    python3 - "$devfile" "$tu_dev" << 'PYEOF'
+import sys, re
+
+devfile_path = sys.argv[1]
+tu_path = sys.argv[2]
+
+with open(devfile_path) as f: dev = f.read()
+
+# ── Ensure a750 / a8xx_gen1 has correct GMEM size (1MB = 1048576) ──────────
+# Mesa may default this lower; A750 physically has 1MB GMEM
+gmem_pat = r'(a8xx_gen1\s*=\s*GPUProps\s*\([^\)]*?)(gmem_size\s*=\s*)(\d+)'
+m = re.search(gmem_pat, dev, re.DOTALL)
+if m:
+    if int(m.group(3)) < 1048576:
+        dev = dev[:m.start(3)] + '1048576' + dev[m.end(3):]
+        print(f"[OK] Corrected a8xx_gen1 gmem_size to 1MB (was {m.group(3)})")
+    else:
+        print(f"[INFO] a8xx_gen1 gmem_size already {m.group(3)}")
+else:
+    print("[INFO] gmem_size field not found in a8xx_gen1 (may be inherited)")
+
+with open(devfile_path, 'w') as f: f.write(dev)
+
+# ── In tu_device.cc: set subgroupSize = 64 for A750 ───────────────────────
+# A750 uses wave64; reporting 128 (wave128 mode) limits some optimizations
+if tu_path and tu_path != 'none':
+    with open(tu_path) as f: tu = f.read()
+
+    # Adjust max subgroup size advertised for A750
+    n = 0
+    new, n1 = re.subn(
+        r'(subgroupSize\s*=\s*)(\d+)',
+        lambda m: m.group(1) + '64' if int(m.group(2)) > 64 else m.group(0),
+        tu
+    )
+    if n1: tu = new; n += n1; print(f"[OK] subgroupSize capped to 64 ({n1} instances)")
+
+    # Force maxComputeWorkGroupSize to max for A750 (1024 per dim)
+    new, n2 = re.subn(
+        r'(maxComputeWorkGroupSize\[0\]\s*=\s*)(\d+)',
+        r'\g<1>1024',
+        tu
+    )
+    if n2: tu = new; n += n2; print(f"[OK] maxComputeWorkGroupSize[0] = 1024")
+
+    if n == 0:
+        print("[INFO] No tu_device.cc tuning applied (patterns not found)")
+
+    with open(tu_path, 'w') as f: f.write(tu)
+
+PYEOF
+    log_success "SD 8 Gen 3 (A750) device tuning applied"
 }
 
 apply_patches() {
@@ -1009,6 +1081,7 @@ apply_patches() {
         # Rob Clark upstream patches (always apply when building a8xx)
         if [[ "$TARGET_GPU" == "a8xx" ]]; then
             apply_a8xx_vpc_props
+            apply_sd8gen3_tuning
         fi
         apply_reduce_advertised_memory
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then

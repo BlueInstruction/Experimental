@@ -382,52 +382,266 @@ apply_a6xx_query_fix() {
 apply_a8xx_device_support() {
     log_info "Applying A8xx device support (FD810/825/829/830)"
     local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    local devinfo="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
+    local cmd_buf="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    local gmem_h="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-    
-    if [[ -f "$knl_kgsl" ]]; then
-        if ! grep -q "case 5:" "$knl_kgsl"; then
-             sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
-             log_success "Added UBWC 5/6 support"
-        fi
+    local gralloc_c="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
+
+    if [[ -f "$knl_kgsl" ]] && ! grep -q "case 5:" "$knl_kgsl"; then
+        sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
+        log_success "UBWC 5/6 support added"
     fi
-    
-    if [[ -f "$devfile" ]]; then
-        python3 - "$devfile" << 'PYEOF'
+
+    if [[ -f "$gralloc_c" ]] && grep -q "gmsm" "$gralloc_c"; then
+        python3 - "$gralloc_c" << 'GRALLOC_PY'
 import sys, re
 fp = sys.argv[1]
-with open(fp) as f: content = f.read()
+with open(fp) as f: c = f.read()
+old = re.search(r'uint32_t gmsm.*?out->modifier[^\n]+\n', c, re.DOTALL)
+if old:
+    repl = ('   bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;\n'
+            '   out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;\n')
+    c = c[:old.start()] + repl + c[old.end():]
+    print("[OK] u_gralloc UBWC always-detect applied")
+with open(fp, 'w') as f: f.write(c)
+GRALLOC_PY
+    fi
 
-if "add_gpus([\\n        GPUId(chip_id=0x44050000" not in content and "FD830" not in content:
-    props_code = """
-a8xx_gen1 = GPUProps(reg_size_vec4 = 96, disable_gmem = True)
-a8xx_gen2 = GPUProps(reg_size_vec4 = 128, has_salu_int_narrowing_quirk = True)
-a8xx_830 = GPUProps(disable_gmem = True, has_fs_tex_prefetch = False)
-a8xx_825 = GPUProps()
-a8xx_810 = GPUProps(disable_gmem = True, has_ray_intersection = False, has_sw_fuse = False)
-a8xx_829 = GPUProps(disable_gmem = True)
-"""
-    content += "\n" + props_code
-    
-    add_gpus_code = """
-add_gpus([GPUId(chip_id=0x44050000, name="FD830"), GPUId(chip_id=0x44050001, name="FD830v2")], 
-    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_830], num_ccu=6, num_slices=3, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
-add_gpus([GPUId(chip_id=0x44030000, name="FD825")], 
-    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_825], num_ccu=4, num_slices=2, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
-add_gpus([GPUId(chip_id=0x44010000, name="FD810")], 
-    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_810], num_ccu=2, num_slices=1, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
-add_gpus([GPUId(chip_id=0x44030A00, name="FD829"), GPUId(chip_id=0x44030A20, name="FD829")], 
-    A6xxGPUInfo(CHIP.A8XX, [a7xx_base, a7xx_gen3, a8xx_base, a8xx_829], num_ccu=4, num_slices=2, tile_align_w=64, tile_align_h=32, tile_max_w=16384, tile_max_h=16384, num_vsc_pipes=32, cs_shared_mem_size=32*1024, wave_granularity=2, fibers_per_sp=128*2*16, raw_magic_regs=a8xx_gen2_raw_magic_regs))
-"""
-    content += "\n" + add_gpus_code
-    print("[OK] Injected A8xx definitions")
+    if [[ -f "$devinfo" ]] && ! grep -q "disable_gmem" "$devinfo"; then
+        sed -i 's/bool has_image_processing;/bool has_image_processing;\n      bool disable_gmem;/' "$devinfo" 2>/dev/null || true
+        log_success "disable_gmem field added to freedreno_dev_info.h"
+    fi
+
+    if [[ -f "$cmd_buf" ]] && ! grep -q "disable_gmem" "$cmd_buf"; then
+        python3 - "$cmd_buf" << 'CMDBUF_PY'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+insert = ('\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n'
+          '      cmd->state.rp.gmem_disable_reason = "Unsupported GPU";\n'
+          '      return true;\n'
+          '   }\n')
+for pat in [r'(/\* can.t fit attachments into gmem \*/)', r'(if \(!cmd->state\.tiling->possible\))']:
+    new, n = re.subn(pat, insert + r'\1', c, count=1)
+    if n:
+        c = new
+        print("[OK] disable_gmem check added to tu_cmd_buffer.cc")
+        break
 else:
-    print("[INFO] A8xx definitions seem present")
+    print("[WARN] Could not add disable_gmem check")
+with open(fp, 'w') as f: f.write(c)
+CMDBUF_PY
+    fi
 
-with open(fp, 'w') as f: f.write(content)
-PYEOF
+    if [[ -f "$tu_dev" ]] && grep -q "TU_DEBUG_FLUSHALL" "$tu_dev" && ! grep -q "FLUSHALL.*commented" "$tu_dev"; then
+        python3 - "$tu_dev" << 'FLUSH_PY'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+new, n = re.subn(r'[ \t]*tu_env\.debug \|= TU_DEBUG_FLUSHALL;[^\n]*\n', '', c, count=1)
+if n:
+    c = new
+    print("[OK] FLUSHALL removed for gen8")
+with open(fp, 'w') as f: f.write(c)
+FLUSH_PY
+    fi
+
+    if [[ -f "$gmem_h" ]]; then
+        sed -i 's/if (info->chip >= 8)$/if (info->chip >= 8 \&\& info->num_slices > 1)/' "$gmem_h" 2>/dev/null || true
+        log_success "GMEM offset fix applied for single-slice GPUs"
+    fi
+
+    if [[ -f "$devfile" ]]; then
+        python3 - "$devfile" << 'DEVPY'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+if 'A8XX_DEVICES_APPLIED' in c:
+    print("[INFO] A8xx device defs already applied")
+    sys.exit(0)
+
+if 'a8xx_gen1 = GPUProps' not in c:
+    ins = ('\na8xx_gen1 = GPUProps(\n'
+           '        reg_size_vec4 = 96,\n'
+           '        disable_gmem = True,\n'
+           ')\n\n')
+    c, n = re.subn(r'(a8xx_gen2\s*=\s*GPUProps\s*\()', ins + r'\1', c, count=1)
+    if n: print("[OK] a8xx_gen1 GPUProps added")
+
+if 'a8xx_830 = GPUProps' not in c:
+    props = (
+        '\na8xx_830 = GPUProps(\n'
+        '        sysmem_vpc_attr_buf_size = 131072,\n'
+        '        sysmem_vpc_pos_buf_size = 65536,\n'
+        '        sysmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        sysmem_per_ccu_color_cache_size = 128 * 1024,\n'
+        '        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,\n'
+        '        sysmem_per_ccu_depth_cache_size = 192 * 1024,\n'
+        '        gmem_vpc_attr_buf_size = 49152,\n'
+        '        gmem_vpc_pos_buf_size = 24576,\n'
+        '        gmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,\n'
+        '        gmem_per_ccu_color_cache_size = 16 * 1024,\n'
+        '        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        gmem_per_ccu_depth_cache_size = 256 * 1024,\n'
+        '        has_fs_tex_prefetch = False,\n'
+        '        disable_gmem = True,\n'
+        ')\n'
+        '\na8xx_825 = GPUProps(\n'
+        '        sysmem_vpc_attr_buf_size = 131072,\n'
+        '        sysmem_vpc_pos_buf_size = 65536,\n'
+        '        sysmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        sysmem_per_ccu_color_cache_size = 128 * 1024,\n'
+        '        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,\n'
+        '        sysmem_per_ccu_depth_cache_size = 96 * 1024,\n'
+        '        gmem_vpc_attr_buf_size = 49152,\n'
+        '        gmem_vpc_pos_buf_size = 24576,\n'
+        '        gmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,\n'
+        '        gmem_per_ccu_color_cache_size = 16 * 1024,\n'
+        '        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        gmem_per_ccu_depth_cache_size = 127 * 1024,\n'
+        ')\n'
+        '\na8xx_829 = GPUProps(\n'
+        '        sysmem_vpc_attr_buf_size = 131072,\n'
+        '        sysmem_vpc_pos_buf_size = 65536,\n'
+        '        sysmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        sysmem_per_ccu_color_cache_size = 128 * 1024,\n'
+        '        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,\n'
+        '        sysmem_per_ccu_depth_cache_size = 96 * 1024,\n'
+        '        gmem_vpc_attr_buf_size = 49152,\n'
+        '        gmem_vpc_pos_buf_size = 24576,\n'
+        '        gmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,\n'
+        '        gmem_per_ccu_color_cache_size = 16 * 1024,\n'
+        '        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        gmem_per_ccu_depth_cache_size = 127 * 1024,\n'
+        '        disable_gmem = True,\n'
+        ')\n'
+        '\na8xx_810 = GPUProps(\n'
+        '        sysmem_vpc_attr_buf_size = 131072,\n'
+        '        sysmem_vpc_pos_buf_size = 65536,\n'
+        '        sysmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        sysmem_per_ccu_color_cache_size = 32 * 1024,\n'
+        '        sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,\n'
+        '        sysmem_per_ccu_depth_cache_size = 32 * 1024,\n'
+        '        gmem_vpc_attr_buf_size = 49152,\n'
+        '        gmem_vpc_pos_buf_size = 24576,\n'
+        '        gmem_vpc_bv_pos_buf_size = 32768,\n'
+        '        gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,\n'
+        '        gmem_per_ccu_color_cache_size = 16 * 1024,\n'
+        '        gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,\n'
+        '        gmem_per_ccu_depth_cache_size = 64 * 1024,\n'
+        '        has_ray_intersection = False,\n'
+        '        has_sw_fuse = False,\n'
+        '        disable_gmem = True,\n'
+        ')\n'
+    )
+    c, n = re.subn(r'(# For a8xx, the chicken bit)', props + r'\1', c, count=1)
+    if n:
+        print("[OK] a8xx GPU props added")
+    else:
+        c += '\n' + props
+        print("[OK] a8xx GPU props appended")
+
+old_stub = re.search(
+    r'# Totally fake[^\n]*\nadd_gpus\(\[\s*GPUId\(chip_id=0x44050000[^)]+\),?\s*\],\s*A6xxGPUInfo\(\s*CHIP\.A8XX,\s*\[a7xx_base,\s*a7xx_gen3,\s*a8xx_base\][^)]*\)\)',
+    c, re.DOTALL)
+if old_stub:
+    replacement = (
+        'add_gpus([\n'
+        '        GPUId(chip_id=0x44050000, name="FD830"),\n'
+        '        GPUId(chip_id=0x44050001, name="FD830v2"),\n'
+        '    ], A6xxGPUInfo(\n'
+        '        CHIP.A8XX,\n'
+        '        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_830],\n'
+        '        num_ccu = 6, num_slices = 3,\n'
+        '        tile_align_w = 64, tile_align_h = 32,\n'
+        '        tile_max_w = 16384, tile_max_h = 16384,\n'
+        '        num_vsc_pipes = 32, cs_shared_mem_size = 32 * 1024,\n'
+        '        wave_granularity = 2, fibers_per_sp = 128 * 2 * 16,\n'
+        '        magic_regs = dict(),\n'
+        '        raw_magic_regs = a8xx_gen2_raw_magic_regs,\n'
+        '    ))'
+    )
+    c = c[:old_stub.start()] + replacement + c[old_stub.end():]
+    print("[OK] FD830 stub replaced with FD830/FD830v2")
+
+def inject_before_840(c, block, marker):
+    if marker in c:
+        return c, False
+    pat = r'(add_gpus\(\[\s*GPUId\(chip_id=0xffff44050A31)'
+    import re as re2
+    new, n = re2.subn(pat, block + r'\1', c, count=1)
+    return (new, True) if n else (c + block, True)
+
+fd825 = (
+    '\nadd_gpus([\n'
+    '        GPUId(chip_id=0x44030000, name="FD825"),\n'
+    '    ], A6xxGPUInfo(\n'
+    '        CHIP.A8XX,\n'
+    '        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_825],\n'
+    '        num_ccu = 4, num_slices = 2,\n'
+    '        tile_align_w = 64, tile_align_h = 32,\n'
+    '        tile_max_w = 16384, tile_max_h = 16384,\n'
+    '        num_vsc_pipes = 32, cs_shared_mem_size = 32 * 1024,\n'
+    '        wave_granularity = 2, fibers_per_sp = 128 * 2 * 16,\n'
+    '        magic_regs = dict(), raw_magic_regs = a8xx_gen2_raw_magic_regs,\n'
+    '    ))\n\n'
+)
+c, ok = inject_before_840(c, fd825, 'chip_id=0x44030000')
+if ok: print("[OK] FD825 added")
+
+fd810 = (
+    '\nadd_gpus([\n'
+    '        GPUId(chip_id=0x44010000, name="FD810"),\n'
+    '    ], A6xxGPUInfo(\n'
+    '        CHIP.A8XX,\n'
+    '        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_gen1, a8xx_810],\n'
+    '        num_ccu = 2, num_slices = 1,\n'
+    '        tile_align_w = 64, tile_align_h = 32,\n'
+    '        tile_max_w = 16384, tile_max_h = 16384,\n'
+    '        num_vsc_pipes = 32, cs_shared_mem_size = 32 * 1024,\n'
+    '        wave_granularity = 2, fibers_per_sp = 128 * 2 * 16,\n'
+    '        magic_regs = dict(), raw_magic_regs = a8xx_gen2_raw_magic_regs,\n'
+    '    ))\n\n'
+)
+c, ok = inject_before_840(c, fd810, 'chip_id=0x44010000')
+if ok: print("[OK] FD810 added")
+
+fd829 = (
+    '\nadd_gpus([\n'
+    '    GPUId(chip_id=0x44030A00, name="FD829"),\n'
+    '    GPUId(chip_id=0x44030A20, name="FD829"),\n'
+    '    GPUId(chip_id=0xffff44030A00, name="FD829"),\n'
+    '    ], A6xxGPUInfo(\n'
+    '        CHIP.A8XX,\n'
+    '        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_829],\n'
+    '        num_ccu = 4, num_slices = 2,\n'
+    '        tile_align_w = 64, tile_align_h = 32,\n'
+    '        tile_max_w = 16384, tile_max_h = 16384,\n'
+    '        num_vsc_pipes = 32, cs_shared_mem_size = 32 * 1024,\n'
+    '        wave_granularity = 2, fibers_per_sp = 128 * 2 * 16,\n'
+    '        magic_regs = dict(), raw_magic_regs = a8xx_gen2_raw_magic_regs,\n'
+    '    ))\n\n'
+)
+c, ok = inject_before_840(c, fd829, 'chip_id=0x44030A00')
+if ok: print("[OK] FD829 added")
+
+c += '\n# A8XX_DEVICES_APPLIED\n'
+with open(fp, 'w') as f: f.write(c)
+DEVPY
     fi
     log_success "A8xx support applied"
 }
+
 
 apply_vulkan_extensions_support() {
     log_info "Enabling ALL Vulkan extensions and D3D features"
@@ -500,7 +714,15 @@ feats=[
     "vulkanMemoryModel", "vulkanMemoryModelDeviceScope", "vulkanMemoryModelAvailabilityVisibilityChains",
     "shaderOutputViewportIndex", "shaderOutputLayer", "subgroupBroadcastDynamicId",
     "subgroupSizeControl", "computeFullSubgroups", "synchronization2",
-    "shaderIntegerFunctions2", "shaderDemoteToHelperInvocation"
+    "shaderIntegerFunctions2", "shaderDemoteToHelperInvocation",
+    "descriptorBindingSampledImageUpdateAfterBind",
+    "descriptorBindingStorageImageUpdateAfterBind",
+    "descriptorBindingStorageBufferUpdateAfterBind",
+    "descriptorBindingPartiallyBound",
+    "descriptorBindingVariableDescriptorCount",
+    "runtimeDescriptorArray",
+    "bufferDeviceAddress", "timelineSemaphore",
+    "dynamicRendering", "synchronization2", "maintenance4"
 ]
 nf=0
 for p in feats:
@@ -509,6 +731,29 @@ for p in feats:
     new,n=re.subn(rf'(\.{re.escape(p)}\s*=\s*)([^;,\n]+)([;,\n])',r'\1true\3',content)
     if n: content=new; nf+=n
 print(f"[OK] Forced {nf} feature flags to true")
+
+# Boost descriptor limits for VKD3D-proton (requires >= 1,000,000)
+DESC_LIMITS = [
+    (r'(maxDescriptorSetUpdateAfterBindSamplers\s*=\s*)(\d+)', 1000000),
+    (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*=\s*)(\d+)', 1000000),
+    (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*=\s*)(\d+)', 1000000),
+    (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*=\s*)(\d+)', 1000000),
+    (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*=\s*)(\d+)', 1048576),
+    (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*=\s*)(\d+)', 1048576),
+    (r'(maxPerStageUpdateAfterBindResources\s*=\s*)(\d+)', 1048576),
+]
+nd = 0
+for pat, minval in DESC_LIMITS:
+    def _rep(m, mv=minval, p=pat):
+        try:
+            if int(m.group(2)) < mv:
+                return m.group(1) + str(mv)
+        except Exception:
+            pass
+        return m.group(0)
+    new, n = re.subn(pat, _rep, content)
+    if n: content = new; nd += n
+print(f"[OK] Descriptor limits boosted: {nd} change(s)")
 
 # --- PASS 2: Inject Extension Strings (Hardcoded List) ---
 ALL_EXTS = [
@@ -625,7 +870,7 @@ INST_ONLY={
 # These are extensions that we forced previously but Turnip does NOT implement.
 # Enabling them causes games to call unimplemented functions and crash (e.g. vkSetLatencySleepModeNV).
 BLACKLIST={
-    "VK_NV_low_latency", "VK_NV_low_latency2",        # Nvidia Reflex (Causes Ghost of Tsushima crash)
+    "VK_NV_low_latency", "VK_NV_low_latency2",        # Nvidia Reflex (crash)
     "VK_NV_optical_flow",                              # Hardware optical flow
     "VK_NV_ray_tracing", "VK_NV_ray_tracing_motion_blur", # RTX specific
     "VK_NV_mesh_shader",                               # Proprietary mesh shaders (Turnip uses EXT_mesh_shader)
@@ -660,16 +905,16 @@ def find_point(text):
                 if text[p]=='{': d+=1
                 elif text[p]=='}': d-=1
                 p+=1
-            return ev,p-1
+            return ev, p
     return None, None
 
 ev, ins = find_point(content)
 if ev:
     print(f"[OK] ext_var='{ev}'")
-    lines=["\n    // === ALL VULKAN EXTENSIONS FORCED (320+) ==="]
+    lines=["\n"]
     for e in dev_exts:
-        lines.append(f"    {ev}->{e[3:]} = true;")  # strip VK_
-    lines.append("    // === END ===\n")
+        lines.append(f"    {ev}->{e[3:]} = true;")
+    lines.append("\n")
     inj="\n".join(lines)
     content=content[:ins]+inj+content[ins:]
     print(f"[OK] Done — {len(dev_exts)} assignments written")
@@ -679,6 +924,29 @@ else:
 with open(tu_path,'w') as f: f.write(content)
 PYEOF
     log_success "Vulkan extensions support applied"
+}
+
+apply_reduce_advertised_memory() {
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_dev" ]] && return 0
+    if grep -q "REDUCE_MEMORY_APPLIED" "$tu_dev"; then
+        log_info "Memory reduction already applied"
+        return 0
+    fi
+    python3 - "$tu_dev" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(\.size\s*=\s*)(heap_size|[a-zA-Z_]+_size)(\s*[,;])'
+new, n = re.subn(pat, r'\g<1>( * 3 / 4)', c)
+if n:
+    c = new
+    print(f"[OK] Memory reduction applied: {n} heap(s) capped at 75%")
+c = c.replace('#include "tu_device.h"', '#include "tu_device.h"
+/* REDUCE_MEMORY_APPLIED */', 1)
+with open(fp, 'w') as f: f.write(c)
+PYEOF
+    log_success "Memory reduction applied"
 }
 
 apply_patches() {
@@ -698,6 +966,7 @@ apply_patches() {
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
         apply_a8xx_device_support
+        apply_reduce_advertised_memory
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
     fi
 

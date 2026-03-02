@@ -48,7 +48,6 @@ check_deps() {
             exit 1
         fi
     done
-    # Verify NDK early
     if [[ ! -d "${NDK_PATH}" ]]; then
         log_error "NDK not found at ${NDK_PATH}. Please set NDK_PATH correctly."
         exit 1
@@ -442,10 +441,8 @@ apply_vulkan_extensions_support() {
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
 # Lower API levels
 c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lambda m: m.group(1)+'1'+m.group(3), c)
-
 # Inject extensions SAFELY into the dictionary
 # Find vk_api_extensions = { ... }
 m = re.search(r'(vk_api_extensions\s*=\s*\{)', c)
@@ -468,7 +465,7 @@ with open(fp,'w') as f: f.write(c)
 PYEOF
     fi
 
-    # 2. Patch tu_device.cc (Hardcoded List - The important part)
+    # 2. Patch tu_device.cc (Hardcoded List with Blacklist)
     python3 - "$tu_device" << 'PYEOF'
 import sys, re
 tu_path = sys.argv[1]
@@ -608,28 +605,7 @@ ALL_EXTS = [
 "VK_GOOGLE_decorate_string","VK_GOOGLE_display_timing","VK_GOOGLE_hlsl_functionality1",
 "VK_GOOGLE_user_type","VK_IMG_filter_cubic","VK_IMG_relaxed_line_rasterization",
 "VK_INTEL_performance_query","VK_INTEL_shader_integer_functions2",
-"VK_MESA_image_alignment_control","VK_NV_clip_space_w_scaling",
-"VK_NV_compute_shader_derivatives","VK_NV_cooperative_matrix","VK_NV_corner_sampled_image",
-"VK_NV_coverage_reduction_mode","VK_NV_dedicated_allocation",
-"VK_NV_dedicated_allocation_image_aliasing","VK_NV_descriptor_pool_overallocation",
-"VK_NV_device_diagnostic_checkpoints","VK_NV_device_diagnostics_config",
-"VK_NV_device_generated_commands","VK_NV_device_generated_commands_compute",
-"VK_NV_extended_sparse_address_space","VK_NV_fill_rectangle",
-"VK_NV_fragment_coverage_to_color","VK_NV_fragment_shader_barycentric",
-"VK_NV_fragment_shading_rate_enums","VK_NV_framebuffer_mixed_samples",
-"VK_NV_geometry_shader_passthrough","VK_NV_inherited_viewport_scissor",
-"VK_NV_linear_color_attachment","VK_NV_low_latency","VK_NV_low_latency2",
-"VK_NV_memory_decompression","VK_NV_mesh_shader","VK_NV_optical_flow",
-"VK_NV_partitioned_acceleration_structure","VK_NV_per_stage_descriptor_set",
-"VK_NV_present_barrier","VK_NV_push_constant_bank","VK_NV_raw_access_chains",
-"VK_NV_ray_tracing","VK_NV_ray_tracing_invocation_reorder","VK_NV_ray_tracing_motion_blur",
-"VK_NV_ray_tracing_validation","VK_NV_representative_fragment_test",
-"VK_NV_sample_mask_override_coverage","VK_NV_scissor_exclusive",
-"VK_NV_shader_atomic_float16_vector","VK_NV_shader_image_footprint",
-"VK_NV_shader_sm_builtins","VK_NV_shader_subgroup_partitioned",
-"VK_NV_shading_rate_image","VK_NV_viewport_array2","VK_NV_viewport_swizzle",
-"VK_NV_win32_keyed_mutex","VK_NVX_binary_import","VK_NVX_image_view_handle",
-"VK_NVX_multiview_per_view_attributes",
+"VK_MESA_image_alignment_control",
 "VK_QCOM_fragment_density_map_offset","VK_QCOM_image_processing",
 "VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
 "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
@@ -638,12 +614,34 @@ ALL_EXTS = [
 "VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
 ]
 
+# Instance extensions to exclude
 INST_ONLY={
 "VK_KHR_surface","VK_KHR_wayland_surface","VK_KHR_win32_surface","VK_KHR_xcb_surface",
 "VK_KHR_xlib_surface","VK_EXT_debug_report","VK_EXT_debug_utils","VK_EXT_headless_surface",
 "VK_KHR_android_surface","VK_KHR_display","VK_MVK_ios_surface","VK_MVK_macos_surface",
 }
-dev_exts=[e for e in ALL_EXTS if e not in INST_ONLY]
+
+# --- CRITICAL BLACKLIST ---
+# These are extensions that we forced previously but Turnip does NOT implement.
+# Enabling them causes games to call unimplemented functions and crash (e.g. vkSetLatencySleepModeNV).
+BLACKLIST={
+    "VK_NV_low_latency", "VK_NV_low_latency2",        # Nvidia Reflex (Causes Ghost of Tsushima crash)
+    "VK_NV_optical_flow",                              # Hardware optical flow
+    "VK_NV_ray_tracing", "VK_NV_ray_tracing_motion_blur", # RTX specific
+    "VK_NV_mesh_shader",                               # Proprietary mesh shaders (Turnip uses EXT_mesh_shader)
+    "VK_NV_cooperative_matrix",                        # Tensor cores
+    "VK_NV_fragment_shading_rate_enums",               # Proprietary VRS
+    "VK_NV_shading_rate_image",                        # Proprietary VRS
+    "VK_NV_device_generated_commands",                 # Proprietary DGC
+    "VK_NV_coverage_reduction_mode",
+    "VK_NVX_image_view_handle",
+    # Video decoding is not supported on Turnip Android yet
+    "VK_KHR_video_decode_queue", "VK_KHR_video_decode_h264", "VK_KHR_video_decode_h265", "VK_KHR_video_decode_av1",
+    "VK_KHR_video_encode_queue",
+}
+
+# Filter out instance-only extensions AND blacklisted extensions
+dev_exts=[e for e in ALL_EXTS if e not in INST_ONLY and e not in BLACKLIST]
 print(f"[INFO] Injecting {len(dev_exts)} device extensions")
 
 def find_point(text):
@@ -861,7 +859,7 @@ package_driver() {
     "schemaVersion": 1,
     "name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
     "description": "TurnipDriver",
-    "author": "Blueinstruction",
+    "author": "BlueInstruction",
     "packageVersion": "1",
     "vendor": "Mesa",
     "driverVersion": "${vulkan_version}",

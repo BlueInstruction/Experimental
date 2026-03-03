@@ -1,4 +1,4 @@
-name: T-D
+name: Turnip Driver 
 
 on:
   workflow_dispatch:
@@ -134,10 +134,10 @@ jobs:
           unzip -q ndk.zip
           mv ${{ env.NDK_VERSION }} android-ndk
 
-      - name: Build turnip driver
+      - name: Build turnip_driver
         id: build
         run: |
-          chmod +x t-d.sh
+          chmod +x turnip_driver.sh
           export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
@@ -154,7 +154,7 @@ jobs:
           export APPLY_PATCH_SERIES="${{ inputs.apply_patch_series || 'true' }}"
           export ENABLE_PERF="${{ inputs.enable_perf || 'false' }}"
 
-          bash t-d.sh
+          bash turnip_driver.sh
 
           echo "version=$(cat build/version.txt)"             >> $GITHUB_OUTPUT
           echo "filename=$(cat build/filename.txt)"           >> $GITHUB_OUTPUT

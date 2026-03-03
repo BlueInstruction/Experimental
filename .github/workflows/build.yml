@@ -1,0 +1,150 @@
+name: Build Turnip Driver 
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_source:
+        type: choice
+        description: "Mesa source"
+        default: "main_branch"
+        options:
+          - latest_release
+          - staging_branch
+          - main_branch
+          - custom_tag
+          - latest_main
+
+      staging_branch:
+        type: choice
+        description: "Staging branch"
+        default: "staging/26.0"
+        options:
+          - staging/26.0
+          - staging/25.3
+
+      custom_tag:
+        description: "Custom tag (e.g. mesa-26.1.0)"
+        required: false
+        default: ""
+
+      build_type:
+        type: choice
+        description: "Build type"
+        default: "release"
+        options:
+          - release
+          - debug
+          - debugoptimized
+
+      build_variant:
+        type: choice
+        description: "Build variant"
+        default: "optimized"
+        options:
+          - optimized
+          - autotuner
+          - vanilla
+          - debug
+          - profile
+
+      target_gpu:
+        type: choice
+        description: "Target GPU generation"
+        default: "a7xx"
+        options:
+          - a6xx
+          - a7xx
+          - a8xx
+
+      enable_ext_spoof:
+        type: boolean
+        description: "Enable Vulkan extension spoofing"
+        default: true
+
+      enable_deck_emu:
+        type: boolean
+        description: "Enable deck_emu (GPU identity spoof)"
+        default: true
+
+      deck_emu_target:
+        type: choice
+        description: "GPU to spoof"
+        default: "nvidia"
+        options:
+          - nvidia
+          - amd
+
+      enable_timeline_hack:
+        type: boolean
+        description: "Enable timeline semaphore hack"
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: "android-ndk-r29"
+  API_LEVEL: "35"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git curl unzip zip \
+            python3 python3-pip python3-mako \
+            ninja-build ccache patchelf \
+            flex bison \
+            glslang-tools
+          pip install --break-system-packages meson mako pyyaml
+
+      - name: Cache NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/android-ndk
+          key: ${{ env.NDK_VERSION }}
+
+      - name: Setup NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
+          unzip -q ndk.zip
+          mv ${{ env.NDK_VERSION }} android-ndk
+
+      - name: Build turnip_driver
+        id: build
+        run: |
+          chmod +x turnip_driver.sh
+          export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
+          export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
+          export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
+          export BUILD_TYPE="${{ inputs.build_type || 'release' }}"
+          export BUILD_VARIANT="${{ inputs.build_variant || 'optimized' }}"
+          export NDK_PATH="${{ github.workspace }}/android-ndk"
+          export API_LEVEL="${{ env.API_LEVEL }}"
+          export TARGET_GPU="${{ inputs.target_gpu || 'a7xx' }}"
+          export ENABLE_EXT_SPOOF="${{ inputs.enable_ext_spoof || 'true' }}"
+          export ENABLE_DECK_EMU="${{ inputs.enable_deck_emu || 'true' }}"
+          export DECK_EMU_TARGET="${{ inputs.deck_emu_target || 'nvidia' }}"
+          export ENABLE_TIMELINE_HACK="${{ inputs.enable_timeline_hack || 'true' }}"
+
+          bash turnip_driver.sh
+
+          echo "version=$(cat build/version.txt)"             >> $GITHUB_OUTPUT
+          echo "filename=$(cat build/filename.txt)"           >> $GITHUB_OUTPUT
+          echo "vulkan_version=$(cat build/vulkan_version.txt)" >> $GITHUB_OUTPUT
+          echo "build_date=$(cat build/build_date.txt)"       >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.filename }}
+          path: build/*.zip

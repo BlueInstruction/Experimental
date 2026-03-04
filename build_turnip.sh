@@ -943,7 +943,7 @@ package_driver() {
 {
   "schemaVersion": 1,
   "name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
-  "description": "Compiled from Mesa freedreno",
+  "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",
   "vendor": "Mesa",

@@ -248,7 +248,7 @@ jobs:
 
       - name: Verify build output
         run: |
-          if [[ ! -f "build"/*.zip ]]; then
+          if ! ls build/*.zip 1>/dev/null 2>&1; then
             echo "No output zip found"
             ls -la build/ 2>/dev/null || true
             exit 1

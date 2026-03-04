@@ -1,0 +1,290 @@
+name: Turnip Driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_source:
+        type: choice
+        description: "Mesa source"
+        default: "main_branch"
+        options:
+          - latest_release
+          - staging_branch
+          - main_branch
+          - custom_tag
+          - latest_main
+
+      staging_branch:
+        type: choice
+        description: "Staging branch"
+        default: "staging/26.0"
+        options:
+          - staging/26.0
+          - staging/25.3
+
+      custom_tag:
+        description: "Custom tag"
+        required: false
+        default: ""
+
+      build_type:
+        type: choice
+        description: "Build type"
+        default: "release"
+        options:
+          - release
+          - debug
+          - debugoptimized
+
+      build_variant:
+        type: choice
+        description: "Build variant"
+        default: "optimized"
+        options:
+          - optimized
+          - autotuner
+          - vanilla
+          - debug
+          - profile
+
+      target_gpu:
+        type: choice
+        description: "Target GPU generation"
+        default: "a7xx"
+        options:
+          - a6xx
+          - a7xx
+          - a8xx
+
+      enable_ext_spoof:
+        type: boolean
+        description: "Enable Vulkan extension spoofing"
+        default: true
+
+      enable_deck_emu:
+        type: boolean
+        description: "Enable deck_emu GPU identity spoof"
+        default: true
+
+      deck_emu_target:
+        type: choice
+        description: "GPU to spoof"
+        default: "nvidia"
+        options:
+          - nvidia
+          - amd
+
+      enable_timeline_hack:
+        type: boolean
+        description: "Enable timeline semaphore optimization"
+        default: true
+
+      enable_ubwc_hack:
+        type: boolean
+        description: "Enable UBWC 5/6 support"
+        default: true
+
+      apply_patch_series:
+        type: boolean
+        description: "Apply patch series if present"
+        default: true
+
+      enable_perf:
+        type: boolean
+        description: "Enable performance options"
+        default: false
+
+      create_release:
+        type: boolean
+        description: "Create GitHub Release"
+        default: true
+
+      release_as_draft:
+        type: boolean
+        description: "Save release as draft"
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  DEFAULT_NDK: "android-ndk-r29"
+  DEFAULT_API: "35"
+  CACHE_VERSION: "v2"
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      validated: ${{ steps.validate.outputs.ok }}
+      mesa_ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          if [[ "${{ inputs.custom_tag }}" == "custom_tag" && -z "${{ inputs.custom_tag }}" ]]; then
+            echo "custom_tag required when selected"
+            exit 1
+          fi
+          echo "ok=true" >> $GITHUB_OUTPUT
+
+      - name: Resolve Mesa reference
+        id: resolve
+        run: |
+          case "${{ inputs.mesa_source }}" in
+            latest_release)
+              ref=$(git ls-remote --tags https://gitlab.freedesktop.org/mesa/mesa.git | \
+                    grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+              ;;
+            staging_branch) ref="${{ inputs.staging_branch }}" ;;
+            main_branch|latest_main) ref="main" ;;
+            custom_tag) ref="${{ inputs.custom_tag }}" ;;
+            *) ref="main" ;;
+          esac
+          echo "ref=$ref" >> $GITHUB_OUTPUT
+
+  build-turnip:
+    needs: pre-check
+    if: needs.pre-check.outputs.validated == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: "${{ inputs.target_gpu }}"
+            variant: "${{ inputs.build_variant }}"
+    env:
+      MESA_SOURCE: ${{ inputs.mesa_source }}
+      STAGING_BRANCH: ${{ inputs.staging_branch }}
+      CUSTOM_TAG: ${{ inputs.custom_tag }}
+      BUILD_TYPE: ${{ inputs.build_type }}
+      BUILD_VARIANT: ${{ matrix.variant }}
+      TARGET_GPU: ${{ matrix.target }}
+      ENABLE_EXT_SPOOF: ${{ inputs.enable_ext_spoof }}
+      ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
+      DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
+      ENABLE_TIMELINE_HACK: ${{ inputs.enable_timeline_hack }}
+      ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
+      APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
+      ENABLE_PERF: ${{ inputs.enable_perf }}
+      CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math' || '-O2' }}
+      CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-exceptions' || '-O2' }}
+      LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
+      NDK_PATH: ${{ github.workspace }}/android-ndk
+      API_LEVEL: ${{ inputs.api_level || '35' }}
+      NDK_VERSION: ${{ inputs.ndk_version || 'android-ndk-r29' }}
+      BUILD_SCRIPT: "build_turnip.sh"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git curl wget unzip zip \
+            python3 python3-pip python3-mako \
+            ninja-build ccache patchelf \
+            flex bison \
+            glslang-tools \
+            meson
+          if ! meson --version | grep -qE '^1\.[4-9]\.'; then
+            pip3 install --break-system-packages --upgrade meson
+          fi
+          pip3 install --break-system-packages mako pyyaml
+
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_PATH }}
+          key: ${{ env.NDK_VERSION }}-${{ env.CACHE_VERSION }}
+          restore-keys: |
+            ${{ env.NDK_VERSION }}-
+
+      - name: Setup Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
+          unzip -q ndk.zip
+          mv ${{ env.NDK_VERSION }} "${{ env.NDK_PATH }}"
+          rm ndk.zip
+
+      - name: Cache Mesa source
+        id: cache-mesa
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/mesa-cache
+          key: mesa-${{ needs.pre-check.outputs.mesa_ref }}-${{ hashFiles('build_turnip_aaa.sh') }}
+          restore-keys: |
+            mesa-${{ needs.pre-check.outputs.mesa_ref }}-
+
+      - name: Prepare build script
+        run: |
+          chmod +x "${{ env.BUILD_SCRIPT }}"
+
+      - name: Build Turnip Driver
+        id: build
+        run: |
+          start_time=$(date +%s)
+          if ! bash "${{ env.BUILD_SCRIPT }}"; then
+            echo "Build failed"
+            exit 1
+          fi
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "Build completed in $((duration/60))m $((duration%60))s"
+          if [[ -d "build" ]]; then
+            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+            echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
+            echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)" >> $GITHUB_OUTPUT
+            echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify build output
+        run: |
+          if [[ ! -f "build"/*.zip ]]; then
+            echo "No output zip found"
+            ls -la build/ 2>/dev/null || true
+            exit 1
+          fi
+          ls -lh build/*.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.filename || 'turnip-driver' }}
+          path: build/*.zip
+          retention-days: 30
+          compression-level: 0
+
+      - name: Build Summary
+        if: always()
+        run: |
+          echo ""
+          echo "Turnip Build Summary"
+          echo "  Status     : ${{ job.status }}"
+          echo "  GPU Target : ${{ inputs.target_gpu }}"
+          echo "  Mesa Ref   : ${{ needs.pre-check.outputs.mesa_ref }}"
+          echo "  Variant    : ${{ inputs.build_variant }}"
+          if [[ -f "build/version.txt" ]]; then
+            echo "  Version    : $(cat build/version.txt)"
+            echo "  Commit     : $(cat build/commit.txt)"
+          fi
+          echo "  Artifacts  : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
+          echo ""
+
+  notify-on-failure:
+    needs: build-turnip
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify build failure
+        run: |
+          echo "Build failed for Turnip Driver"
+          echo "Check workflow logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

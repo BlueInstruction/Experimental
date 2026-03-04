@@ -495,16 +495,11 @@ ALL=[
 known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in ALL if e not in known]
 if adds:
-    if '"VK_KHR_swapchain": 1,' in c:
-        c = c.replace('"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain": 1,
-'+'
-'.join(adds), 1)
+    anchor = '"VK_KHR_swapchain": 1,'
+    if anchor in c:
+        c = c.replace(anchor, anchor + '\n' + '\n'.join(adds), 1)
     else:
-        c = re.sub(r'(
-\})\s*$','
-'+'
-'.join(adds)+r'
-}',c,count=1)
+        c = re.sub(r'(\n\})\s*$', '\n' + '\n'.join(adds) + '\n}', c, count=1)
     print(f"[OK] Added {len(adds)} extensions")
 with open(fp,'w') as f: f.write(c)
 PYEOF
@@ -548,13 +543,11 @@ feats=[
 ]
 nf=0
 for p in feats:
-    new,n=re.subn(rf'((?:p|features|props|pdevice|pdev)->{re.escape(p)}\s*=\s*)([^;,
-]+)([;,
-])',r'\1true\3',content)
+    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
+    new,n=re.subn(pat2, r'\1true\3', content)
     if n: content=new; nf+=n
-    new,n=re.subn(rf'(\.{re.escape(p)}\s*=\s*)([^;,
-]+)([;,
-])',r'\1true\3',content)
+    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
+    new,n=re.subn(pat2, r'\1true\3', content)
     if n: content=new; nf+=n
 print(f"[OK] Forced {nf} feature flags to true")
 all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
@@ -605,14 +598,11 @@ if r is None:
 else:
     ev,ins=r
     print(f"[OK] ext_var='{ev}', injecting {len(dev_exts)} extensions")
-    lines=["
-// === ALL VULKAN EXTENSIONS INJECTED ==="]
+    lines=["\n"]
     for e in dev_exts:
         lines.append(f"    {ev}->{e[3:]} = true;")
-    lines.append("    // === END ===
-")
-    inj="
-".join(lines)
+    lines.append("\n")
+    inj="\n".join(lines)
     content=content[:ins]+inj+content[ins:]
     print(f"[OK] Done - {len(dev_exts)} assignments written")
 with open(tu_path,'w') as f: f.write(content)
@@ -744,8 +734,7 @@ disable_gmem = True,
 )
 """
 if "a8xx_830 = GPUProps" not in content:
-    content += "
-" + props_code
+    content += "\n" + props_code
     print("[OK] Appended A8xx Props")
 def add_gpu(cid, name, props_var, num_ccu, num_slices):
     return f"""

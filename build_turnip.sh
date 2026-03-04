@@ -754,7 +754,7 @@ cs_shared_mem_size = 32 * 1024,
 wave_granularity = 2,
 fibers_per_sp = 128 * 2 * 16,
 magic_regs = dict(),
-raw_magic_regs = a8xx_gen2_raw_magic_regs,
+raw_magic_regs = a8xx_base_raw_magic_regs,
 ))
 """
 pattern = r'add_gpus\(\[\s*GPUId\(chip_id=0x44050000, name="FD830"\),\s*\], A6xxGPUInfo\('

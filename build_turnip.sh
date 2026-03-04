@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
+
 log_info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
@@ -16,6 +19,7 @@ MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
 MESA_MIRROR="https://github.com/mesa3d/mesa.git"
 AUTOTUNER_REPO="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
+
 MESA_SOURCE="${MESA_SOURCE:-main_branch}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
 CUSTOM_TAG="${CUSTOM_TAG:-}"
@@ -35,135 +39,148 @@ APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
+
 check_deps() {
-local deps="git meson ninja patchelf zip ccache curl python3"
-for dep in $deps; do
-if ! command -v "$dep" &>/dev/null; then
-log_error "Missing dependency: $dep"
-exit 1
-fi
-done
-log_success "Dependencies check passed"
+    local deps="git meson ninja patchelf zip ccache curl python3"
+    for dep in $deps; do
+        if ! command -v "$dep" &>/dev/null; then
+            log_error "Missing dependency: $dep"
+            exit 1
+        fi
+    done
+    log_success "Dependencies check passed"
 }
+
 fetch_latest_release() {
-local tags=""
-tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
-grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-sort -V | tail -1) || true
-if [[ -z "$tags" ]]; then
-tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
-grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-sort -V | tail -1) || true
-fi
-[[ -z "$tags" ]] && { log_error "Could not determine latest release"; exit 1; }
-echo "$tags"
+    local tags=""
+    tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
+        grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
+        sort -V | tail -1) || true
+    if [[ -z "$tags" ]]; then
+        tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
+            grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | tail -1) || true
+    fi
+    [[ -z "$tags" ]] && { log_error "Could not determine latest release"; exit 1; }
+    echo "$tags"
 }
+
 get_mesa_version() {
-[[ -f "${MESA_DIR}/VERSION" ]] && cat "${MESA_DIR}/VERSION" || echo "unknown"
+    [[ -f "${MESA_DIR}/VERSION" ]] && cat "${MESA_DIR}/VERSION" || echo "unknown"
 }
+
 get_vulkan_version() {
-local vk_header="${MESA_DIR}/include/vulkan/vulkan_core.h"
-if [[ -f "$vk_header" ]]; then
-local major minor patch
-major=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\K\d+' || echo "1")
-minor=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\d+,\s*\K\d+' || echo "4")
-patch=$(grep -m1 "#define VK_HEADER_VERSION" "$vk_header" | awk '{print $3}' || echo "0")
-echo "${major}.${minor}.${patch}"
-else
-echo "1.4.0"
-fi
+    local vk_header="${MESA_DIR}/include/vulkan/vulkan_core.h"
+    if [[ -f "$vk_header" ]]; then
+        local major minor patch
+        major=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\K\d+' || echo "1")
+        minor=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\d+,\s*\K\d+' || echo "4")
+        patch=$(grep -m1 "#define VK_HEADER_VERSION" "$vk_header" | awk '{print $3}' || echo "0")
+        echo "${major}.${minor}.${patch}"
+    else
+        echo "1.4.0"
+    fi
 }
+
 prepare_workdir() {
-log_info "Preparing build directory"
-rm -rf "$WORKDIR"
-mkdir -p "$WORKDIR"
-log_success "Build directory ready"
+    log_info "Preparing build directory"
+    rm -rf "$WORKDIR"
+    mkdir -p "$WORKDIR"
+    log_success "Build directory ready"
 }
+
 update_vulkan_headers() {
-log_info "Updating Vulkan headers to latest version"
-local headers_dir="${WORKDIR}/vulkan-headers"
-git clone --depth=1 "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
-log_warn "Failed to clone Vulkan headers, using Mesa defaults"
-return 0
+    log_info "Updating Vulkan headers to latest version"
+    local headers_dir="${WORKDIR}/vulkan-headers"
+    git clone --depth=1 "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
+        log_warn "Failed to clone Vulkan headers, using Mesa defaults"
+        return 0
+    }
+    if [[ -d "${headers_dir}/include/vulkan" ]]; then
+        cp -r "${headers_dir}/include/vulkan"/* "${MESA_DIR}/include/vulkan/" 2>/dev/null || true
+        log_success "Vulkan headers updated"
+    fi
+    rm -rf "$headers_dir"
 }
-if [[ -d "${headers_dir}/include/vulkan" ]]; then
-cp -r "${headers_dir}/include/vulkan"/* "${MESA_DIR}/include/vulkan/" 2>/dev/null || true
-log_success "Vulkan headers updated"
-fi
-rm -rf "$headers_dir"
-}
+
 clone_mesa() {
-log_info "Cloning Mesa source"
-local clone_args=()
-local target_ref=""
-local repo_url="$MESA_REPO"
-if [[ -n "$MESA_LOCAL_PATH" && -d "$MESA_LOCAL_PATH" ]]; then
-log_info "Using local Mesa source at $MESA_LOCAL_PATH"
-cp -r "$MESA_LOCAL_PATH" "$MESA_DIR"
-cd "$MESA_DIR"
-git config user.email "ci@turnip.builder"
-git config user.name "Turnip CI Builder"
-local version=$(get_mesa_version)
-local commit=$(git rev-parse --short=8 HEAD)
-echo "$version" > "${WORKDIR}/version.txt"
-echo "$commit"  > "${WORKDIR}/commit.txt"
-log_success "Mesa $version ($commit) ready (local)"
-return
-fi
-if [[ "$BUILD_VARIANT" == "autotuner" ]]; then
-repo_url="$AUTOTUNER_REPO"
-target_ref="tu-newat"
-clone_args=("--depth" "1" "--branch" "$target_ref")
-else
-case "$MESA_SOURCE" in
-latest_release)
-target_ref=$(fetch_latest_release)
-clone_args=("--depth" "1" "--branch" "$target_ref")
-;;
-staging_branch)
-target_ref="$STAGING_BRANCH"
-clone_args=("--depth" "1" "--branch" "$target_ref")
-;;
-main_branch)
-target_ref="main"
-clone_args=("--depth" "1" "--branch" "main")
-;;
-latest_main)
-target_ref="main"
-clone_args=("--branch" "main")
-;;
-custom_tag)
-[[ -z "$CUSTOM_TAG" ]] && { log_error "Custom tag not specified"; exit 1; }
-target_ref="$CUSTOM_TAG"
-clone_args=("--depth" "1" "--branch" "$target_ref")
-;;
-esac
-fi
-log_info "Target: $target_ref"
-if ! git clone "${clone_args[@]}" "$repo_url" "$MESA_DIR" 2>/dev/null; then
-log_warn "Primary source failed, trying mirror"
-if ! git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null; then
-log_error "Failed to clone Mesa"
-exit 1
-fi
-fi
-cd "$MESA_DIR"
-git config user.email "ci@turnip.builder"
-git config user.name "Turnip CI Builder"
-if [[ "$MESA_SOURCE" == "latest_main" ]]; then
-git pull origin main
-fi
-local version=$(get_mesa_version)
-local commit=$(git rev-parse --short=8 HEAD)
-echo "$version" > "${WORKDIR}/version.txt"
-echo "$commit"  > "${WORKDIR}/commit.txt"
-log_success "Mesa $version ($commit) ready"
+    log_info "Cloning Mesa source"
+    local clone_args=()
+    local target_ref=""
+    local repo_url="$MESA_REPO"
+
+    if [[ -n "$MESA_LOCAL_PATH" && -d "$MESA_LOCAL_PATH" ]]; then
+        log_info "Using local Mesa source at $MESA_LOCAL_PATH"
+        cp -r "$MESA_LOCAL_PATH" "$MESA_DIR"
+        cd "$MESA_DIR"
+        git config user.email "ci@turnip.builder"
+        git config user.name "Turnip CI Builder"
+        local version=$(get_mesa_version)
+        local commit=$(git rev-parse --short=8 HEAD)
+        echo "$version" > "${WORKDIR}/version.txt"
+        echo "$commit"  > "${WORKDIR}/commit.txt"
+        log_success "Mesa $version ($commit) ready (local)"
+        return
+    fi
+
+    if [[ "$BUILD_VARIANT" == "autotuner" ]]; then
+        repo_url="$AUTOTUNER_REPO"
+        target_ref="tu-newat"
+        clone_args=("--depth" "1" "--branch" "$target_ref")
+    else
+        case "$MESA_SOURCE" in
+            latest_release)
+                target_ref=$(fetch_latest_release)
+                clone_args=("--depth" "1" "--branch" "$target_ref")
+                ;;
+            staging_branch)
+                target_ref="$STAGING_BRANCH"
+                clone_args=("--depth" "1" "--branch" "$target_ref")
+                ;;
+            main_branch)
+                target_ref="main"
+                clone_args=("--depth" "1" "--branch" "main")
+                ;;
+            latest_main)
+                target_ref="main"
+                clone_args=("--branch" "main")
+                ;;
+            custom_tag)
+                [[ -z "$CUSTOM_TAG" ]] && { log_error "Custom tag not specified"; exit 1; }
+                target_ref="$CUSTOM_TAG"
+                clone_args=("--depth" "1" "--branch" "$target_ref")
+                ;;
+        esac
+    fi
+
+    log_info "Target: $target_ref"
+    if ! git clone "${clone_args[@]}" "$repo_url" "$MESA_DIR" 2>/dev/null; then
+        log_warn "Primary source failed, trying mirror"
+        if ! git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null; then
+            log_error "Failed to clone Mesa"
+            exit 1
+        fi
+    fi
+
+    cd "$MESA_DIR"
+    git config user.email "ci@turnip.builder"
+    git config user.name "Turnip CI Builder"
+    if [[ "$MESA_SOURCE" == "latest_main" ]]; then
+        git pull origin main
+    fi
+
+    local version=$(get_mesa_version)
+    local commit=$(git rev-parse --short=8 HEAD)
+    echo "$version" > "${WORKDIR}/version.txt"
+    echo "$commit"  > "${WORKDIR}/commit.txt"
+    log_success "Mesa $version ($commit) ready"
 }
+
 apply_timeline_semaphore_fix() {
-log_info "Applying timeline semaphore optimization"
-local target_file="${MESA_DIR}/src/vulkan/runtime/vk_sync_timeline.c"
-[[ ! -f "$target_file" ]] && return 0
-cat << 'PATCH_EOF' > "${WORKDIR}/timeline.patch"
+    log_info "Applying timeline semaphore optimization"
+    local target_file="${MESA_DIR}/src/vulkan/runtime/vk_sync_timeline.c"
+    [[ ! -f "$target_file" ]] && return 0
+    cat << 'PATCH_EOF' > "${WORKDIR}/timeline.patch"
 diff --git a/src/vulkan/runtime/vk_sync_timeline.c b/src/vulkan/runtime/vk_sync_timeline.c
 index 4df11d81bda..6119126932d 100644
 --- a/src/vulkan/runtime/vk_sync_timeline.c
@@ -251,15 +268,16 @@ static VkResult
 vk_sync_timeline_wait(struct vk_device *device,
 struct vk_sync *sync,
 PATCH_EOF
-cd "$MESA_DIR"
-patch -p1 --fuzz=3 --ignore-whitespace < "${WORKDIR}/timeline.patch" 2>/dev/null || log_warn "Timeline patch may have partially applied"
-log_success "Timeline semaphore fix applied"
+    cd "$MESA_DIR"
+    patch -p1 --fuzz=3 --ignore-whitespace < "${WORKDIR}/timeline.patch" 2>/dev/null || log_warn "Timeline patch may have partially applied"
+    log_success "Timeline semaphore fix applied"
 }
+
 apply_gralloc_ubwc_fix() {
-log_info "Applying gralloc UBWC detection fix"
-local gralloc_file="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
-[[ ! -f "$gralloc_file" ]] && return 0
-cat << 'PATCH_EOF' > "${WORKDIR}/gralloc.patch"
+    log_info "Applying gralloc UBWC detection fix"
+    local gralloc_file="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
+    [[ ! -f "$gralloc_file" ]] && return 0
+    cat << 'PATCH_EOF' > "${WORKDIR}/gralloc.patch"
 diff --git a/src/util/u_gralloc/u_gralloc_fallback.c b/src/util/u_gralloc/u_gralloc_fallback.c
 index 44fb32d8cfd..bb6459c2e29 100644
 --- a/src/util/u_gralloc/u_gralloc_fallback.c
@@ -279,34 +297,38 @@ out->strides[0] = stride;
 #endif
 return 0;
 PATCH_EOF
-cd "$MESA_DIR"
-patch -p1 --fuzz=3 --ignore-whitespace < "${WORKDIR}/gralloc.patch" 2>/dev/null || log_warn "Gralloc patch may have partially applied"
-log_success "Gralloc UBWC fix applied"
+    cd "$MESA_DIR"
+    patch -p1 --fuzz=3 --ignore-whitespace < "${WORKDIR}/gralloc.patch" 2>/dev/null || log_warn "Gralloc patch may have partially applied"
+    log_success "Gralloc UBWC fix applied"
 }
+
 apply_deck_emu_support() {
-log_info "Applying deck_emu debug option (target: ${DECK_EMU_TARGET})"
-local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
-local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
-local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-if [[ -f "$tu_util_h" ]] && ! grep -q "TU_DEBUG_DECK_EMU" "$tu_util_h"; then
-local last_bit=$(grep -oP 'BITFIELD64_BIT\(\K[0-9]+' "$tu_util_h" | sort -n | tail -1)
-local new_bit=$((last_bit + 1))
-sed -i "/TU_DEBUG_FORCE_CONCURRENT_BINNING/a\\   TU_DEBUG_DECK_EMU = BITFIELD64_BIT(${new_bit})," "$tu_util_h" 2>/dev/null || true
-fi
-if [[ -f "$tu_util_cc" ]] && ! grep -q "deck_emu" "$tu_util_cc"; then
-sed -i '/{ "forcecb"/a\   { "deck_emu", TU_DEBUG_DECK_EMU },' "$tu_util_cc" 2>/dev/null || true
-fi
-if [[ -f "$tu_device_cc" ]] && ! grep -q "DECK_EMU" "$tu_device_cc"; then
-local driver_id driver_name device_name vendor_id device_id
-case "${DECK_EMU_TARGET}" in
-nvidia)
-driver_id="VK_DRIVER_ID_NVIDIA_PROPRIETARY"; driver_name="NVIDIA"; device_name="NVIDIA GeForce RTX 4090"; vendor_id="0x10de"; device_id="0x2684"
-;;
-amd|*)
-driver_id="VK_DRIVER_ID_MESA_RADV"; driver_name="radv"; device_name="AMD RADV VANGOGH"; vendor_id="0x1002"; device_id="0x163f"
-;;
-esac
-python3 - "$tu_device_cc" "$driver_id" "$driver_name" "$device_name" "$vendor_id" "$device_id" << 'PYEOF'
+    log_info "Applying deck_emu debug option (target: ${DECK_EMU_TARGET})"
+    local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
+    local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+
+    if [[ -f "$tu_util_h" ]] && ! grep -q "TU_DEBUG_DECK_EMU" "$tu_util_h"; then
+        local last_bit=$(grep -oP 'BITFIELD64_BIT\(\K[0-9]+' "$tu_util_h" | sort -n | tail -1)
+        local new_bit=$((last_bit + 1))
+        sed -i "/TU_DEBUG_FORCE_CONCURRENT_BINNING/a\\   TU_DEBUG_DECK_EMU = BITFIELD64_BIT(${new_bit})," "$tu_util_h" 2>/dev/null || true
+    fi
+
+    if [[ -f "$tu_util_cc" ]] && ! grep -q "deck_emu" "$tu_util_cc"; then
+        sed -i '/{ "forcecb"/a\   { "deck_emu", TU_DEBUG_DECK_EMU },' "$tu_util_cc" 2>/dev/null || true
+    fi
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "DECK_EMU" "$tu_device_cc"; then
+        local driver_id driver_name device_name vendor_id device_id
+        case "${DECK_EMU_TARGET}" in
+            nvidia)
+                driver_id="VK_DRIVER_ID_NVIDIA_PROPRIETARY"; driver_name="NVIDIA"; device_name="NVIDIA GeForce RTX 4090"; vendor_id="0x10de"; device_id="0x2684"
+                ;;
+            amd|*)
+                driver_id="VK_DRIVER_ID_MESA_RADV"; driver_name="radv"; device_name="AMD RADV VANGOGH"; vendor_id="0x1002"; device_id="0x163f"
+                ;;
+        esac
+        python3 - "$tu_device_cc" "$driver_id" "$driver_name" "$device_name" "$vendor_id" "$device_id" << 'PYEOF'
 import sys, re
 fp  = sys.argv[1]
 did = sys.argv[2]
@@ -315,71 +337,69 @@ dv  = sys.argv[4]
 vid = int(sys.argv[5], 16)
 devid = int(sys.argv[6], 16)
 with open(fp) as f: c = f.read()
-inj = '\nif (TU_DEBUG(DECK_EMU)) {\n'
-inj += '   p->driverID = ' + did + ';\n'
-inj += '   memset(p->driverName, 0, sizeof(p->driverName));\n'
-inj += '   snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "' + dn + '");\n'
-inj += '   memset(p->driverInfo, 0, sizeof(p->driverInfo));\n'
-inj += '   snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");\n'
-inj += '}\n'
+inj = (
+    '\nif (TU_DEBUG(DECK_EMU)) {\n'
+    '   p->driverID = ' + did + ';\n'
+    '   memset(p->driverName, 0, sizeof(p->driverName));\n'
+    '   snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "' + dn + '");\n'
+    '   memset(p->driverInfo, 0, sizeof(p->driverInfo));\n'
+    '   snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");\n'
+    '}\n'
+)
 done = False
-patterns = [
-r'(p->denormBehaviorIndependence\s*=\s*[^;]+;)',
-r'(p->driverID\s*=\s*[^;]+;)',
-r'(p->deviceName\s*=\s*[^;]+;)',
-]
-for pat in patterns:
-m = re.search(pat, c)
+m = re.search(r'(\n[ \t]*p->denormBehaviorIndependence\s*=)', c)
 if m:
-c = c[:m.end()] + '\n' + inj + c[m.end():]
-done = True
-break
+    c = c[:m.start()] + '\n' + inj + c[m.start()]
+    done = True
 if not done:
-fm = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', c)
-if fm:
-d = 1; p = fm.end()
-while p < len(c) and d > 0:
-if c[p] == '{': d += 1
-elif c[p] == '}': d -= 1
-p += 1
-c = c[:p-1] + '\n' + inj + c[p-1:]
-done = True
+    fm = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', c)
+    if fm:
+        d = 1; p = fm.end()
+        while p < len(c) and d > 0:
+            if c[p] == '{': d += 1
+            elif c[p] == '}': d -= 1
+            p += 1
+        c = c[:p-1] + '\n' + inj + c[p-1:]
+        done = True
 if not done:
-m2 = re.search(r'tu_get_physical_device_properties2\s*\([^{]*\{', c, re.DOTALL)
-if m2:
-d = 1; p = m2.end()
-while p < len(c) and d > 0:
-if c[p] == '{': d += 1
-elif c[p] == '}': d -= 1
-p += 1
-c = c[:p-1] + '\n' + inj + c[p-1:]
-done = True
+    m2 = re.search(r'(tu_get_physical_device_properties2\s*\([^{]*\{)', c, re.DOTALL)
+    if m2:
+        d = 1; p = m2.end()
+        while p < len(c) and d > 0:
+            if c[p] == '{': d += 1
+            elif c[p] == '}': d -= 1
+            p += 1
+        c = c[:p-1] + '\n' + inj + c[p-1:]
+        done = True
 if done:
-with open(fp, 'w') as f: f.write(c)
-print('[OK] deck_emu applied: ' + did)
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] deck_emu applied: ' + did)
 else:
-print('[WARN] deck_emu: no injection point found, skipping')
+    print('[WARN] deck_emu: no injection point found, skipping')
 PYEOF
-log_success "deck_emu spoofing applied"
-fi
+        log_success "deck_emu spoofing applied"
+    fi
 }
+
 apply_a6xx_query_fix() {
-log_info "Applying A6xx query fix"
-find "${MESA_DIR}/src/freedreno/vulkan" -name "tu_query*.cc" -exec sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' {} \; 2>/dev/null || true
+    log_info "Applying A6xx query fix"
+    find "${MESA_DIR}/src/freedreno/vulkan" -name "tu_query*.cc" -exec sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' {} \; 2>/dev/null || true
 }
+
 apply_vulkan_extensions_support() {
-log_info "Enabling Vulkan extensions and D3D features"
-local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-local vk_exts_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
-[[ ! -f "$tu_device" ]] && return 0
-if [[ -f "$vk_exts_py" ]]; then
-python3 - "$vk_exts_py" << 'PYEOF'
+    log_info "Enabling Vulkan extensions and D3D features"
+    local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local vk_exts_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
+    [[ ! -f "$tu_device" ]] && return 0
+
+    if [[ -f "$vk_exts_py" ]]; then
+        python3 - "$vk_exts_py" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n=0
 def lo(m):
-global n; n+=1; return m.group(1)+'1'+m.group(3)
+    global n; n+=1; return m.group(1)+'1'+m.group(3)
 c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lo, c)
 print(f"[OK] Lowered {n} entries to API 1")
 ALL=[
@@ -475,17 +495,18 @@ ALL=[
 known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in ALL if e not in known]
 if adds:
-anchor = '"VK_KHR_swapchain": 1,'
-if anchor in c:
-c = c.replace(anchor, anchor + '\n' + '\n'.join(adds), 1)
-else:
-c = re.sub(r'(\n\})\s*$', '\n' + '\n'.join(adds) + '\n}', c, count=1)
-print(f"[OK] Added {len(adds)} extensions")
+    anchor = '"VK_KHR_swapchain": 1,'
+    if anchor in c:
+        c = c.replace(anchor, anchor + '\n' + '\n'.join(adds), 1)
+    else:
+        c = re.sub(r'(\n\})\s*$', '\n' + '\n'.join(adds) + '\n}', c, count=1)
+    print(f"[OK] Added {len(adds)} extensions")
 with open(fp,'w') as f: f.write(c)
 PYEOF
-log_success "vk_extensions.py patched"
-fi
-python3 - "$tu_device" "$vk_exts_py" << 'PYEOF'
+        log_success "vk_extensions.py patched"
+    fi
+
+    python3 - "$tu_device" "$vk_exts_py" << 'PYEOF'
 import sys, re
 tu_path, vk_path = sys.argv[1], sys.argv[2]
 with open(tu_path) as f: content = f.read()
@@ -522,12 +543,12 @@ feats=[
 ]
 nf=0
 for p in feats:
-pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
-new,n=re.subn(pat2, r'\1true\3', content)
-if n: content=new; nf+=n
-pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
-new,n=re.subn(pat2, r'\1true\3', content)
-if n: content=new; nf+=n
+    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
+    new,n=re.subn(pat2, r'\1true\3', content)
+    if n: content=new; nf+=n
+    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
+    new,n=re.subn(pat2, r'\1true\3', content)
+    if n: content=new; nf+=n
 print(f"[OK] Forced {nf} feature flags to true")
 all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
 print(f"[INFO] {len(all_exts)} entries in vk_extensions.py")
@@ -550,75 +571,82 @@ INST_ONLY={
 dev_exts=[e for e in all_exts if e not in INST_ONLY]
 print(f"[INFO] {len(dev_exts)} device extensions to inject")
 def find_point(text):
-for pat in [
-r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
-r'get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
-r'vk_device_extension_table\s*\*\s*(\w+)\s*[,\)]',
-]:
-m=re.search(pat,text,re.DOTALL)
-if m:
-ev=m.group(m.lastindex); fs=m.end()
-bp=text.find('{',fs)
-if bp==-1: continue
-d=1; p=bp+1
-while p<len(text) and d>0:
-if text[p]=='{': d+=1
-elif text[p]=='}': d-=1
-p+=1
-return ev,p-1
-last=None
-for m in re.finditer(r'(\w+)->(KHR|EXT|AMD|VALVE|QCOM|MESA|GOOGLE|HUAWEI|ARM|SEC|NV|INTEL|IMG|ANDROID)\w+\s*=\s*(?:true|false)\s*;',text):
-last=m
-if last: return last.group(1),last.end()
-return None
+    for pat in [
+        r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
+        r'get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
+        r'vk_device_extension_table\s*\*\s*(\w+)\s*[,\)]',
+    ]:
+        m=re.search(pat,text,re.DOTALL)
+        if m:
+            ev=m.group(m.lastindex); fs=m.end()
+            bp=text.find('{',fs)
+            if bp==-1: continue
+            d=1; p=bp+1
+            while p<len(text) and d>0:
+                if text[p]=='{': d+=1
+                elif text[p]=='}': d-=1
+                p+=1
+            return ev,p-1
+    last=None
+    for m in re.finditer(r'(\w+)->(KHR|EXT|AMD|VALVE|QCOM|MESA|GOOGLE|HUAWEI|ARM|SEC|NV|INTEL|IMG|ANDROID)\w+\s*=\s*(?:true|false)\s*;',text):
+        last=m
+    if last: return last.group(1),last.end()
+    return None
 r=find_point(content)
 if r is None:
-print("[WARN] No injection point found")
+    print("[WARN] No injection point found")
 else:
-ev,ins=r
-print(f"[OK] ext_var='{ev}', injecting {len(dev_exts)} extensions")
-lines=["\n"]
-for e in dev_exts:
-lines.append(f"    {ev}->{e[3:]} = true;")
-lines.append("\n")
-inj="\n".join(lines)
-content=content[:ins]+inj+content[ins:]
-print(f"[OK] Done - {len(dev_exts)} assignments written")
+    ev,ins=r
+    print(f"[OK] ext_var='{ev}', injecting {len(dev_exts)} extensions")
+    lines=["\n"]
+    for e in dev_exts:
+        lines.append(f"    {ev}->{e[3:]} = true;")
+    lines.append("\n")
+    inj="\n".join(lines)
+    content=content[:ins]+inj+content[ins:]
+    print(f"[OK] Done - {len(dev_exts)} assignments written")
 with open(tu_path,'w') as f: f.write(content)
 PYEOF
-log_success "Vulkan extensions support applied"
+    log_success "Vulkan extensions support applied"
 }
+
 apply_a8xx_device_support() {
-log_info "Applying A8xx device support patches"
-local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
-local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-local fd_gmem="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
-local dev_info="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
-if [[ -f "$knl_kgsl" ]]; then
-if ! grep -q "case 5:" "$knl_kgsl"; then
-sed -i '/case KGSL_UBWC_4_0:/a\   case 5:\n   case 6:' "$knl_kgsl" 2>/dev/null || true
-log_success "Added UBWC 5/6 support"
-fi
-fi
-if [[ -f "$dev_info" ]]; then
-if ! grep -q "disable_gmem" "$dev_info"; then
-sed -i '/bool has_salu_int_narrowing_quirk;/a\      bool disable_gmem;' "$dev_info"
-log_success "Added disable_gmem to dev_info.h"
-fi
-fi
-if [[ -f "$tu_cmd" ]]; then
-if ! grep -q "disable_gmem" "$tu_cmd"; then
-sed -i '/return true;/a\   if (cmd->device->physical_device->dev_info.props.disable_gmem) return true;' "$tu_cmd"
-log_success "Added disable_gmem check to tu_cmd_buffer.cc"
-fi
-fi
-if [[ -f "$fd_gmem" ]]; then
-sed -i 's/if (info->chip >= 8)/if (info->chip >= 8 \&\& info->num_slices > 1)/g' "$fd_gmem"
-log_success "Patched fd6_gmem_cache.h for slice check"
-fi
-python3 - "$devfile" << 'PYEOF'
+    log_info "Applying A8xx device support patches"
+    local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local fd_gmem="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
+    local dev_info="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
+    local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+
+    if [[ -f "$knl_kgsl" ]]; then
+        if ! grep -q "case 5:" "$knl_kgsl"; then
+            sed -i '/case KGSL_UBWC_4_0:/a\   case 5:
+case 6:' "$knl_kgsl" 2>/dev/null || true
+            log_success "Added UBWC 5/6 support"
+        fi
+    fi
+
+    if [[ -f "$dev_info" ]]; then
+        if ! grep -q "disable_gmem" "$dev_info"; then
+            sed -i '/bool has_salu_int_narrowing_quirk;/a\      bool disable_gmem;' "$dev_info"
+            log_success "Added disable_gmem to dev_info.h"
+        fi
+    fi
+
+    if [[ -f "$tu_cmd" ]]; then
+        if ! grep -q "disable_gmem" "$tu_cmd"; then
+            sed -i '/return true;/a\   if (cmd->device->physical_device->dev_info.props.disable_gmem) return true;' "$tu_cmd"
+            log_success "Added disable_gmem check to tu_cmd_buffer.cc"
+        fi
+    fi
+
+    if [[ -f "$fd_gmem" ]]; then
+        sed -i 's/if (info->chip >= 8)/if (info->chip >= 8 \&\& info->num_slices > 1)/g' "$fd_gmem"
+        log_success "Patched fd6_gmem_cache.h for slice check"
+    fi
+
+    python3 - "$devfile" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: content = f.read()
@@ -706,10 +734,10 @@ disable_gmem = True,
 )
 """
 if "a8xx_830 = GPUProps" not in content:
-content += "\n" + props_code
-print("[OK] Appended A8xx Props")
+    content += "\n" + props_code
+    print("[OK] Appended A8xx Props")
 def add_gpu(cid, name, props_var, num_ccu, num_slices):
-return f"""
+    return f"""
 add_gpus([
 GPUId(chip_id={cid}, name="{name}"),
 ], A6xxGPUInfo(
@@ -737,86 +765,89 @@ add_gpu("0x44010000", "FD810", "a8xx_810", 2, 1) + \
 add_gpu("0x44030A00", "FD829", "a8xx_829", 4, 2) + \
 add_gpu("0x44030A20", "FD829", "a8xx_829", 4, 2)
 if "FD810" not in content:
-if re.search(pattern, content):
-content = re.sub(pattern, replacement, content)
-print("[OK] Replaced/Extended A8xx device IDs")
-else:
-content += replacement
-print("[OK] Appended A8xx device IDs")
+    if re.search(pattern, content):
+        content = re.sub(pattern, replacement, content)
+        print("[OK] Replaced/Extended A8xx device IDs")
+    else:
+        content += replacement
+        print("[OK] Appended A8xx device IDs")
 with open(fp, 'w') as f:
-f.write(content)
+    f.write(content)
 PYEOF
-log_success "A8xx support applied"
+    log_success "A8xx support applied"
 }
+
 apply_patches() {
-log_info "Applying patches for $TARGET_GPU"
-cd "$MESA_DIR"
-if [[ "$BUILD_VARIANT" == "vanilla" ]]; then
-log_info "Vanilla build - skipping all patches"
-return 0
-fi
-if [[ "$APPLY_PATCH_SERIES" == "true" && -d "$PATCHES_DIR/series" ]]; then
-apply_patch_series "$PATCHES_DIR/series"
-else
-if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
-if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi
-apply_gralloc_ubwc_fix
-if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
-if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-if [[ "$TARGET_GPU" == "a8xx" ]]; then
-apply_a8xx_device_support
-fi
-if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
-fi
-if [[ -d "$PATCHES_DIR" ]]; then
-for patch in "$PATCHES_DIR"/*.patch; do
-[[ ! -f "$patch" ]] && continue
-local patch_name=$(basename "$patch")
-if [[ "$patch_name" == *"a8xx"* ]] || [[ "$patch_name" == *"A8xx"* ]]; then
-if [[ "$TARGET_GPU" != "a8xx" ]]; then continue; fi
-fi
-log_info "Applying: $patch_name"
-if git apply --check "$patch" 2>/dev/null; then
-git apply "$patch"
-log_success "Applied: $patch_name"
-else
-log_warn "Could not apply: $patch_name"
-fi
-done
-fi
-log_success "All patches applied"
+    log_info "Applying patches for $TARGET_GPU"
+    cd "$MESA_DIR"
+    if [[ "$BUILD_VARIANT" == "vanilla" ]]; then
+        log_info "Vanilla build - skipping all patches"
+        return 0
+    fi
+    if [[ "$APPLY_PATCH_SERIES" == "true" && -d "$PATCHES_DIR/series" ]]; then
+        apply_patch_series "$PATCHES_DIR/series"
+    else
+        if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
+        if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi
+        apply_gralloc_ubwc_fix
+        if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
+        if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
+        if [[ "$TARGET_GPU" == "a8xx" ]]; then
+            apply_a8xx_device_support
+        fi
+        if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
+    fi
+    if [[ -d "$PATCHES_DIR" ]]; then
+        for patch in "$PATCHES_DIR"/*.patch; do
+            [[ ! -f "$patch" ]] && continue
+            local patch_name=$(basename "$patch")
+            if [[ "$patch_name" == *"a8xx"* ]] || [[ "$patch_name" == *"A8xx"* ]]; then
+                if [[ "$TARGET_GPU" != "a8xx" ]]; then continue; fi
+            fi
+            log_info "Applying: $patch_name"
+            if git apply --check "$patch" 2>/dev/null; then
+                git apply "$patch"
+                log_success "Applied: $patch_name"
+            else
+                log_warn "Could not apply: $patch_name"
+            fi
+        done
+    fi
+    log_success "All patches applied"
 }
+
 setup_subprojects() {
-log_info "Setting up subprojects with caching"
-cd "$MESA_DIR"
-mkdir -p subprojects
-local CACHE_DIR="${WORKDIR}/subprojects-cache"
-mkdir -p "$CACHE_DIR"
-for proj in spirv-tools spirv-headers; do
-if [[ -d "$CACHE_DIR/$proj" ]]; then
-cp -r "$CACHE_DIR/$proj" subprojects/
-else
-git clone --depth=1 "https://github.com/KhronosGroup/${proj}.git" "subprojects/$proj"
-cp -r "subprojects/$proj" "$CACHE_DIR/"
-fi
-done
-log_success "Subprojects ready"
+    log_info "Setting up subprojects with caching"
+    cd "$MESA_DIR"
+    mkdir -p subprojects
+    local CACHE_DIR="${WORKDIR}/subprojects-cache"
+    mkdir -p "$CACHE_DIR"
+    for proj in spirv-tools spirv-headers; do
+        if [[ -d "$CACHE_DIR/$proj" ]]; then
+            cp -r "$CACHE_DIR/$proj" subprojects/
+        else
+            git clone --depth=1 "https://github.com/KhronosGroup/${proj}.git" "subprojects/$proj"
+            cp -r "subprojects/$proj" "$CACHE_DIR/"
+        fi
+    done
+    log_success "Subprojects ready"
 }
+
 create_cross_file() {
-log_info "Creating cross-compilation file"
-local ndk_bin="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-local ndk_sys="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-[[ ! -d "$ndk_bin" ]] && { log_error "NDK not found: $ndk_bin"; exit 1; }
-local cver="$API_LEVEL"
-[[ ! -f "${ndk_bin}/aarch64-linux-android${cver}-clang" ]] && cver="35"
-[[ ! -f "${ndk_bin}/aarch64-linux-android${cver}-clang" ]] && cver="34"
-local c_args_list="'-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations'"
-if [ -n "$CFLAGS_EXTRA" ]; then for flag in $CFLAGS_EXTRA; do c_args_list="$c_args_list, '$flag'"; done; fi
-local cpp_args_list="'-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations'"
-if [ -n "$CXXFLAGS_EXTRA" ]; then for flag in $CXXFLAGS_EXTRA; do cpp_args_list="$cpp_args_list, '$flag'"; done; fi
-local link_args_list="'-static-libstdc++'"
-if [ -n "$LDFLAGS_EXTRA" ]; then for flag in $LDFLAGS_EXTRA; do link_args_list="$link_args_list, '$flag'"; done; fi
-cat > "${WORKDIR}/cross-aarch64.txt" << EOF
+    log_info "Creating cross-compilation file"
+    local ndk_bin="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+    local ndk_sys="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+    [[ ! -d "$ndk_bin" ]] && { log_error "NDK not found: $ndk_bin"; exit 1; }
+    local cver="$API_LEVEL"
+    [[ ! -f "${ndk_bin}/aarch64-linux-android${cver}-clang" ]] && cver="35"
+    [[ ! -f "${ndk_bin}/aarch64-linux-android${cver}-clang" ]] && cver="34"
+    local c_args_list="'-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations'"
+    if [ -n "$CFLAGS_EXTRA" ]; then for flag in $CFLAGS_EXTRA; do c_args_list="$c_args_list, '$flag'"; done; fi
+    local cpp_args_list="'-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations'"
+    if [ -n "$CXXFLAGS_EXTRA" ]; then for flag in $CXXFLAGS_EXTRA; do cpp_args_list="$cpp_args_list, '$flag'"; done; fi
+    local link_args_list="'-static-libstdc++'"
+    if [ -n "$LDFLAGS_EXTRA" ]; then for flag in $LDFLAGS_EXTRA; do link_args_list="$link_args_list, '$flag'"; done; fi
+    cat > "${WORKDIR}/cross-aarch64.txt" << EOF
 [binaries]
 ar     = '${ndk_bin}/llvm-ar'
 c      = ['ccache', '${ndk_bin}/aarch64-linux-android${cver}-clang', '--sysroot=${ndk_sys}']
@@ -835,126 +866,132 @@ cpp_args      = [$cpp_args_list]
 c_link_args   = [$link_args_list]
 cpp_link_args = [$link_args_list]
 EOF
-log_success "Cross-compilation file created"
+    log_success "Cross-compilation file created"
 }
+
 configure_build() {
-log_info "Configuring Mesa build"
-cd "$MESA_DIR"
-local buildtype="$BUILD_TYPE"
-if [[ "$BUILD_VARIANT" == "debug" ]]; then buildtype="debug"; fi
-if [[ "$BUILD_VARIANT" == "profile" ]]; then buildtype="debugoptimized"; fi
-meson setup build \
---cross-file "${WORKDIR}/cross-aarch64.txt" \
--Dbuildtype="$buildtype" \
--Dplatforms=android \
--Dplatform-sdk-version="$API_LEVEL" \
--Dandroid-stub=true \
--Dgallium-drivers= \
--Dvulkan-drivers=freedreno \
--Dvulkan-beta=true \
--Dfreedreno-kmds=kgsl \
--Degl=disabled \
--Dglx=disabled \
--Dgles1=disabled \
--Dgles2=disabled \
--Dopengl=false \
--Dgbm=disabled \
--Dllvm=disabled \
--Dlibunwind=disabled \
--Dlmsensors=disabled \
--Dzstd=disabled \
--Dvalgrind=disabled \
--Dbuild-tests=false \
--Dwerror=false \
--Ddefault_library=shared \
---force-fallback-for=spirv-tools,spirv-headers \
-2>&1 | tee "${WORKDIR}/meson.log"
-if [ ${PIPESTATUS[0]} -ne 0 ]; then log_error "Meson configuration failed"; exit 1; fi
-log_success "Build configured"
+    log_info "Configuring Mesa build"
+    cd "$MESA_DIR"
+    local buildtype="$BUILD_TYPE"
+    if [[ "$BUILD_VARIANT" == "debug" ]]; then buildtype="debug"; fi
+    if [[ "$BUILD_VARIANT" == "profile" ]]; then buildtype="debugoptimized"; fi
+    meson setup build \
+        --cross-file "${WORKDIR}/cross-aarch64.txt" \
+        -Dbuildtype="$buildtype" \
+        -Dplatforms=android \
+        -Dplatform-sdk-version="$API_LEVEL" \
+        -Dandroid-stub=true \
+        -Dgallium-drivers= \
+        -Dvulkan-drivers=freedreno \
+        -Dvulkan-beta=true \
+        -Dfreedreno-kmds=kgsl \
+        -Degl=disabled \
+        -Dglx=disabled \
+        -Dgles1=disabled \
+        -Dgles2=disabled \
+        -Dopengl=false \
+        -Dgbm=disabled \
+        -Dllvm=disabled \
+        -Dlibunwind=disabled \
+        -Dlmsensors=disabled \
+        -Dzstd=disabled \
+        -Dvalgrind=disabled \
+        -Dbuild-tests=false \
+        -Dwerror=false \
+        -Ddefault_library=shared \
+        --force-fallback-for=spirv-tools,spirv-headers \
+        2>&1 | tee "${WORKDIR}/meson.log"
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then log_error "Meson configuration failed"; exit 1; fi
+    log_success "Build configured"
 }
+
 compile_driver() {
-log_info "Compiling Turnip driver"
-local cores=$(nproc 2>/dev/null || echo 4)
-ninja -C "${MESA_DIR}/build" -j"$cores" 2>&1 | tee "${WORKDIR}/ninja.log"
-local driver="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
-[[ ! -f "$driver" ]] && { log_error "Build failed: driver not found"; exit 1; }
-log_success "Compilation complete"
+    log_info "Compiling Turnip driver"
+    local cores=$(nproc 2>/dev/null || echo 4)
+    ninja -C "${MESA_DIR}/build" -j"$cores" 2>&1 | tee "${WORKDIR}/ninja.log"
+    local driver="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
+    [[ ! -f "$driver" ]] && { log_error "Build failed: driver not found"; exit 1; }
+    log_success "Compilation complete"
 }
+
 package_driver() {
-log_info "Packaging driver"
-local version=$(cat "${WORKDIR}/version.txt")
-local commit=$(cat "${WORKDIR}/commit.txt")
-local vulkan_version=$(get_vulkan_version)
-local build_date=$(date +'%Y-%m-%d')
-local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
-local pkg_dir="${WORKDIR}/package"
-local name_suffix="${TARGET_GPU:1}"
-local driver_name="vulkan.ad0${name_suffix}.so"
-mkdir -p "$pkg_dir"
-cp "$driver_src" "${pkg_dir}/${driver_name}"
-patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
-"${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
-"${pkg_dir}/${driver_name}" 2>/dev/null || true
-local driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
-local variant_suffix=""
-case "$BUILD_VARIANT" in
-optimized) variant_suffix="opt"     ;;
-autotuner) variant_suffix="at"      ;;
-vanilla)   variant_suffix="vanilla" ;;
-debug)     variant_suffix="debug"   ;;
-profile)   variant_suffix="profile" ;;
-esac
-local filename="turnip_${TARGET_GPU}_v${version}_${variant_suffix}_${build_date}"
-cat > "${pkg_dir}/meta.json" << EOF
+    log_info "Packaging driver"
+    local version=$(cat "${WORKDIR}/version.txt")
+    local commit=$(cat "${WORKDIR}/commit.txt")
+    local vulkan_version=$(get_vulkan_version)
+    local build_date=$(date +'%Y-%m-%d')
+    local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local pkg_dir="${WORKDIR}/package"
+    local name_suffix="${TARGET_GPU:1}"
+    local driver_name="vulkan.ad0${name_suffix}.so"
+    mkdir -p "$pkg_dir"
+    cp "$driver_src" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
+    "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+        "${pkg_dir}/${driver_name}" 2>/dev/null || true
+    local driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
+    local variant_suffix=""
+    case "$BUILD_VARIANT" in
+        optimized) variant_suffix="opt"     ;;
+        autotuner) variant_suffix="at"      ;;
+        vanilla)   variant_suffix="vanilla" ;;
+        debug)     variant_suffix="debug"   ;;
+        profile)   variant_suffix="profile" ;;
+    esac
+    local filename="turnip_${TARGET_GPU}_v${version}_${variant_suffix}_${build_date}"
+    cat > "${pkg_dir}/meta.json" << EOF
 {
-"schemaVersion": 1,
-"name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
-"description": "Compiled from Mesa freedreno",
-"author": "BlueInstruction",
-"packageVersion": "1",
-"vendor": "Mesa",
-"driverVersion": "${vulkan_version}",
-"minApi": 28,
-"libraryName": "${driver_name}"
+  "schemaVersion": 1,
+  "name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
+  "description": "Compiled from Mesa freedreno",
+  "author": "BlueInstruction",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "${vulkan_version}",
+  "minApi": 28,
+  "libraryName": "${driver_name}"
 }
 EOF
-echo "$filename"        > "${WORKDIR}/filename.txt"
-echo "$vulkan_version"  > "${WORKDIR}/vulkan_version.txt"
-echo "$build_date"      > "${WORKDIR}/build_date.txt"
-cd "$pkg_dir"
-zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
-log_success "Package created: ${filename}.zip ($driver_size)"
+    echo "$filename"        > "${WORKDIR}/filename.txt"
+    echo "$vulkan_version"  > "${WORKDIR}/vulkan_version.txt"
+    echo "$build_date"      > "${WORKDIR}/build_date.txt"
+    cd "$pkg_dir"
+    zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
+    log_success "Package created: ${filename}.zip ($driver_size)"
 }
+
 print_summary() {
-local version=$(cat "${WORKDIR}/version.txt")
-local commit=$(cat "${WORKDIR}/commit.txt")
-local vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
-local build_date=$(cat "${WORKDIR}/build_date.txt")
-echo ""
-log_info "Build Summary"
-echo "  Target GPU    : $TARGET_GPU"
-echo "  Mesa Version   : $version"
-echo "  Vulkan Version : $vulkan_version"
-echo "  Commit         : $commit"
-echo "  Build Date     : $build_date"
-echo "  Build Variant  : $BUILD_VARIANT"
-echo "  Output         :"
-ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
-echo ""
+    local version=$(cat "${WORKDIR}/version.txt")
+    local commit=$(cat "${WORKDIR}/commit.txt")
+    local vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
+    local build_date=$(cat "${WORKDIR}/build_date.txt")
+    echo ""
+    log_info "Build Summary"
+    echo "  Target GPU    : $TARGET_GPU"
+    echo "  Mesa Version   : $version"
+    echo "  Vulkan Version : $vulkan_version"
+    echo "  Commit         : $commit"
+    echo "  Build Date     : $build_date"
+    echo "  Build Variant  : $BUILD_VARIANT"
+    echo "  Output         :"
+    ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
+    echo ""
 }
+
 main() {
-log_info "Turnip Driver Builder"
-check_deps
-prepare_workdir
-clone_mesa
-update_vulkan_headers
-apply_patches
-setup_subprojects
-create_cross_file
-configure_build
-compile_driver
-package_driver
-print_summary
-log_success "Build completed successfully"
+    log_info "Turnip Driver Builder"
+    check_deps
+    prepare_workdir
+    clone_mesa
+    update_vulkan_headers
+    apply_patches
+    setup_subprojects
+    create_cross_file
+    configure_build
+    compile_driver
+    package_driver
+    print_summary
+    log_success "Build completed successfully"
 }
+
 main "$@"

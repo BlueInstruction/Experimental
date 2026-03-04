@@ -263,47 +263,6 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Create GitHub Release
-        if: inputs.create_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "turnip-${{ steps.build.outputs.version }}-${{ steps.build.outputs.commit }}"
-          name: "Turnip ${{ steps.build.outputs.version }} (${{ inputs.target_gpu }})"
-          body: |
-            ## Turnip Vulkan Driver Build
-
-            | Property | Value |
-            |----------|-------|
-            | Version | `${{ steps.build.outputs.version }}` |
-            | Commit | `${{ steps.build.outputs.commit }}` |
-            | Vulkan | `${{ steps.build.outputs.vulkan }}` |
-            | GPU Target | `${{ inputs.target_gpu }}` |
-            | Build Type | `${{ inputs.build_type }}` |
-            | Variant | `${{ inputs.build_variant }}` |
-
-            ### Enabled Features:
-            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
-            ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
-            ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
-            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
-            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
-
-            ### Installation (Winlator):
-            1. Copy the .zip file to /sdcard/Android/data/com.winlator/files/drivers/
-            2. Open Winlator -> Settings -> Graphics Driver
-            3. Select the new driver from the list
-            4. Enjoy
-
-            ---
-            Compiled from Mesa freedreno
-          files: |
-            build/*.zip
-          draft: ${{ inputs.release_as_draft }}
-          prerelease: ${{ inputs.build_variant == 'debug' || inputs.build_variant == 'profile' }}
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build Summary
         if: always()
         run: |

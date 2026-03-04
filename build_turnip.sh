@@ -330,36 +330,52 @@ apply_deck_emu_support() {
         esac
         python3 - "$tu_device_cc" "$driver_id" "$driver_name" "$device_name" "$vendor_id" "$device_id" << 'PYEOF'
 import sys, re
-filepath, driver_id, driver_name, device_name, vendor_id, device_id = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5], 16), int(sys.argv[6], 16)
-with open(filepath, 'r') as f: content = f.read()
-injection = f"""
-if (TU_DEBUG(DECK_EMU)) {{
-p->driverID = {driver_id};
-memset(p->driverName, 0, sizeof(p->driverName));
-snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "{driver_name}");
-memset(p->driverInfo, 0, sizeof(p->driverInfo));
-snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");
-}}
-"""
-injected=False
-m = re.search(r'(
-[ \t]*p->denormBehaviorIndependence\s*=)', content)
+fp  = sys.argv[1]
+did = sys.argv[2]
+dn  = sys.argv[3]
+dv  = sys.argv[4]
+vid = int(sys.argv[5], 16)
+devid = int(sys.argv[6], 16)
+with open(fp) as f: c = f.read()
+inj = (
+    '\nif (TU_DEBUG(DECK_EMU)) {\n'
+    '   p->driverID = ' + did + ';\n'
+    '   memset(p->driverName, 0, sizeof(p->driverName));\n'
+    '   snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "' + dn + '");\n'
+    '   memset(p->driverInfo, 0, sizeof(p->driverInfo));\n'
+    '   snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");\n'
+    '}\n'
+)
+done = False
+m = re.search(r'(\n[ \t]*p->denormBehaviorIndependence\s*=)', c)
 if m:
-    content = content[:m.start()] + '
-' + injection + content[m.start()]; injected=True
-if not injected:
-    func_m = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', content)
-    if func_m:
-        start=func_m.end(); depth=1; pos=start
-        while pos < len(content) and depth > 0:
-            if content[pos]=='{': depth+=1
-            elif content[pos]=='}': depth-=1
-            pos+=1
-        content = content[:pos-1] + '
-' + injection + content[pos-1:]; injected=True
-if injected:
-    with open(filepath, 'w') as f: f.write(content)
-    print(f"[OK] deck_emu {driver_id} injection applied")
+    c = c[:m.start()] + '\n' + inj + c[m.start()]
+    done = True
+if not done:
+    fm = re.search(r'tu_get_physical_device_properties_1_2\s*\([^)]*\)\s*\{', c)
+    if fm:
+        d = 1; p = fm.end()
+        while p < len(c) and d > 0:
+            if c[p] == '{': d += 1
+            elif c[p] == '}': d -= 1
+            p += 1
+        c = c[:p-1] + '\n' + inj + c[p-1:]
+        done = True
+if not done:
+    m2 = re.search(r'(tu_get_physical_device_properties2\s*\([^{]*\{)', c, re.DOTALL)
+    if m2:
+        d = 1; p = m2.end()
+        while p < len(c) and d > 0:
+            if c[p] == '{': d += 1
+            elif c[p] == '}': d -= 1
+            p += 1
+        c = c[:p-1] + '\n' + inj + c[p-1:]
+        done = True
+if done:
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] deck_emu applied: ' + did)
+else:
+    print('[WARN] deck_emu: no injection point found, skipping')
 PYEOF
         log_success "deck_emu spoofing applied"
     fi
@@ -577,7 +593,7 @@ def find_point(text):
                 if text[p]=='{': d+=1
                 elif text[p]=='}': d-=1
                 p+=1
-            return ev,p
+            return ev,p-1
     last=None
     for m in re.finditer(r'(\w+)->(KHR|EXT|AMD|VALVE|QCOM|MESA|GOOGLE|HUAWEI|ARM|SEC|NV|INTEL|IMG|ANDROID)\w+\s*=\s*(?:true|false)\s*;',text):
         last=m
@@ -601,133 +617,8 @@ else:
     print(f"[OK] Done - {len(dev_exts)} assignments written")
 with open(tu_path,'w') as f: f.write(content)
 PYEOF
-
-    python3 - "$tu_device" << 'PYEOF2'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-TARGET_EXTS = [
-    "KHR_maintenance7","KHR_maintenance8","KHR_maintenance9","KHR_maintenance10",
-    "KHR_performance_query","KHR_pipeline_binary","KHR_pipeline_executable_properties",
-    "KHR_pipeline_library","KHR_portability_subset","KHR_unified_image_layouts",
-    "KHR_robustness2","KHR_shader_bfloat16","KHR_shader_fma","KHR_shader_untyped_pointers",
-    "KHR_present_id","KHR_present_id2","KHR_present_wait","KHR_present_wait2",
-    "KHR_present_mode_fifo_latest_ready","KHR_ray_query","KHR_ray_tracing_maintenance1",
-    "KHR_ray_tracing_pipeline","KHR_ray_tracing_position_fetch",
-    "KHR_compute_shader_derivatives","KHR_cooperative_matrix",
-    "KHR_shader_maximal_reconvergence","KHR_shader_quad_control",
-    "KHR_shader_relaxed_extended_instruction","KHR_shader_subgroup_uniform_control_flow",
-    "KHR_shader_clock","KHR_depth_clamp_zero_one","KHR_index_type_uint8",
-    "KHR_vertex_attribute_divisor","KHR_dynamic_rendering_local_read",
-    "EXT_shader_object","EXT_mesh_shader","EXT_descriptor_buffer",
-    "EXT_descriptor_indexing","EXT_device_generated_commands",
-    "EXT_graphics_pipeline_library","EXT_opacity_micromap",
-    "EXT_shader_atomic_float","EXT_shader_atomic_float2","EXT_shader_float8",
-    "EXT_shader_long_vector","EXT_shader_64bit_indexing","EXT_shader_image_atomic_int64",
-    "EXT_shader_tile_image","EXT_shader_replicated_composites",
-    "EXT_vertex_attribute_robustness","EXT_zero_initialize_device_memory",
-    "EXT_nested_command_buffer","EXT_host_image_copy","EXT_image_compression_control",
-    "EXT_pipeline_library_group_handles","EXT_pipeline_robustness",
-    "EXT_depth_bias_control","EXT_depth_clamp_control","EXT_depth_clamp_zero_one",
-    "EXT_frame_boundary","EXT_legacy_vertex_attributes","EXT_dynamic_rendering_unused_attachments",
-    "EXT_subpass_merge_feedback","EXT_multisampled_render_to_single_sampled",
-    "EXT_ray_tracing_invocation_reorder","EXT_device_address_binding_report",
-    "EXT_external_memory_acquire_unmodified",
-    "AMD_buffer_marker","AMD_device_coherent_memory","AMD_mixed_attachment_samples",
-    "VALVE_descriptor_set_host_mapping","VALVE_mutable_descriptor_type",
-    "VALVE_shader_mixed_float_dot_product",
-    "QCOM_tile_memory_heap","QCOM_tile_shading","QCOM_cooperative_matrix_conversion",
-    "QCOM_filter_cubic_clamp","QCOM_filter_cubic_weights",
-    "QCOM_image_processing","QCOM_image_processing2",
-    "AMDX_shader_enqueue","NV_raw_access_chains",
-]
-
-INST_ONLY = {
-    "KHR_surface","KHR_wayland_surface","KHR_win32_surface","KHR_xcb_surface",
-    "KHR_xlib_surface","KHR_android_surface","KHR_display","KHR_portability_enumeration",
-}
-to_inject = [e for e in TARGET_EXTS if e not in INST_ONLY]
-
-for pat in [
-    r'tu_get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
-    r'get_device_extensions\s*\([^{]*?struct\s+vk_device_extension_table\s*\*\s*(\w+)',
-    r'vk_device_extension_table\s*\*\s*(\w+)\s*[,\)]',
-]:
-    m = re.search(pat, c, re.DOTALL)
-    if m:
-        ev = m.group(m.lastindex)
-        bp = c.find('{', m.end())
-        if bp == -1: continue
-        d = 1; p = bp + 1
-        while p < len(c) and d > 0:
-            if c[p] == '{': d += 1
-            elif c[p] == '}': d -= 1
-            p += 1
-        lines = ['']
-        for e in to_inject:
-            if f'{ev}->{e} = true;' not in c:
-                lines.append(f'    {ev}->{e} = true;')
-        lines.append('')
-        c = c[:p] + '\n'.join(lines) + c[p:]
-        print(f"[OK] TARGET_EXTS: injected {len(lines)-2} missing extensions after function end")
-        break
-else:
-    print("[WARN] Could not find device extension function for TARGET_EXTS injection")
-
-for feat, minval in [
-    (r'(maxDescriptorSetUpdateAfterBindSamplers\s*=\s*)(\d+)', 1000000),
-    (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*=\s*)(\d+)', 1000000),
-    (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*=\s*)(\d+)', 1000000),
-    (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*=\s*)(\d+)', 1000000),
-    (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*=\s*)(\d+)', 1048576),
-    (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*=\s*)(\d+)', 1048576),
-    (r'(maxPerStageUpdateAfterBindResources\s*=\s*)(\d+)', 1048576),
-]:
-    def _rep(m, mv=minval):
-        try:
-            if int(m.group(2)) < mv: return m.group(1) + str(mv)
-        except Exception: pass
-        return m.group(0)
-    new, n = re.subn(feat, _rep, c)
-    if n: c = new
-print("[OK] Descriptor limits boosted for VKD3D-proton")
-
-for feat in [
-    "bufferDeviceAddress","bufferDeviceAddressCaptureReplay","timelineSemaphore",
-    "dynamicRendering","synchronization2","maintenance4",
-    "descriptorBindingPartiallyBound","descriptorBindingVariableDescriptorCount",
-    "runtimeDescriptorArray","descriptorBindingSampledImageUpdateAfterBind",
-    "descriptorBindingStorageImageUpdateAfterBind","descriptorBindingStorageBufferUpdateAfterBind",
-    "descriptorBindingUpdateUnusedWhilePending",
-]:
-    new, n = re.subn(rf'(\.{re.escape(feat)}\s*=\s*)VK_FALSE', r'\g<1>VK_TRUE', c)
-    if n: c = new
-
-with open(fp, 'w') as f: f.write(c)
-PYEOF2
     log_success "Vulkan extensions support applied"
 }
-
-apply_a8xx_flushall_fix() {
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_dev" ]] && return 0
-    if grep -q "TU_DEBUG_FLUSHALL" "$tu_dev" && ! grep -q "FLUSHALL_REMOVED" "$tu_dev"; then
-        python3 - "$tu_dev" << 'FLUSH_PY'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-new, n = re.subn(r'[ \t]*tu_env\.debug \|= TU_DEBUG_FLUSHALL;[^\n]*\n', '', c, count=1)
-if n:
-    c = new
-    c = c.replace('#include "tu_device.h"', '#include "tu_device.h"\n/* FLUSHALL_REMOVED */', 1)
-    print("[OK] TU_DEBUG_FLUSHALL removed for gen8")
-with open(fp, 'w') as f: f.write(c)
-FLUSH_PY
-        log_success "gen8 FLUSHALL removed"
-    fi
-}
-
 
 apply_a8xx_device_support() {
     log_info "Applying A8xx device support patches"
@@ -753,28 +644,11 @@ case 6:' "$knl_kgsl" 2>/dev/null || true
         fi
     fi
 
-    if [[ -f "$tu_cmd" ]] && ! grep -q "disable_gmem" "$tu_cmd"; then
-        python3 - "$tu_cmd" << 'CMDBUF_PY'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-insert = (
-    '\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n'
-    '      cmd->state.rp.gmem_disable_reason = "Unsupported GPU";\n'
-    '      return true;\n'
-    '}\n'
-)
-for pat in [r'(/\* can.t fit attachments into gmem \*/)', r'(if \(!cmd->state\.tiling->possible\))']:
-    new, n = re.subn(pat, insert + r'\1', c, count=1)
-    if n:
-        c = new
-        print("[OK] disable_gmem check added to tu_cmd_buffer.cc")
-        break
-else:
-    print("[WARN] Could not find injection point in tu_cmd_buffer.cc")
-with open(fp, 'w') as f: f.write(c)
-CMDBUF_PY
-        log_success "disable_gmem check added to tu_cmd_buffer.cc"
+    if [[ -f "$tu_cmd" ]]; then
+        if ! grep -q "disable_gmem" "$tu_cmd"; then
+            sed -i '/return true;/a\   if (cmd->device->physical_device->dev_info.props.disable_gmem) return true;' "$tu_cmd"
+            log_success "Added disable_gmem check to tu_cmd_buffer.cc"
+        fi
     fi
 
     if [[ -f "$fd_gmem" ]]; then
@@ -914,26 +788,6 @@ PYEOF
     log_success "A8xx support applied"
 }
 
-apply_reduce_advertised_memory() {
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    [[ ! -f "$tu_dev" ]] && return 0
-    if grep -q "REDUCE_MEM_APPLIED" "$tu_dev"; then return 0; fi
-    python3 - "$tu_dev" << 'PYMEM'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-pat = r'(\.size\s*=\s*)(heap_size|[a-zA-Z_][a-zA-Z_0-9]*_size)(\s*[,;])'
-new, n = re.subn(pat, r'\g<1>(\g<2> * 3 / 4)\g<3>', c)
-if n:
-    c = new
-    print(f"[OK] Capped {n} heap size(s) to 75% of physical RAM")
-c = c.replace('#include "tu_device.h"', '#include "tu_device.h"\n/* REDUCE_MEM_APPLIED */', 1)
-with open(fp, 'w') as f: f.write(c)
-PYMEM
-    log_success "Memory advertised capped at 75%"
-}
-
-
 apply_patches() {
     log_info "Applying patches for $TARGET_GPU"
     cd "$MESA_DIR"
@@ -949,11 +803,9 @@ apply_patches() {
         apply_gralloc_ubwc_fix
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-        apply_a8xx_flushall_fix
         if [[ "$TARGET_GPU" == "a8xx" ]]; then
             apply_a8xx_device_support
         fi
-        apply_reduce_advertised_memory
         if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
     fi
     if [[ -d "$PATCHES_DIR" ]]; then

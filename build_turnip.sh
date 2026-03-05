@@ -538,14 +538,20 @@ feats=[
 ]
 nf=0
 for p in feats:
-    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
-    new,n=re.subn(pat2, r'\1true\3', content)
-    if n: content=new; nf+=n
-    pat2 = r'(\.' + re.escape(p) + r'\s*=\s*)([^;,\n]+)([;,\n])'
-    new,n=re.subn(pat2, r'\1true\3', content)
-    if n: content=new; nf+=n
+    # FIX: Broaden regex to match Mesa 26.x C++ struct initialiser patterns.
+    # Try semicolon-terminated first, then comma-terminated.
+    for pat2 in [
+        r'(\.' + re.escape(p) + r'\s*=\s*)([^;\n]+)(;)',
+        r'(\.' + re.escape(p) + r'\s*=\s*)([^,\n]+)(,)',
+    ]:
+        new, n = re.subn(pat2, r'\1true\3', content)
+        if n: content = new; nf += n; break
 print(f"[OK] Forced {nf} feature flags to true")
+# FIX: The first script already changed all ": N" to ": 1", so re-read to
+# get extension names. Fall back to matching any VK_ quoted key if needed.
 all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
+if not all_exts:
+    all_exts = list(dict.fromkeys(re.findall(r'"(VK_[A-Z0-9_]+)"', vk_py)))
 print(f"[INFO] {len(all_exts)} entries in vk_extensions.py")
 INST_ONLY={
 "VK_KHR_surface","VK_KHR_surface_maintenance1","VK_KHR_surface_protected_capabilities",
@@ -607,168 +613,44 @@ PYEOF
 
 apply_a8xx_device_support() {
     log_info "Applying A8xx device support patches"
-    local devfile="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
     local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-    local tu_dev="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-    local fd_gmem="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
-    local dev_info="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
 
-    if [[ -f "$knl_kgsl" ]]; then
-        if ! grep -q "case 5:" "$knl_kgsl"; then
-            sed -i '/case KGSL_UBWC_4_0:/a\   case 5:
-case 6:' "$knl_kgsl" 2>/dev/null || true
-            log_success "Added UBWC 5/6 support"
-        fi
-    fi
-
-    if [[ -f "$dev_info" ]]; then
-        if ! grep -q "disable_gmem" "$dev_info"; then
-            sed -i '/bool has_salu_int_narrowing_quirk;/a\      bool disable_gmem;' "$dev_info"
-            log_success "Added disable_gmem to dev_info.h"
-        fi
-    fi
-
-    if [[ -f "$tu_cmd" ]]; then
-        if ! grep -q "disable_gmem" "$tu_cmd"; then
-            sed -i '/return true;/a\   if (cmd->device->physical_device->dev_info.props.disable_gmem) return true;' "$tu_cmd"
-            log_success "Added disable_gmem check to tu_cmd_buffer.cc"
-        fi
-    fi
-
-    if [[ -f "$fd_gmem" ]]; then
-        sed -i 's/if (info->chip >= 8)/if (info->chip >= 8 \&\& info->num_slices > 1)/g' "$fd_gmem"
-        log_success "Patched fd6_gmem_cache.h for slice check"
-    fi
-
-    python3 - "$devfile" << 'PYEOF'
+    if [[ -f "$knl_kgsl" ]] && ! grep -q "case 5:" "$knl_kgsl"; then
+        python3 - "$knl_kgsl" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
-with open(fp) as f: content = f.read()
-props_code = """
-a8xx_gen1 = GPUProps(
-reg_size_vec4 = 96,
-disable_gmem = True,
+with open(fp) as f:
+    c = f.read()
+inject = (
+    '   case 5: /* UBWC 5.0 */\n'
+    '   case 6: /* UBWC 6.0 */\n'
+    '      device->ubwc_config.bank_swizzle_levels = 0x6;\n'
+    '      device->ubwc_config.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
+    '      break;\n'
 )
-a8xx_gen2 = GPUProps(
-reg_size_vec4 = 128,
-sysmem_vpc_attr_buf_size = 131072,
-sysmem_vpc_pos_buf_size = 65536,
-sysmem_vpc_bv_pos_buf_size = 32768,
-has_salu_int_narrowing_quirk = True
-)
-a8xx_830 = GPUProps(
-sysmem_vpc_attr_buf_size = 131072,
-sysmem_vpc_pos_buf_size = 65536,
-sysmem_vpc_bv_pos_buf_size = 32768,
-sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-sysmem_per_ccu_color_cache_size = 128 * 1024,
-sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-sysmem_per_ccu_depth_cache_size = 192 * 1024,
-gmem_vpc_attr_buf_size = 49152,
-gmem_vpc_pos_buf_size = 24576,
-gmem_vpc_bv_pos_buf_size = 32768,
-gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-gmem_per_ccu_color_cache_size = 16 * 1024,
-gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-gmem_per_ccu_depth_cache_size = 256 * 1024,
-has_fs_tex_prefetch = False,
-disable_gmem = True,
-)
-a8xx_825 = GPUProps(
-sysmem_vpc_attr_buf_size = 131072,
-sysmem_vpc_pos_buf_size = 65536,
-sysmem_vpc_bv_pos_buf_size = 32768,
-sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-sysmem_per_ccu_color_cache_size = 128 * 1024,
-sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-sysmem_per_ccu_depth_cache_size = 96 * 1024,
-gmem_vpc_attr_buf_size = 49152,
-gmem_vpc_pos_buf_size = 24576,
-gmem_vpc_bv_pos_buf_size = 32768,
-gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-gmem_per_ccu_color_cache_size = 16 * 1024,
-gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-gmem_per_ccu_depth_cache_size = 127 * 1024,
-)
-a8xx_810 = GPUProps(
-sysmem_vpc_attr_buf_size = 131072,
-sysmem_vpc_pos_buf_size = 65536,
-sysmem_vpc_bv_pos_buf_size = 32768,
-sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-sysmem_per_ccu_color_cache_size = 32 * 1024,
-sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-sysmem_per_ccu_depth_cache_size = 32 * 1024,
-gmem_vpc_attr_buf_size = 49152,
-gmem_vpc_pos_buf_size = 24576,
-gmem_vpc_bv_pos_buf_size = 32768,
-gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-gmem_per_ccu_color_cache_size = 16 * 1024,
-gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-gmem_per_ccu_depth_cache_size = 64 * 1024,
-has_ray_intersection = False,
-has_sw_fuse = False,
-disable_gmem = True,
-)
-a8xx_829 = GPUProps(
-sysmem_vpc_attr_buf_size = 131072,
-sysmem_vpc_pos_buf_size = 65536,
-sysmem_vpc_bv_pos_buf_size = 32768,
-sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-sysmem_per_ccu_color_cache_size = 128 * 1024,
-sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-sysmem_per_ccu_depth_cache_size = 96 * 1024,
-gmem_vpc_attr_buf_size = 49152,
-gmem_vpc_pos_buf_size = 24576,
-gmem_vpc_bv_pos_buf_size = 32768,
-gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
-gmem_per_ccu_color_cache_size = 16 * 1024,
-gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
-gmem_per_ccu_depth_cache_size = 127 * 1024,
-disable_gmem = True,
-)
-"""
-if "a8xx_830 = GPUProps" not in content:
-    content += "\n" + props_code
-    print("[OK] Appended A8xx Props")
-def add_gpu(cid, name, props_var, num_ccu, num_slices):
-    return f"""
-add_gpus([
-GPUId(chip_id={cid}, name="{name}"),
-], A6xxGPUInfo(
-CHIP.A8XX,
-[a7xx_base, a7xx_gen3, a8xx_base, {props_var}],
-num_ccu = {num_ccu},
-num_slices = {num_slices},
-tile_align_w = 64,
-tile_align_h = 32,
-tile_max_w = 16384,
-tile_max_h = 16384,
-num_vsc_pipes = 32,
-cs_shared_mem_size = 32 * 1024,
-wave_granularity = 2,
-fibers_per_sp = 128 * 2 * 16,
-magic_regs = dict(),
-raw_magic_regs = a8xx_base_raw_magic_regs,
-))
-"""
-pattern = r'add_gpus\(\[\s*GPUId\(chip_id=0x44050000, name="FD830"\),\s*\], A6xxGPUInfo\('
-replacement = add_gpu("0x44050000", "FD830", "a8xx_830", 6, 3) + \
-add_gpu("0x44050001", "FD830v2", "a8xx_830", 6, 3) + \
-add_gpu("0x44030000", "FD825", "a8xx_825", 4, 2) + \
-add_gpu("0x44010000", "FD810", "a8xx_810", 2, 1) + \
-add_gpu("0x44030A00", "FD829", "a8xx_829", 4, 2) + \
-add_gpu("0x44030A20", "FD829", "a8xx_829", 4, 2)
-if "FD810" not in content:
-    if re.search(pattern, content):
-        content = re.sub(pattern, replacement, content)
-        print("[OK] Replaced/Extended A8xx device IDs")
-    else:
-        content += replacement
-        print("[OK] Appended A8xx device IDs")
-with open(fp, 'w') as f:
-    f.write(content)
+pat = r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)'
+m = re.search(pat, c, re.DOTALL)
+if m:
+    c = c[:m.start(2)] + inject + c[m.start(2):]
+    with open(fp, 'w') as f:
+        f.write(c)
+    print('[OK] UBWC 5/6 cases inserted before default:')
+else:
+    print('[WARN] UBWC switch pattern not found, skipping')
 PYEOF
+        log_success "UBWC 5/6 support applied"
+    else
+        log_info "UBWC 5/6: already patched or file not found"
+    fi
+
+    # NOTE: freedreno_devices.py injection removed.
+    # Mesa 26.x already ships proper a8xx device entries upstream
+    # (FD830/0x44050000, Adreno 840/0xffff44050A31, X2-85/0xffff44070041).
+    # The old injection used 'num_slices' which is NOT a parameter of
+    # A6xxGPUInfo.__init__, causing TypeError when Mesa runs the script.
+    # It also did a partial regex replace leaving orphaned Python syntax.
+    log_info "A8xx: using upstream Mesa device table (no custom injection)"
+
     log_success "A8xx support applied"
 }
 
@@ -809,7 +691,6 @@ apply_patches() {
     fi
     log_success "All patches applied"
 }
-
 
 setup_subprojects() {
     log_info "Setting up subprojects via Meson wraps"

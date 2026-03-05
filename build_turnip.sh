@@ -381,11 +381,6 @@ PYEOF
     fi
 }
 
-apply_a6xx_query_fix() {
-    log_info "Applying A6xx query fix"
-    find "${MESA_DIR}/src/freedreno/vulkan" -name "tu_query*.cc" -exec sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' {} \; 2>/dev/null || true
-}
-
 apply_vulkan_extensions_support() {
     log_info "Enabling Vulkan extensions and D3D features"
     local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -795,7 +790,6 @@ apply_patches() {
         if [[ "$TARGET_GPU" == "a8xx" ]]; then
             apply_a8xx_device_support
         fi
-        if [[ "$BUILD_VARIANT" == "autotuner" ]]; then apply_a6xx_query_fix; fi
     fi
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do
@@ -816,21 +810,12 @@ apply_patches() {
     log_success "All patches applied"
 }
 
+
 setup_subprojects() {
-    log_info "Setting up subprojects with caching"
+    log_info "Setting up subprojects via Meson wraps"
     cd "$MESA_DIR"
-    mkdir -p subprojects
-    local CACHE_DIR="${WORKDIR}/subprojects-cache"
-    mkdir -p "$CACHE_DIR"
-    for proj in spirv-tools spirv-headers; do
-        if [[ -d "$CACHE_DIR/$proj" ]]; then
-            cp -r "$CACHE_DIR/$proj" subprojects/
-        else
-            git clone --depth=1 "https://github.com/KhronosGroup/${proj}.git" "subprojects/$proj"
-            cp -r "subprojects/$proj" "$CACHE_DIR/"
-        fi
-    done
-    log_success "Subprojects ready"
+    mkdir -p subprojects/packagecache
+    log_success "Subprojects ready (Meson wraps will resolve at configure time)"
 }
 
 create_cross_file() {

@@ -47,7 +47,8 @@ on:
           - debug
           - profile
 
-      target_gpu:        type: choice
+      target_gpu:      
+        type: choice
         description: "Target GPU generation"
         default: "a7xx"
         options:
@@ -194,7 +195,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:          fetch-depth: 1
+        with:
+         fetch-depth: 1
 
       - name: Install build dependencies
         run: |
@@ -341,7 +343,8 @@ jobs:
           echo ""
 
   notify-on-failure:
-    needs: build-turnip    if: failure()
+    needs: build-turnip    
+    if: failure()
     runs-on: ubuntu-latest
     steps:
       - name: Notify build failure

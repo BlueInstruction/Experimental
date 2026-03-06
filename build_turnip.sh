@@ -487,7 +487,7 @@ ALL=[
 "VK_VALVE_mutable_descriptor_type","VK_VALVE_shader_mixed_float_dot_product",
 "VK_VALVE_video_encode_rgb_conversion",
 ]
-known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
+known = set(re.findall(r'"(VK_[A-Za-z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in ALL if e not in known]
 if adds:
     anchor = '"VK_KHR_swapchain": 1,'
@@ -549,9 +549,9 @@ for p in feats:
 print(f"[OK] Forced {nf} feature flags to true")
 # FIX: The first script already changed all ": N" to ": 1", so re-read to
 # get extension names. Fall back to matching any VK_ quoted key if needed.
-all_exts = re.findall(r'"(VK_[A-Z0-9_]+)"\s*:\s*\d+', vk_py)
+all_exts = re.findall(r'"(VK_[A-Za-z0-9_]+)"\s*:\s*\d+', vk_py)
 if not all_exts:
-    all_exts = list(dict.fromkeys(re.findall(r'"(VK_[A-Z0-9_]+)"', vk_py)))
+    all_exts = list(dict.fromkeys(re.findall(r'"(VK_[A-Za-z0-9_]+)"', vk_py)))
 print(f"[INFO] {len(all_exts)} entries in vk_extensions.py")
 INST_ONLY={
 "VK_KHR_surface","VK_KHR_surface_maintenance1","VK_KHR_surface_protected_capabilities",

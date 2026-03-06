@@ -615,6 +615,13 @@ apply_a8xx_device_support() {
     log_info "Applying A8xx device support patches"
     local knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
 
+    # FIX: Add UBWC 5/6 support using Python for reliable multi-line editing.
+    # Old approach used sed multiline a\ which corrupted the file (the literal
+    # newline caused the second line to be parsed as a sed 'c' change command).
+    # We now insert case 5 and case 6 BEFORE the 'default:' in the UBWC switch,
+    # which correctly matches the Mesa 26.x tu_knl_kgsl.cc structure:
+    #   case KGSL_UBWC_4_0: ... break;
+    #   default: → error   (we insert before this)
     if [[ -f "$knl_kgsl" ]] && ! grep -q "case 5:" "$knl_kgsl"; then
         python3 - "$knl_kgsl" << 'PYEOF'
 import sys, re
@@ -654,6 +661,289 @@ PYEOF
     log_success "A8xx support applied"
 }
 
+
+apply_custom_debug_flags() {
+    log_info "Adding custom TU_DEBUG flags: force_vrs, push_regs, ubwc_all, slc_pin, turbo, defrag, cp_prefetch, shfl, vgt_pref, unroll"
+
+    local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
+    local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local tu_image_cc="${MESA_DIR}/src/freedreno/vulkan/tu_image.cc"
+    local ir3_ra_c="${MESA_DIR}/src/freedreno/ir3/ir3_ra.c"
+    local ir3_compiler_nir="${MESA_DIR}/src/freedreno/ir3/ir3_compiler_nir.c"
+
+    [[ ! -f "$tu_util_h" ]] && { log_warn "tu_util.h not found, skipping custom flags"; return 0; }
+
+    # ── Step 1: BITFIELD64 definitions in tu_util.h ──────────────────────
+    python3 - "$tu_util_h" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if 'TU_DEBUG_FORCE_VRS' in c:
+    print('[OK] tu_util.h already has custom flags'); sys.exit(0)
+bits = list(map(int, re.findall(r'BITFIELD64_BIT\((\d+)\)', c)))
+if not bits:
+    print('[WARN] No BITFIELD64_BIT found'); sys.exit(0)
+next_bit = max(bits) + 1
+flags = [
+    'TU_DEBUG_FORCE_VRS','TU_DEBUG_PUSH_REGS','TU_DEBUG_UBWC_ALL',
+    'TU_DEBUG_SLC_PIN','TU_DEBUG_TURBO','TU_DEBUG_DEFRAG',
+    'TU_DEBUG_CP_PREFETCH','TU_DEBUG_SHFL','TU_DEBUG_VGT_PREF',
+    'TU_DEBUG_UNROLL',
+]
+lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
+# Find last BITFIELD64_BIT line and append after it
+all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
+if all_m:
+    last = all_m[-1]
+    eol = c.find('\n', last.end())
+    c = c[:eol+1] + lines + '\n' + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print(f'[OK] Added {len(flags)} custom TU_DEBUG flags starting at bit {next_bit}')
+else:
+    print('[WARN] Could not find enum insertion point in tu_util.h')
+PYEOF
+
+    # ── Step 2: debug name table in tu_util.cc ────────────────────────────
+    python3 - "$tu_util_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if 'force_vrs' in c:
+    print('[OK] tu_util.cc already patched'); sys.exit(0)
+new_entries = (
+    '   { "force_vrs",   TU_DEBUG_FORCE_VRS   },\n'
+    '   { "push_regs",   TU_DEBUG_PUSH_REGS   },\n'
+    '   { "ubwc_all",    TU_DEBUG_UBWC_ALL    },\n'
+    '   { "slc_pin",     TU_DEBUG_SLC_PIN     },\n'
+    '   { "turbo",       TU_DEBUG_TURBO       },\n'
+    '   { "defrag",      TU_DEBUG_DEFRAG      },\n'
+    '   { "cp_prefetch", TU_DEBUG_CP_PREFETCH },\n'
+    '   { "shfl",        TU_DEBUG_SHFL        },\n'
+    '   { "vgt_pref",    TU_DEBUG_VGT_PREF    },\n'
+    '   { "unroll",      TU_DEBUG_UNROLL      },\n'
+)
+all_m = list(re.finditer(r'\{\s*"[a-z_]+"\s*,\s*TU_DEBUG_\w+\s*\}', c))
+if all_m:
+    last = all_m[-1]
+    eol = c.find('\n', last.end())
+    c = c[:eol+1] + new_entries + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] Added 10 custom entries to debug table in tu_util.cc')
+else:
+    print('[WARN] Debug table not found in tu_util.cc')
+PYEOF
+
+    # ── Step 3: turbo — sysfs perf governor (silent fail, no crash) ───────
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "tu_try_activate_turbo" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+turbo_func = """
+/* TU_DEBUG_TURBO: attempt to lock GPU at max frequency via sysfs.
+ * Silently ignored if process lacks root permission — no crash. */
+static void
+tu_try_activate_turbo(void)
+{
+   static const char * const min_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/min_pwrlevel",
+      "/sys/class/devfreq/kgsl-3d0/min_freq",
+      NULL,
+   };
+   static const char * const gov_paths[] = {
+      "/sys/class/kgsl/kgsl-3d0/devfreq/governor",
+      "/sys/class/devfreq/kgsl-3d0/governor",
+      NULL,
+   };
+   for (int i = 0; min_paths[i]; i++) {
+      int fd = open(min_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }
+   }
+   for (int i = 0; gov_paths[i]; i++) {
+      int fd = open(gov_paths[i], O_WRONLY | O_CLOEXEC);
+      if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
+   }
+}
+"""
+
+turbo_call = """
+   /* TU_DEBUG_TURBO: request max GPU performance at device creation */
+   if (TU_DEBUG(TURBO))
+      tu_try_activate_turbo();
+"""
+
+# Insert function before first static/VkResult function
+m_func = re.search(r'\n(static |VkResult |void )', c)
+if m_func and 'tu_try_activate_turbo' not in c:
+    c = c[:m_func.start()+1] + turbo_func + '\n' + c[m_func.start()+1:]
+
+# Insert call right after tu_physical_device_init succeeds
+m_call = re.search(r'(result\s*=\s*tu_physical_device_init\([^;]+;\s*\n\s*if\s*\([^)]+\)[^{]*\{[^}]*\}\s*\n)', c, re.DOTALL)
+if not m_call:
+    # Simpler: find the line with tu_physical_device_init and inject after it
+    m_call = re.search(r'(tu_physical_device_init\([^;]+;\s*\n)', c)
+if m_call:
+    c = c[:m_call.end()] + turbo_call + c[m_call.end():]
+
+with open(fp, 'w') as f: f.write(c)
+print('[OK] turbo mode injected into tu_device.cc')
+PYEOF
+        log_success "TU_DEBUG_TURBO implementation added"
+    fi
+
+    # ── Step 4: defrag — align large allocations to 64KB ──────────────────
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "TU_DEBUG_DEFRAG" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+defrag_code = """
+   /* TU_DEBUG_DEFRAG: align large BO allocations to 64KB for
+    * better memory contiguity and reduced fragmentation. */
+   if (TU_DEBUG(DEFRAG) && size > (1u << 20))
+      size = ALIGN(size, 64 * 1024);
+"""
+
+# Find tu_bo_init_new body — look for the first use of 'size' param
+# after function signature to insert alignment before actual alloc
+m = re.search(r'(VkResult\s+\w*bo_init_new\w*\s*\([^{]+\{)', c)
+if m:
+    body_start = m.end()
+    # Find first statement inside body
+    first_stmt = re.search(r'\n\s+\S', c[body_start:])
+    if first_stmt:
+        ins = body_start + first_stmt.start() + 1
+        c = c[:ins] + defrag_code + c[ins:]
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] defrag alignment injected into tu_device.cc')
+    else:
+        with open(fp, 'w') as f: f.write(c)
+        print('[WARN] defrag: body start not found')
+else:
+    with open(fp, 'w') as f: f.write(c)
+    print('[WARN] defrag: bo_init_new not found, skipping')
+PYEOF
+        log_success "TU_DEBUG_DEFRAG implementation added"
+    fi
+
+    # ── Step 5: ubwc_all — force UBWC on color images ─────────────────────
+    if [[ -f "$tu_image_cc" ]] && ! grep -q "TU_DEBUG_UBWC_ALL" "$tu_image_cc"; then
+        python3 - "$tu_image_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+ubwc_code = """
+   /* TU_DEBUG_UBWC_ALL: force enable UBWC compression on all
+    * eligible color images to reduce memory bandwidth. */
+   if (TU_DEBUG(UBWC_ALL)) {
+      if (!vk_format_is_depth_or_stencil(image->vk.format) &&
+          !vk_format_is_compressed(image->vk.format) &&
+          image->vk.format != VK_FORMAT_UNDEFINED) {
+         for (unsigned p = 0; p < image->plane_count; p++)
+            image->planes[p].layout.ubwc = true;
+      }
+   }
+"""
+
+# Find tu_image_init_layout or tu_image_init and inject before final return
+m = re.search(r'VkResult\s+(tu_image_init|tu_image_create)[^{]*\{', c)
+if m:
+    func_start = m.end()
+    # Find last return VK_SUCCESS in this function
+    returns = list(re.finditer(r'return VK_SUCCESS;', c[func_start:]))
+    if returns:
+        last_ret = returns[-1]
+        ins = func_start + last_ret.start()
+        c = c[:ins] + ubwc_code + '\n   ' + c[ins:]
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] ubwc_all injected into tu_image.cc')
+    else:
+        print('[WARN] ubwc_all: no return point found')
+        with open(fp, 'w') as f: f.write(c)
+else:
+    print('[WARN] ubwc_all: tu_image_init not found')
+PYEOF
+        log_success "TU_DEBUG_UBWC_ALL implementation added"
+    fi
+
+    # ── Step 6: push_regs — relax ir3 register pressure limit ─────────────
+    if [[ -f "$ir3_ra_c" ]] && ! grep -q "ir3_ra_max_regs_override" "$ir3_ra_c"; then
+        python3 - "$ir3_ra_c" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+helper = """
+/* TU_DEBUG_PUSH_REGS: helper to double register limit for a7xx shaders.
+ * Checked via getenv because ir3 has no access to tu_device. */
+static inline unsigned
+ir3_ra_max_regs_override(unsigned default_max)
+{
+   const char *dbg = getenv("TU_DEBUG");
+   if (dbg && strstr(dbg, "push_regs"))
+      return MIN2(default_max * 2u, 96u);
+   return default_max;
+}
+"""
+
+# Insert after last #include
+includes = list(re.finditer(r'^#include\b.*', c, re.MULTILINE))
+if includes:
+    eol = c.find('\n', includes[-1].start())
+    c = c[:eol+1] + helper + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] push_regs helper added to ir3_ra.c')
+else:
+    print('[WARN] push_regs: no includes found in ir3_ra.c')
+PYEOF
+        log_success "TU_DEBUG_PUSH_REGS helper added"
+    fi
+
+    # ── Step 7: unroll — aggressive NIR loop unrolling ────────────────────
+    if [[ -f "$ir3_compiler_nir" ]] && ! grep -q "TU_DEBUG.*unroll\|ir3_custom_unroll" "$ir3_compiler_nir"; then
+        python3 - "$ir3_compiler_nir" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+# Inject after nir_opt_loop_unroll call if it exists,
+# otherwise after the last OPT() macro call with nir
+unroll_code = """
+   /* TU_DEBUG_UNROLL: aggressive loop unrolling for heavy shader workloads */
+   {
+      const char *_dbg = getenv("TU_DEBUG");
+      if (_dbg && strstr(_dbg, "unroll"))
+         NIR_PASS(progress, nir, nir_opt_loop_unroll);
+   }
+"""
+
+m = re.search(r'(NIR_PASS[^;]+nir_opt_loop_unroll[^;]+;\s*\n)', c)
+if not m:
+    # Fallback: after last NIR_PASS or OPT macro
+    all_m = list(re.finditer(r'(NIR_PASS|OPT)\([^;]+;\s*\n', c))
+    m = all_m[-1] if all_m else None
+if m:
+    c = c[:m.end()] + unroll_code + c[m.end():]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] unroll pass injected into ir3_compiler_nir.c')
+else:
+    print('[WARN] unroll: no NIR pass insertion point found')
+PYEOF
+        log_success "TU_DEBUG_UNROLL implementation added"
+    fi
+
+    # ── Step 8: slc_pin / cp_prefetch / shfl / vgt_pref ──────────────────
+    # These flags are DEFINED (so TU_DEBUG=slc_pin,... is valid without crash)
+    # but have no userspace implementation — they require kernel/HW support.
+    log_info "slc_pin / cp_prefetch / shfl / vgt_pref: flags registered (kernel-side implementation required)"
+
+    log_success "All custom TU_DEBUG flags applied"
+}
+
 apply_patches() {
     log_info "Applying patches for $TARGET_GPU"
     cd "$MESA_DIR"
@@ -667,6 +957,7 @@ apply_patches() {
         if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
         if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi
         apply_gralloc_ubwc_fix
+        apply_custom_debug_flags
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
         if [[ "$TARGET_GPU" == "a8xx" ]]; then
@@ -692,6 +983,11 @@ apply_patches() {
     log_success "All patches applied"
 }
 
+# FIX: Do NOT manually clone KhronosGroup repos here.
+# They use CMake and have no meson.build, which causes --force-fallback-for
+# to fail at configure time with "subproject has no meson.build file".
+# Mesa ships its own .wrap files for spirv-tools and spirv-headers;
+# Meson will download the correct Meson-compatible tarballs automatically.
 setup_subprojects() {
     log_info "Setting up subprojects via Meson wraps"
     cd "$MESA_DIR"

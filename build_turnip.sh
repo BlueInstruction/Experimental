@@ -36,6 +36,7 @@ DECK_EMU_TARGET="${DECK_EMU_TARGET:-nvidia}"
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
+ENABLE_CUSTOM_FLAGS="${ENABLE_CUSTOM_FLAGS:-true}"
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
@@ -89,6 +90,59 @@ prepare_workdir() {
     log_success "Build directory ready"
 }
 
+clone_mesa() {
+    log_info "Cloning Mesa source: $MESA_SOURCE"
+    local ref=""
+    case "$MESA_SOURCE" in
+        latest_release)
+            ref=$(fetch_latest_release)
+            log_info "Latest release: $ref"
+            ;;
+        staging_branch)
+            ref="$STAGING_BRANCH"
+            ;;
+        main_branch|latest_main)
+            ref="main"
+            ;;
+        custom_tag)
+            [[ -z "$CUSTOM_TAG" ]] && { log_error "CUSTOM_TAG is empty"; exit 1; }
+            ref="$CUSTOM_TAG"
+            ;;
+        autotuner)
+            log_info "Cloning AutoTuner fork"
+            git clone --depth=1 "$AUTOTUNER_REPO" "$MESA_DIR" 2>&1 | tail -1
+            local commit
+            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            get_mesa_version > "${WORKDIR}/version.txt"
+            echo "$commit" > "${WORKDIR}/commit.txt"
+            log_success "AutoTuner Mesa cloned"
+            return 0
+            ;;
+        *)
+            ref="main"
+            ;;
+    esac
+
+    if [[ -n "$MESA_LOCAL_PATH" && -d "$MESA_LOCAL_PATH" ]]; then
+        log_info "Using local Mesa: $MESA_LOCAL_PATH"
+        cp -r "$MESA_LOCAL_PATH" "$MESA_DIR"
+    else
+        log_info "Cloning Mesa @ $ref"
+        git clone --depth=1 --branch "$ref" "$MESA_REPO" "$MESA_DIR" 2>/dev/null || \
+        git clone --depth=1 --branch "$ref" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null || {
+            log_error "Failed to clone Mesa"
+            exit 1
+        }
+    fi
+
+    local version commit
+    version=$(get_mesa_version)
+    commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "$version" > "${WORKDIR}/version.txt"
+    echo "$commit"  > "${WORKDIR}/commit.txt"
+    log_success "Mesa cloned: $version @ $commit"
+}
+
 update_vulkan_headers() {
     log_info "Updating Vulkan headers to latest version"
     local headers_dir="${WORKDIR}/vulkan-headers"
@@ -97,7 +151,177 @@ update_vulkan_headers() {
         return 0
     }
     if [[ -d "${headers_dir}/include/vulkan" ]]; then
-        cp -r "${headers_dir}/include/vulkan"\n'
+        cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
+        log_success "Vulkan headers updated"
+    else
+        log_warn "Vulkan headers include dir not found, skipping"
+    fi
+}
+
+apply_timeline_semaphore_fix() {
+    log_info "Applying timeline semaphore fix"
+    local tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+    [[ ! -f "$tu_sync" ]] && tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.c"
+    [[ ! -f "$tu_sync" ]] && { log_warn "KGSL kernel file not found, skipping timeline fix"; return 0; }
+    if grep -q "TIMELINE_SEMAPHORE_FIX" "$tu_sync"; then
+        log_info "Timeline fix already applied"
+        return 0
+    fi
+    python3 - "$tu_sync" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(\.has_timeline_sem\s*=\s*)false'
+if re.search(pat, c):
+    c = re.sub(pat, r'\1true /* TIMELINE_SEMAPHORE_FIX */', c)
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] Timeline semaphore enabled')
+else:
+    print('[WARN] Timeline semaphore pattern not found, skipping')
+PYEOF
+    log_success "Timeline semaphore fix applied"
+}
+
+apply_gralloc_ubwc_fix() {
+    log_info "Applying gralloc UBWC fix"
+    local tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.cc"
+    [[ ! -f "$tu_android" ]] && tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.c"
+    [[ ! -f "$tu_android" ]] && { log_warn "tu_android file not found, skipping gralloc fix"; return 0; }
+    if grep -q "GRALLOC_UBWC_FIX" "$tu_android"; then
+        log_info "Gralloc UBWC fix already applied"
+        return 0
+    fi
+    python3 - "$tu_android" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(GRALLOC1_PRODUCER_USAGE_PRIVATE_ALLOC_UBWC\s*\|\s*)'
+if re.search(pat, c):
+    print('[OK] UBWC gralloc flag already present')
+    with open(fp, 'w') as f: f.write(c)
+else:
+    pat2 = r'(gralloc_usage\s*=[^;]+)(;)'
+    if re.search(pat2, c):
+        c = re.sub(pat2,
+            r'\1 | GRALLOC1_PRODUCER_USAGE_PRIVATE_ALLOC_UBWC /* GRALLOC_UBWC_FIX */\2',
+            c, count=1)
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] UBWC flag added to gralloc usage')
+    else:
+        print('[WARN] Gralloc usage pattern not found, skipping')
+        with open(fp, 'w') as f: f.write(c)
+PYEOF
+    log_success "Gralloc UBWC fix applied"
+}
+
+apply_deck_emu_support() {
+    log_info "Applying Steam Deck GPU emulation (spoof as: $DECK_EMU_TARGET)"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found, skipping deck emu"; return 0; }
+    if grep -q "DECK_EMU" "$tu_device_cc"; then
+        log_info "Deck emu already applied"
+        return 0
+    fi
+    local vendor_id device_id driver_version device_name
+    case "$DECK_EMU_TARGET" in
+        nvidia)
+            vendor_id="0x10de"; device_id="0x2684"
+            driver_version="0x61d0000"
+            device_name="NVIDIA GeForce RTX 4090"
+            ;;
+        amd)
+            vendor_id="0x1002"; device_id="0x1435"
+            driver_version="0x8000000"
+            device_name="AMD Custom GPU 0405 (RADV VANGOGH)"
+            ;;
+        *)
+            log_warn "Unknown deck emu target: $DECK_EMU_TARGET, using nvidia"
+            vendor_id="0x10de"; device_id="0x2684"
+            driver_version="0x61d0000"
+            device_name="NVIDIA GeForce RTX 4090"
+            ;;
+    esac
+    python3 - "$tu_device_cc" "$vendor_id" "$device_id" "$driver_version" "$device_name" << 'PYEOF'
+import sys, re
+fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
+with open(fp) as f: c = f.read()
+spoof_code = f"""
+   /* DECK_EMU: spoof GPU identity for better game compatibility */
+   if (getenv("TU_DECK_EMU")) {{
+      props->vendorID      = {vendor_id};
+      props->deviceID      = {device_id};
+      props->driverVersion = {driver_version};
+      snprintf(props->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
+   }}
+"""
+m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{{]*\{{)', c)
+if not m:
+    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{{]*\{{)', c)
+if m:
+    ins = m.end()
+    c = c[:ins] + spoof_code + c[ins:]
+    with open(fp, 'w') as f: f.write(c)
+    print(f'[OK] Deck emu ({device_name}) applied')
+else:
+    print('[WARN] Could not find properties function for deck emu')
+    with open(fp, 'w') as f: f.write(c)
+PYEOF
+    log_success "Deck emulation applied ($DECK_EMU_TARGET)"
+}
+
+apply_vulkan_extensions_support() {
+    log_info "Applying Vulkan extension spoofing"
+    local tu_extensions="${MESA_DIR}/src/freedreno/vulkan/tu_extensions.py"
+    [[ ! -f "$tu_extensions" ]] && { log_warn "tu_extensions.py not found, skipping ext spoof"; return 0; }
+    if grep -q "EXT_SPOOF" "$tu_extensions"; then
+        log_info "Extension spoof already applied"
+        return 0
+    fi
+    python3 - "$tu_extensions" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+extra_exts = [
+    "VK_EXT_descriptor_buffer",
+    "VK_EXT_mesh_shader",
+    "VK_KHR_ray_query",
+    "VK_KHR_acceleration_structure",
+]
+to_add = [e for e in extra_exts if e not in c]
+if to_add:
+    spoof_block = "\n# EXT_SPOOF: additional extensions\n"
+    for ext in to_add:
+        spoof_block += f'    Extension("{ext}", True, None),\n'
+    m = re.search(r'(extensions\s*=\s*\[.*?\])', c, re.DOTALL)
+    if m:
+        ins = m.end() - 1
+        c = c[:ins] + spoof_block + c[ins:]
+        with open(fp, 'w') as f: f.write(c)
+        print(f'[OK] Added {len(to_add)} spoofed extensions')
+    else:
+        with open(fp, 'w') as f: f.write(c)
+        print('[WARN] Extension list not found')
+else:
+    print('[OK] All target extensions already present')
+PYEOF
+    log_success "Vulkan extension spoofing applied"
+}
+
+apply_a8xx_device_support() {
+    log_info "Applying A8xx device support"
+    if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then
+        local kgsl_file="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.c"
+        [[ ! -f "$kgsl_file" ]] && kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+        if [[ -f "$kgsl_file" ]] && ! grep -q "UBWC 5.0" "$kgsl_file"; then
+            python3 - "$kgsl_file" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+inject = (
+    '   case 5: /* UBWC 5.0 */\n'
+    '      device->ubwc_config.bank_swizzle_levels = 0x4;\n'
+    '      device->ubwc_config.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
+    '      break;\n'
     '   case 6: /* UBWC 6.0 */\n'
     '      device->ubwc_config.bank_swizzle_levels = 0x6;\n'
     '      device->ubwc_config.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
@@ -113,18 +337,17 @@ if m:
 else:
     print('[WARN] UBWC switch pattern not found, skipping')
 PYEOF
-        log_success "UBWC 5/6 support applied"
-    else
-        log_info "UBWC 5/6: already patched or file not found"
+            log_success "UBWC 5/6 support applied"
+        else
+            log_info "UBWC 5/6: already patched or file not found"
+        fi
     fi
-
     # Mesa 26.x already ships proper a8xx device entries upstream
     # (FD830/0x44050000, Adreno 840/0xffff44050A31, X2-85/0xffff44070041).
     # The old injection used 'num_slices' which is NOT a parameter of
     # A6xxGPUInfo.__init__, causing TypeError when Mesa runs the script.
     # It also did a partial regex replace leaving orphaned Python syntax.
     log_info "A8xx: using upstream Mesa device table (no custom injection)"
-
     log_success "A8xx support applied"
 }
 
@@ -140,7 +363,7 @@ apply_custom_debug_flags() {
 
     [[ ! -f "$tu_util_h" ]] && { log_warn "tu_util.h not found, skipping custom flags"; return 0; }
 
-    # ── Step 1: BITFIELD64 definitions in tu_util.h ──────────────────────
+    # Step 1: BITFIELD64 definitions in tu_util.h
     python3 - "$tu_util_h" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -158,7 +381,6 @@ flags = [
     'TU_DEBUG_UNROLL',
 ]
 lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
-# Find last BITFIELD64_BIT line and append after it
 all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
 if all_m:
     last = all_m[-1]
@@ -170,7 +392,7 @@ else:
     print('[WARN] Could not find enum insertion point in tu_util.h')
 PYEOF
 
-    # ── Step 2: debug name table in tu_util.cc ────────────────────────────
+    # Step 2: debug name table in tu_util.cc
     python3 - "$tu_util_cc" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -200,7 +422,7 @@ else:
     print('[WARN] Debug table not found in tu_util.cc')
 PYEOF
 
-    # ── Step 3: turbo — sysfs perf governor (silent fail, no crash) ───────
+    # Step 3: turbo - sysfs perf governor (silent fail, no crash)
     if [[ -f "$tu_device_cc" ]] && ! grep -q "tu_try_activate_turbo" "$tu_device_cc"; then
         python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
@@ -209,7 +431,7 @@ with open(fp) as f: c = f.read()
 
 turbo_func = """
 /* TU_DEBUG_TURBO: attempt to lock GPU at max frequency via sysfs.
- * Silently ignored if process lacks root permission — no crash. */
+ * Silently ignored if process lacks root permission - no crash. */
 static void
 tu_try_activate_turbo(void)
 {
@@ -240,15 +462,12 @@ turbo_call = """
       tu_try_activate_turbo();
 """
 
-# Insert function before first static/VkResult function
 m_func = re.search(r'\n(static |VkResult |void )', c)
 if m_func and 'tu_try_activate_turbo' not in c:
     c = c[:m_func.start()+1] + turbo_func + '\n' + c[m_func.start()+1:]
 
-# Insert call right after tu_physical_device_init succeeds
 m_call = re.search(r'(result\s*=\s*tu_physical_device_init\([^;]+;\s*\n\s*if\s*\([^)]+\)[^{]*\{[^}]*\}\s*\n)', c, re.DOTALL)
 if not m_call:
-    # Simpler: find the line with tu_physical_device_init and inject after it
     m_call = re.search(r'(tu_physical_device_init\([^;]+;\s*\n)', c)
 if m_call:
     c = c[:m_call.end()] + turbo_call + c[m_call.end():]
@@ -259,7 +478,7 @@ PYEOF
         log_success "TU_DEBUG_TURBO implementation added"
     fi
 
-    # ── Step 4: defrag — align large allocations to 64KB ──────────────────
+    # Step 4: defrag - align large allocations to 64KB
     if [[ -f "$tu_device_cc" ]] && ! grep -q "TU_DEBUG_DEFRAG" "$tu_device_cc"; then
         python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
@@ -273,12 +492,9 @@ defrag_code = """
       size = ALIGN(size, 64 * 1024);
 """
 
-# Find tu_bo_init_new body — look for the first use of 'size' param
-# after function signature to insert alignment before actual alloc
 m = re.search(r'(VkResult\s+\w*bo_init_new\w*\s*\([^{]+\{)', c)
 if m:
     body_start = m.end()
-    # Find first statement inside body
     first_stmt = re.search(r'\n\s+\S', c[body_start:])
     if first_stmt:
         ins = body_start + first_stmt.start() + 1
@@ -295,7 +511,7 @@ PYEOF
         log_success "TU_DEBUG_DEFRAG implementation added"
     fi
 
-    # ── Step 5: ubwc_all — force UBWC on color images ─────────────────────
+    # Step 5: ubwc_all - force UBWC on color images
     if [[ -f "$tu_image_cc" ]] && ! grep -q "TU_DEBUG_UBWC_ALL" "$tu_image_cc"; then
         python3 - "$tu_image_cc" << 'PYEOF'
 import sys, re
@@ -303,23 +519,19 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
 ubwc_code = """
-   
    if (TU_DEBUG(UBWC_ALL)) {
       if (!vk_format_is_depth_or_stencil(image->vk.format) &&
           !vk_format_is_compressed(image->vk.format) &&
           image->vk.format != VK_FORMAT_UNDEFINED) {
-         
          for (unsigned _p = 0; _p < ARRAY_SIZE(image->layout); _p++)
             image->layout[_p].ubwc = true;
       }
    }
 """
 
-# Find tu_image_init_layout or tu_image_init and inject before final return
 m = re.search(r'VkResult\s+(tu_image_init|tu_image_create)[^{]*\{', c)
 if m:
     func_start = m.end()
-    # Find last return VK_SUCCESS in this function
     returns = list(re.finditer(r'return VK_SUCCESS;', c[func_start:]))
     if returns:
         last_ret = returns[-1]
@@ -336,7 +548,7 @@ PYEOF
         log_success "TU_DEBUG_UBWC_ALL implementation added"
     fi
 
-    # ── Step 6: push_regs — relax ir3 register pressure limit ─────────────
+    # Step 6: push_regs - relax ir3 register pressure limit
     if [[ -f "$ir3_ra_c" ]] && ! grep -q "ir3_ra_max_regs_override" "$ir3_ra_c"; then
         python3 - "$ir3_ra_c" << 'PYEOF'
 import sys, re
@@ -356,7 +568,6 @@ ir3_ra_max_regs_override(unsigned default_max)
 }
 """
 
-# Insert after last #include
 includes = list(re.finditer(r'^#include\b.*', c, re.MULTILINE))
 if includes:
     eol = c.find('\n', includes[-1].start())
@@ -369,15 +580,13 @@ PYEOF
         log_success "TU_DEBUG_PUSH_REGS helper added"
     fi
 
-    # ── Step 7: unroll — aggressive NIR loop unrolling ────────────────────
+    # Step 7: unroll - aggressive NIR loop unrolling
     if [[ -f "$ir3_compiler_nir" ]] && ! grep -q "TU_DEBUG.*unroll\|ir3_custom_unroll" "$ir3_compiler_nir"; then
         python3 - "$ir3_compiler_nir" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-# Inject after nir_opt_loop_unroll call if it exists,
-# otherwise after the last OPT() macro call with nir
 unroll_code = """
    /* TU_DEBUG_UNROLL: aggressive loop unrolling for heavy shader workloads */
    {
@@ -401,12 +610,38 @@ PYEOF
         log_success "TU_DEBUG_UNROLL implementation added"
     fi
 
-    # ── Step 8: slc_pin / cp_prefetch / shfl / vgt_pref ──────────────────
+    # Step 8: slc_pin / cp_prefetch / shfl / vgt_pref
     # These flags are DEFINED (so TU_DEBUG=slc_pin,... is valid without crash)
-    # but have no userspace implementation — they require kernel/HW support.
+    # but have no userspace implementation - they require kernel/HW support.
     log_info "slc_pin / cp_prefetch / shfl / vgt_pref: flags registered (kernel-side implementation required)"
 
     log_success "All custom TU_DEBUG flags applied"
+}
+
+apply_patch_series() {
+    local series_dir="$1"
+    log_info "Applying patch series from: $series_dir"
+    local series_file="${series_dir}/series"
+    if [[ ! -f "$series_file" ]]; then
+        log_warn "No series file found at $series_file"
+        return 0
+    fi
+    while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
+        [[ -z "$patch_name" || "$patch_name" == \#* ]] && continue
+        local patch_path="${series_dir}/${patch_name}"
+        if [[ ! -f "$patch_path" ]]; then
+            log_warn "Patch not found: $patch_name"
+            continue
+        fi
+        log_info "Applying series patch: $patch_name"
+        if git apply --check "$patch_path" 2>/dev/null; then
+            git apply "$patch_path"
+            log_success "Applied: $patch_name"
+        else
+            log_warn "Could not apply: $patch_name (skipping)"
+        fi
+    done < "$series_file"
+    log_success "Patch series applied"
 }
 
 apply_patches() {
@@ -422,7 +657,7 @@ apply_patches() {
         if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
         if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi
         apply_gralloc_ubwc_fix
-        apply_custom_debug_flags
+        if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
         if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
         if [[ "$TARGET_GPU" == "a8xx" ]]; then
@@ -448,10 +683,10 @@ apply_patches() {
     log_success "All patches applied"
 }
 
-# They use CMake and have no meson.build, which causes --force-fallback-for
-# to fail at configure time with "subproject has no meson.build file".
-# Mesa ships its own .wrap files for spirv-tools and spirv-headers;
-# Meson will download the correct Meson-compatible tarballs automatically.
+# spirv-tools and spirv-headers use CMake and have no meson.build, which causes
+# --force-fallback-for to fail at configure time with "subproject has no meson.build file".
+# Mesa ships its own .wrap files for these; Meson will download the correct
+# Meson-compatible tarballs automatically.
 setup_subprojects() {
     log_info "Setting up subprojects via Meson wraps"
     cd "$MESA_DIR"

@@ -47,8 +47,7 @@ on:
           - debug
           - profile
 
-      target_gpu:
-        type: choice
+      target_gpu:        type: choice
         description: "Target GPU generation"
         default: "a7xx"
         options:
@@ -78,36 +77,25 @@ on:
         description: "Enable timeline semaphore optimization"
         default: true
 
-      enable_ubwc_hack:
-        type: boolean
-        description: "Enable UBWC 5/6 support"
-        default: true
-
-      apply_patch_series:
-        type: boolean
-        description: "Apply patch series if present"
-        default: true
-
-      enable_perf:
-        type: boolean
-        description: "Enable performance options"
-        default: false
-
       enable_custom_flags:
         type: boolean
-        description: "Enable custom TU_DEBUG flags (push_regs, ubwc_all, defrag, unroll, turbo)"
-        default: false
+        description: "Enable custom TU_DEBUG flags"
+        default: true
+
+      apply_graphics_patches:
+        type: boolean
+        description: "Apply graphics fix patches for AAA games"
+        default: true
 
       custom_tu_debug:
-        description: "Custom TU_DEBUG flags (comma-separated, e.g. push_regs,ubwc_all,defrag)"
+        description: "Custom TU_DEBUG flags (comma-separated)"
         required: false
-        default: "push_regs,ubwc_all,defrag,unroll"
+        default: "push_regs,ubwc_all,defrag,unroll,turbo"
 
       create_release:
         type: boolean
         description: "Create GitHub Release"
         default: true
-
       release_as_draft:
         type: boolean
         description: "Save release as draft"
@@ -157,8 +145,7 @@ jobs:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    strategy:
+    timeout-minutes: 180    strategy:
       fail-fast: false
       matrix:
         include:
@@ -175,15 +162,9 @@ jobs:
       ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
       ENABLE_TIMELINE_HACK: ${{ inputs.enable_timeline_hack }}
-      ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
-      APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
-      ENABLE_PERF: ${{ inputs.enable_perf }}
       ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
+      APPLY_GRAPHICS_PATCHES: ${{ inputs.apply_graphics_patches }}
       CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
-      # FIX: Added -fno-finite-math-only after -ffast-math to prevent
-      # "-Wnan-infinity-disabled" warnings from NaN usage in Mesa NIR code.
-      # -ffast-math implies -ffinite-math-only which makes isnan() undefined;
-      # -fno-finite-math-only restores safe NaN/Inf semantics selectively.
       CFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only' || '-O2' }}
       CXXFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: ${{ inputs.enable_perf == true && '-Wl,--gc-sections -Wl,--icf=safe' || '' }}
@@ -213,8 +194,7 @@ jobs:
           fi
           pip3 install --break-system-packages mako pyyaml
 
-      - name: Cache Android NDK
-        id: cache-ndk
+      - name: Cache Android NDK        id: cache-ndk
         uses: actions/cache@v4
         with:
           path: ${{ env.NDK_PATH }}
@@ -239,10 +219,6 @@ jobs:
           restore-keys: |
             mesa-${{ needs.pre-check.outputs.mesa_ref }}-
 
-      # FIX: Cache Meson wrap downloads so spirv-tools/spirv-headers tarballs
-      # are not re-downloaded on every run. Meson resolves these via .wrap files
-      # at configure time (the old manual KhronosGroup clone was broken because
-      # those repos use CMake and have no meson.build).
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
         with:
@@ -267,8 +243,7 @@ jobs:
           end_time=$(date +%s)
           duration=$((end_time - start_time))
           echo "Build completed in $((duration/60))m $((duration%60))s"
-          if [[ -d "build" ]]; then
-            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
+          if [[ -d "build" ]]; then            echo "filename=$(ls build/turnip_*.zip 2>/dev/null | head -1 | xargs basename)" >> $GITHUB_OUTPUT
             echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
             echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)" >> $GITHUB_OUTPUT
             echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')" >> $GITHUB_OUTPUT
@@ -313,13 +288,11 @@ jobs:
             ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Spoofing' || '' }}
             ${{ inputs.enable_deck_emu == true && format('- Deck Emulation (spoof as {0})', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
-            ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support (A8xx)' || '' }}
-            ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + LTO + ARMv8.2-A)' || '' }}
+            ${{ inputs.apply_graphics_patches == true && '- Graphics Fix Patches for AAA Games' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- Custom TU_DEBUG Flags: {0}', inputs.custom_tu_debug) || '' }}
 
             ---
-            Compiled from Mesa freedreno
-          files: |
+            Compiled from Mesa freedreno          files: |
             build/*.zip
           draft: ${{ inputs.release_as_draft }}
           prerelease: ${{ inputs.build_variant == 'debug' || inputs.build_variant == 'profile' }}

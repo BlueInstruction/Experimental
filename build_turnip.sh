@@ -186,7 +186,28 @@ apply_gralloc_ubwc_fix() {
     log_info "Applying gralloc UBWC fix"
     local tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.cc"
     [[ ! -f "$tu_android" ]] && tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.c"
-    [[ ! -f "$tu_android" ]] && { log_warn "tu_android file not found, skipping gralloc fix"; return 0; }
+    if [[ ! -f "$tu_android" ]]; then
+        log_warn "tu_android file not found, trying u_gralloc fallback"
+        local gralloc_fb="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
+        if [[ -f "$gralloc_fb" ]] && ! grep -q "GRALLOC_UBWC_FIX" "$gralloc_fb"; then
+            python3 - "$gralloc_fb" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(get_buffer_basic_info[^{]*\{)'
+m = re.search(pat, c)
+if m:
+    inject = '\n   /* GRALLOC_UBWC_FIX */\n   binfo->modifier = DRM_FORMAT_MOD_QCOM_COMPRESSED;\n'
+    ins = m.end()
+    c = c[:ins] + inject + c[ins:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] UBWC modifier forced in u_gralloc_fallback.c')
+else:
+    print('[WARN] get_buffer_basic_info not found in u_gralloc_fallback.c')
+PYEOF
+        fi
+        return 0
+    fi
     if grep -q "GRALLOC_UBWC_FIX" "$tu_android"; then
         log_info "Gralloc UBWC fix already applied"
         return 0
@@ -212,6 +233,296 @@ else:
         with open(fp, 'w') as f: f.write(c)
 PYEOF
     log_success "Gralloc UBWC fix applied"
+}
+
+apply_a8xx_device_support() {
+    log_info "Applying A8xx device support patches"
+
+    local kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
+    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    local gmem_cache="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
+    local gralloc_fb="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+
+    if [[ "$ENABLE_UBWC_HACK" == "true" ]] && [[ -f "$kgsl_file" ]] && ! grep -q "UBWC_56_APPLIED" "$kgsl_file"; then
+        python3 - "$kgsl_file" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+inject = (
+    '   case KGSL_UBWC_5_0:\n'
+    '      ubwc_config->bank_swizzle_levels = 0x4;\n'
+    '      ubwc_config->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
+    '      break;\n'
+    '   case KGSL_UBWC_6_0:\n'
+    '      ubwc_config->bank_swizzle_levels = 0x6;\n'
+    '      ubwc_config->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
+    '      break;\n'
+    '   /* UBWC_56_APPLIED */\n'
+)
+pat = r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)'
+m = re.search(pat, c, re.DOTALL)
+if m:
+    c = c[:m.start(2)] + inject + c[m.start(2):]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] UBWC 5.0/6.0 cases inserted')
+else:
+    pat2 = r'(KGSL_UBWC_3_0.*?break;\n)([ \t]*default:)'
+    m2 = re.search(pat2, c, re.DOTALL)
+    if m2:
+        c = c[:m2.start(2)] + inject + c[m2.start(2):]
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] UBWC 5.0/6.0 inserted after UBWC_3_0')
+    else:
+        print('[WARN] UBWC switch pattern not found, skipping')
+PYEOF
+        log_success "UBWC 5.0/6.0 support applied"
+    fi
+
+    if [[ -f "$gralloc_fb" ]] && ! grep -q "UBWC_GRALLOC_FORCED" "$gralloc_fb"; then
+        python3 - "$gralloc_fb" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if 'always_use_ubwc' in c.lower() or 'UBWC_GRALLOC_FORCED' in c:
+    print('[OK] u_gralloc UBWC already forced'); sys.exit(0)
+pat = r'(static\s+\w+\s+\w*get_buffer\w*\s*\([^)]*\)\s*\{)'
+m = re.search(pat, c)
+if m:
+    inject = '\n   /* UBWC_GRALLOC_FORCED: always use UBWC detection path for a8xx */\n   return false;\n'
+    ins = m.end()
+    c = c[:ins] + inject + c[ins:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] u_gralloc always-ubwc path forced')
+else:
+    print('[WARN] get_buffer function not found in u_gralloc_fallback.c')
+PYEOF
+        log_success "u_gralloc UBWC detection forced"
+    fi
+
+    if [[ -f "$dev_info_h" ]] && ! grep -q "disable_gmem" "$dev_info_h"; then
+        python3 - "$dev_info_h" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+field = '   bool disable_gmem;\n'
+pat = r'(struct\s+fd_dev_info\s*\{[^}]*?)(};)'
+m = re.search(pat, c, re.DOTALL)
+if m:
+    ins = m.start(2)
+    c = c[:ins] + field + c[ins:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] disable_gmem field added to fd_dev_info')
+else:
+    pat2 = r'(bool\s+has_\w+;\s*\n)'
+    all_m = list(re.finditer(pat2, c))
+    if all_m:
+        eol = c.find('\n', all_m[-1].start())
+        c = c[:eol+1] + field + c[eol+1:]
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] disable_gmem field added after last bool field')
+    else:
+        print('[WARN] Could not find insertion point for disable_gmem')
+PYEOF
+        log_success "disable_gmem property added to fd_dev_info"
+    fi
+
+    if [[ -f "$cmd_buffer" ]] && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
+        python3 - "$cmd_buffer" "$dev_info_h" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+dev_h = sys.argv[2]
+with open(fp) as f: c = f.read()
+disable_gmem_exists = False
+if dev_h and open(dev_h).read().find('disable_gmem') != -1:
+    disable_gmem_exists = True
+inject = '\n   /* A8XX_DISABLE_GMEM: force sysmem for a8xx GPUs with small cache */\n   if (cmd->device->physical_device->dev_info.disable_gmem)\n      return true;\n'
+pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)'
+m = re.search(pat, c)
+if m:
+    brace = c.find('{', m.start())
+    ins = c.find('\n', brace) + 1
+    c = c[:ins] + inject + c[ins:]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] disable_gmem guard added to use_sysmem_rendering')
+else:
+    print('[WARN] use_sysmem_rendering not found in tu_cmd_buffer.cc')
+PYEOF
+        log_success "A8xx disable_gmem guard added to tu_cmd_buffer.cc"
+    fi
+
+    if [[ -f "$gmem_cache" ]] && ! grep -q "A8XX_GMEM_OFFSET_FIX" "$gmem_cache"; then
+        python3 - "$gmem_cache" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(if\s*\(info->chip\s*>=\s*8\s*&&\s*info->num_slices\s*>\s*1\s*\)[^}]*\})'
+m = re.search(pat, c, re.DOTALL)
+if m:
+    c = c[:m.start()] + '/* A8XX_GMEM_OFFSET_FIX: removed - causes assertion with <2MB cache */' + c[m.end():]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] A8xx gmem cache offset guard removed')
+else:
+    print('[INFO] gmem offset block not found (may already be patched or absent)')
+PYEOF
+        log_success "A8xx gmem cache offset fix applied"
+    fi
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "A8XX_FLUSHALL_REMOVED" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(if\s*\([^)]*chip\s*==\s*A8XX[^)]*\)[^{]*\{[^}]*TU_DEBUG_FLUSHALL[^}]*\})'
+m = re.search(pat, c, re.DOTALL)
+if m:
+    c = c[:m.start()] + '/* A8XX_FLUSHALL_REMOVED */' + c[m.end():]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] A8xx forced FLUSHALL removed')
+else:
+    pat2 = r'(TU_DEBUG_FLUSHALL[^;]+;)'
+    m2 = re.search(pat2, c)
+    if m2:
+        c = c[:m2.start()] + '/* A8XX_FLUSHALL_REMOVED */' + c[m2.end():]
+        with open(fp, 'w') as f: f.write(c)
+        print('[OK] FLUSHALL flag removed (generic pattern)')
+    else:
+        print('[INFO] FLUSHALL block not found (may be absent in this Mesa version)')
+PYEOF
+        log_success "A8xx FLUSHALL removed"
+    fi
+
+    if [[ -f "$devices_py" ]] && ! grep -q "A8XX_DEVICES_INJECTED" "$devices_py"; then
+        python3 - "$devices_py" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+has_830 = '0x44050000' in c
+has_825 = '0x44030000' in c
+has_829 = '0x44030A00' in c or '0x44030a00' in c
+has_810 = '0x44010000' in c
+
+missing = []
+if not has_830: missing.append('830')
+if not has_825: missing.append('825')
+if not has_829: missing.append('829')
+if not has_810: missing.append('810')
+
+if not missing:
+    print('[OK] All a8xx GPU entries already present')
+    sys.exit(0)
+
+inject = '\n# A8XX_DEVICES_INJECTED\n'
+
+if not has_830:
+    inject += '''
+add_gpus([
+        GPUId(chip_id=0x44050000, name="FD830"),
+        GPUId(chip_id=0x44050001, name="FD830"),
+        GPUId(chip_id=0xffff44050000, name="FD830"),
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base],
+        num_ccu = 6,
+        num_slices = 2,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        tile_max_w = 16416,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+'''
+
+if not has_825:
+    inject += '''
+add_gpus([
+        GPUId(chip_id=0x44030000, name="FD825"),
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base],
+        num_ccu = 4,
+        num_slices = 2,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        tile_max_w = 16416,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+'''
+
+if not has_829:
+    inject += '''
+add_gpus([
+        GPUId(chip_id=0x44030A00, name="FD829"),
+        GPUId(chip_id=0x44030A20, name="FD829"),
+        GPUId(chip_id=0xffff44030A00, name="FD829"),
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base],
+        num_ccu = 4,
+        num_slices = 2,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        tile_max_w = 16416,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+'''
+
+if not has_810:
+    inject += '''
+add_gpus([
+        GPUId(chip_id=0x44010000, name="FD810"),
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base],
+        num_ccu = 2,
+        num_slices = 1,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        tile_max_w = 16416,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+'''
+
+m = re.search(r'(# Values from blob.*?\n)', c)
+if m:
+    ins = m.start()
+    c = c[:ins] + inject + c[ins:]
+else:
+    c = c + inject
+
+with open(fp, 'w') as f: f.write(c)
+print(f'[OK] Injected a8xx GPU entries: {missing}')
+PYEOF
+        log_success "A8xx GPU device entries injected (830/825/829/810)"
+    fi
+
+    log_success "A8xx full support applied"
 }
 
 apply_deck_emu_support() {
@@ -254,9 +565,9 @@ spoof_code = f"""
       snprintf(props->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
    }}
 """
-m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{{]*\{{)', c)
+m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if not m:
-    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{{]*\{{)', c)
+    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if m:
     ins = m.end()
     c = c[:ins] + spoof_code + c[ins:]
@@ -305,45 +616,6 @@ else:
     print('[OK] All target extensions already present')
 PYEOF
     log_success "Vulkan extension spoofing applied"
-}
-
-apply_a8xx_device_support() {
-    log_info "Applying A8xx device support"
-    if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then
-        local kgsl_file="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.c"
-        [[ ! -f "$kgsl_file" ]] && kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
-        if [[ -f "$kgsl_file" ]] && ! grep -q "UBWC 5.0" "$kgsl_file"; then
-            python3 - "$kgsl_file" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-inject = (
-    '   case 5: \n'
-    '      device->ubwc_config.bank_swizzle_levels = 0x4;\n'
-    '      device->ubwc_config.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
-    '      break;\n'
-    '   case 6: \n'
-    '      device->ubwc_config.bank_swizzle_levels = 0x6;\n'
-    '      device->ubwc_config.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
-    '      break;\n'
-)
-pat = r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)'
-m = re.search(pat, c, re.DOTALL)
-if m:
-    c = c[:m.start(2)] + inject + c[m.start(2):]
-    with open(fp, 'w') as f:
-        f.write(c)
-    print('[OK] UBWC 5/6 cases inserted before default:')
-else:
-    print('[WARN] UBWC switch pattern not found, skipping')
-PYEOF
-            log_success "UBWC 5/6 support applied"
-        else
-            log_info "UBWC 5/6: already patched or file not found"
-        fi
-    fi
-    log_info "A8xx: using upstream Mesa device table (no custom injection)"
-    log_success "A8xx support applied"
 }
 
 apply_custom_debug_flags() {
@@ -422,8 +694,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
 turbo_func = """
-/* TU_DEBUG_TURBO: attempt to lock GPU at max frequency via sysfs.
- * Silently ignored if process lacks root permission - no crash. */
 static void
 tu_try_activate_turbo(void)
 {
@@ -477,8 +747,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
 defrag_code = """
-   /* TU_DEBUG_DEFRAG: align large BO allocations to 64KB for
-    * better memory contiguity and reduced fragmentation. */
    if (TU_DEBUG(DEFRAG) && size > (1u << 20))
       size = ALIGN(size, 64 * 1024);
 """
@@ -545,8 +813,6 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
 helper = """
-/* TU_DEBUG_PUSH_REGS: helper to double register limit for a7xx shaders.
- * Checked via getenv because ir3 has no access to tu_device. */
 static inline unsigned
 ir3_ra_max_regs_override(unsigned default_max)
 {
@@ -599,7 +865,6 @@ PYEOF
     fi
 
     log_info "slc_pin / cp_prefetch / shfl / vgt_pref: flags registered (kernel-side implementation required)"
-
     log_success "All custom TU_DEBUG flags applied"
 }
 
@@ -636,19 +901,27 @@ apply_patches() {
         log_info "Vanilla build - skipping all patches"
         return 0
     fi
-    if [[ "$APPLY_PATCH_SERIES" == "true" && -d "$PATCHES_DIR/series" ]]; then
-        apply_patch_series "$PATCHES_DIR/series"
-    else
-        if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
-        if [[ "$ENABLE_UBWC_HACK" == "true" ]]; then true; fi
-        apply_gralloc_ubwc_fix
-        if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
-        if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
-        if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-        if [[ "$TARGET_GPU" == "a8xx" ]]; then
-            apply_a8xx_device_support
+
+    if [[ "$APPLY_PATCH_SERIES" == "true" ]]; then
+        if [[ "$TARGET_GPU" == "a8xx" && -d "$PATCHES_DIR/a8xx" && -f "$PATCHES_DIR/a8xx/series" ]]; then
+            log_info "Applying a8xx patch series"
+            apply_patch_series "$PATCHES_DIR/a8xx"
+        fi
+        if [[ -f "$PATCHES_DIR/series" ]]; then
+            log_info "Applying common patch series"
+            apply_patch_series "$PATCHES_DIR"
         fi
     fi
+
+    if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
+    apply_gralloc_ubwc_fix
+    if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
+    if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
+    if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
+    if [[ "$TARGET_GPU" == "a8xx" ]]; then
+        apply_a8xx_device_support
+    fi
+
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do
             [[ ! -f "$patch" ]] && continue
@@ -665,6 +938,7 @@ apply_patches() {
             fi
         done
     fi
+
     log_success "All patches applied"
 }
 
@@ -717,6 +991,12 @@ configure_build() {
     local buildtype="$BUILD_TYPE"
     if [[ "$BUILD_VARIANT" == "debug" ]]; then buildtype="debug"; fi
     if [[ "$BUILD_VARIANT" == "profile" ]]; then buildtype="debugoptimized"; fi
+
+    local extra_opts=""
+    if [[ "$TARGET_GPU" == "a8xx" ]]; then
+        extra_opts="-Dfreedreno-a8xx=true"
+    fi
+
     meson setup build \
         --cross-file "${WORKDIR}/cross-aarch64.txt" \
         -Dbuildtype="$buildtype" \
@@ -742,8 +1022,42 @@ configure_build() {
         -Dwerror=false \
         -Ddefault_library=shared \
         --force-fallback-for=spirv-tools,spirv-headers \
+        ${extra_opts} \
         2>&1 | tee "${WORKDIR}/meson.log"
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then log_error "Meson configuration failed"; exit 1; fi
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        log_warn "meson failed with extra_opts, retrying without a8xx flag"
+        meson setup build \
+            --cross-file "${WORKDIR}/cross-aarch64.txt" \
+            -Dbuildtype="$buildtype" \
+            -Dplatforms=android \
+            -Dplatform-sdk-version="$API_LEVEL" \
+            -Dandroid-stub=true \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dvulkan-beta=true \
+            -Dfreedreno-kmds=kgsl \
+            -Degl=disabled \
+            -Dglx=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dopengl=false \
+            -Dgbm=disabled \
+            -Dllvm=disabled \
+            -Dlibunwind=disabled \
+            -Dlmsensors=disabled \
+            -Dzstd=disabled \
+            -Dvalgrind=disabled \
+            -Dbuild-tests=false \
+            -Dwerror=false \
+            -Ddefault_library=shared \
+            --force-fallback-for=spirv-tools,spirv-headers \
+            --wipe \
+            2>&1 | tee "${WORKDIR}/meson.log"
+        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            log_error "Meson configuration failed"
+            exit 1
+        fi
+    fi
     log_success "Build configured"
 }
 
@@ -764,8 +1078,15 @@ package_driver() {
     local build_date=$(date +'%Y-%m-%d')
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local name_suffix="${TARGET_GPU:1}"
-    local driver_name="vulkan.ad0${name_suffix}.so"
+    local driver_name
+
+    if [[ "$TARGET_GPU" == "a8xx" ]]; then
+        driver_name="vulkan.adreno.so"
+    else
+        local name_suffix="${TARGET_GPU:1}"
+        driver_name="vulkan.ad0${name_suffix}.so"
+    fi
+
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
     patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
@@ -809,7 +1130,7 @@ print_summary() {
     local build_date=$(cat "${WORKDIR}/build_date.txt")
     echo ""
     log_info "Build Summary"
-    echo "  Target GPU    : $TARGET_GPU"
+    echo "  Target GPU     : $TARGET_GPU"
     echo "  Mesa Version   : $version"
     echo "  Vulkan Version : $vulkan_version"
     echo "  Commit         : $commit"

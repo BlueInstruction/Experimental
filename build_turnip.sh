@@ -17,6 +17,7 @@ MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
 MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
 MESA_MIRROR="https://github.com/mesa3d/mesa.git"
+ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
 AUTOTUNER_REPO="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
@@ -27,7 +28,7 @@ BUILD_TYPE="${BUILD_TYPE:-release}"
 BUILD_VARIANT="${BUILD_VARIANT:-optimized}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-35}"
-TARGET_GPU="${TARGET_GPU:-a7xx}"
+TARGET_GPU="${TARGET_GPU:-a0xx}"
 ENABLE_PERF="${ENABLE_PERF:-false}"
 MESA_LOCAL_PATH="${MESA_LOCAL_PATH:-}"
 ENABLE_EXT_SPOOF="${ENABLE_EXT_SPOOF:-true}"
@@ -55,12 +56,10 @@ check_deps() {
 fetch_latest_release() {
     local tags=""
     tags=$(git ls-remote --tags --refs "$MESA_REPO" 2>/dev/null | \
-        grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-        sort -V | tail -1) || true
+        grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1) || true
     if [[ -z "$tags" ]]; then
         tags=$(git ls-remote --tags --refs "$MESA_MIRROR" 2>/dev/null | \
-            grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | \
-            sort -V | tail -1) || true
+            grep -oE 'mesa-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1) || true
     fi
     [[ -z "$tags" ]] && { log_error "Could not determine latest release"; exit 1; }
     echo "$tags"
@@ -76,7 +75,7 @@ get_vulkan_version() {
         local major minor patch
         major=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\K\d+' || echo "1")
         minor=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\d+,\s*\K\d+' || echo "4")
-        patch=$(grep -m1 "#define VK_HEADER_VERSION" "$vk_header" | awk '{print $3}' || echo "0")
+        patch=$(grep -m1 "^#define VK_HEADER_VERSION " "$vk_header" | awk '{print $3}' || echo "0")
         echo "${major}.${minor}.${patch}"
     else
         echo "1.4.0"
@@ -92,34 +91,57 @@ prepare_workdir() {
 
 clone_mesa() {
     log_info "Cloning Mesa source: $MESA_SOURCE"
-    local ref=""
+    local ref="" repo=""
     case "$MESA_SOURCE" in
         latest_release)
             ref=$(fetch_latest_release)
+            repo="$MESA_REPO"
             log_info "Latest release: $ref"
             ;;
         staging_branch)
             ref="$STAGING_BRANCH"
+            repo="$MESA_REPO"
             ;;
         main_branch|latest_main)
             ref="main"
+            repo="$MESA_REPO"
+            ;;
+        robclark_branch)
+            log_info "Cloning Rob Clark fork (main)"
+            git clone --depth=1 "$ROBCLARK_REPO" "$MESA_DIR" 2>&1 | tail -1 || {
+                log_error "Failed to clone Rob Clark fork"
+                exit 1
+            }
+            local version commit
+            version=$(get_mesa_version)
+            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "$version" > "${WORKDIR}/version.txt"
+            echo "$commit"  > "${WORKDIR}/commit.txt"
+            log_success "Rob Clark Mesa cloned: $version @ $commit"
+            return 0
+            ;;
+        autotuner)
+            log_info "Cloning AutoTuner fork"
+            git clone --depth=1 "$AUTOTUNER_REPO" "$MESA_DIR" 2>&1 | tail -1 || {
+                log_error "Failed to clone AutoTuner fork"
+                exit 1
+            }
+            local version commit
+            version=$(get_mesa_version)
+            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            echo "$version" > "${WORKDIR}/version.txt"
+            echo "$commit"  > "${WORKDIR}/commit.txt"
+            log_success "AutoTuner Mesa cloned: $version @ $commit"
+            return 0
             ;;
         custom_tag)
             [[ -z "$CUSTOM_TAG" ]] && { log_error "CUSTOM_TAG is empty"; exit 1; }
             ref="$CUSTOM_TAG"
-            ;;
-        autotuner)
-            log_info "Cloning AutoTuner fork"
-            git clone --depth=1 "$AUTOTUNER_REPO" "$MESA_DIR" 2>&1 | tail -1
-            local commit
-            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-            get_mesa_version > "${WORKDIR}/version.txt"
-            echo "$commit" > "${WORKDIR}/commit.txt"
-            log_success "AutoTuner Mesa cloned"
-            return 0
+            repo="$MESA_REPO"
             ;;
         *)
             ref="main"
+            repo="$MESA_REPO"
             ;;
     esac
 
@@ -128,7 +150,7 @@ clone_mesa() {
         cp -r "$MESA_LOCAL_PATH" "$MESA_DIR"
     else
         log_info "Cloning Mesa @ $ref"
-        git clone --depth=1 --branch "$ref" "$MESA_REPO" "$MESA_DIR" 2>/dev/null || \
+        git clone --depth=1 --branch "$ref" "$repo" "$MESA_DIR" 2>/dev/null || \
         git clone --depth=1 --branch "$ref" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null || {
             log_error "Failed to clone Mesa"
             exit 1
@@ -162,7 +184,7 @@ apply_timeline_semaphore_fix() {
     log_info "Applying timeline semaphore fix"
     local tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
     [[ ! -f "$tu_sync" ]] && tu_sync="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.c"
-    [[ ! -f "$tu_sync" ]] && { log_warn "KGSL kernel file not found, skipping timeline fix"; return 0; }
+    [[ ! -f "$tu_sync" ]] && { log_warn "KGSL kernel file not found, skipping"; return 0; }
     if grep -q "TIMELINE_SEMAPHORE_FIX" "$tu_sync"; then
         log_info "Timeline fix already applied"
         return 0
@@ -184,66 +206,147 @@ PYEOF
 
 apply_gralloc_ubwc_fix() {
     log_info "Applying gralloc UBWC fix"
+    local gralloc_fb="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
     local tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.cc"
     [[ ! -f "$tu_android" ]] && tu_android="${MESA_DIR}/src/freedreno/vulkan/tu_android.c"
-    if [[ ! -f "$tu_android" ]]; then
-        log_warn "tu_android file not found, trying u_gralloc fallback"
-        local gralloc_fb="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
-        if [[ -f "$gralloc_fb" ]] && ! grep -q "GRALLOC_UBWC_FIX" "$gralloc_fb"; then
-            python3 - "$gralloc_fb" << 'PYEOF'
+    if [[ -f "$gralloc_fb" ]] && ! grep -q "UBWC_GRALLOC_FORCED" "$gralloc_fb"; then
+        python3 - "$gralloc_fb" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-pat = r'(get_buffer_basic_info[^{]*\{)'
-m = re.search(pat, c)
+if 'UBWC_GRALLOC_FORCED' in c:
+    print('[OK] u_gralloc UBWC already forced'); sys.exit(0)
+pat = r'(static\s+int\s+\w*get_buffer\w*\s*\([^)]*\)\s*\{[^}]*?\n)([ \t]+)'
+m = re.search(pat, c, re.DOTALL)
 if m:
-    inject = '\n   /* GRALLOC_UBWC_FIX */\n   binfo->modifier = DRM_FORMAT_MOD_QCOM_COMPRESSED;\n'
-    ins = m.end()
-    c = c[:ins] + inject + c[ins:]
+    inject = '\n   /* UBWC_GRALLOC_FORCED */\n   return 0;\n'
+    ins = c.find('{', c.find('get_buffer')) + 1
+    eol = c.find('\n', ins)
+    c = c[:eol+1] + inject + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] UBWC modifier forced in u_gralloc_fallback.c')
+    print('[OK] u_gralloc UBWC detection forced')
 else:
-    print('[WARN] get_buffer_basic_info not found in u_gralloc_fallback.c')
+    print('[WARN] get_buffer function not found in u_gralloc_fallback.c')
 PYEOF
-        fi
-        return 0
     fi
-    if grep -q "GRALLOC_UBWC_FIX" "$tu_android"; then
-        log_info "Gralloc UBWC fix already applied"
-        return 0
-    fi
-    python3 - "$tu_android" << 'PYEOF'
+    if [[ -f "$tu_android" ]] && ! grep -q "GRALLOC_UBWC_FIX" "$tu_android"; then
+        python3 - "$tu_android" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-pat = r'(GRALLOC1_PRODUCER_USAGE_PRIVATE_ALLOC_UBWC\s*\|\s*)'
-if re.search(pat, c):
-    print('[OK] UBWC gralloc flag already present')
+pat2 = r'(gralloc_usage\s*=[^;]+)(;)'
+if re.search(pat2, c):
+    c = re.sub(pat2, r'\1 | GRALLOC1_PRODUCER_USAGE_PRIVATE_ALLOC_UBWC /* GRALLOC_UBWC_FIX */ \2', c, count=1)
     with open(fp, 'w') as f: f.write(c)
+    print('[OK] UBWC flag added to gralloc usage')
 else:
-    pat2 = r'(gralloc_usage\s*=[^;]+)(;)'
-    if re.search(pat2, c):
-        c = re.sub(pat2,
-            r'\1 | GRALLOC1_PRODUCER_USAGE_PRIVATE_ALLOC_UBWC \2',
-            c, count=1)
-        with open(fp, 'w') as f: f.write(c)
-        print('[OK] UBWC flag added to gralloc usage')
-    else:
-        print('[WARN] Gralloc usage pattern not found, skipping')
-        with open(fp, 'w') as f: f.write(c)
+    print('[WARN] Gralloc usage pattern not found')
 PYEOF
+    fi
     log_success "Gralloc UBWC fix applied"
 }
 
-apply_a8xx_device_support() {
-    log_info "Applying A8xx device support patches"
+apply_all_gpu_device_support() {
+    log_info "Applying full GPU device support (a7xx + a8xx)"
+    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    [[ ! -f "$devices_py" ]] && { log_warn "freedreno_devices.py not found, skipping"; return 0; }
+    if grep -q "ALL_GPU_DEVICES_INJECTED" "$devices_py"; then
+        log_info "GPU device entries already injected"
+        return 0
+    fi
+    python3 - "$devices_py" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
 
+a7xx_ids = {
+    '725': [('0x43020600', 'FD725'), ('0xffff43020600', 'FD725')],
+    '730': [('0x43021000', 'FD730'), ('0xffff43021000', 'FD730')],
+    '735': [('0x43021300', 'FD735'), ('0xffff43021300', 'FD735')],
+    '740': [('0x43050a01', 'FD740'), ('0xffff43050a01', 'FD740'),
+            ('0x43050b00', 'FD740'), ('0xffff43050b00', 'FD740')],
+    '750': [('0x43050c00', 'FD750'), ('0xffff43050c00', 'FD750')],
+}
+
+a8xx_ids = {
+    '810': [('0x44010000', 'FD810')],
+    '825': [('0x44030000', 'FD825')],
+    '829': [('0x44030A00', 'FD829'), ('0x44030A20', 'FD829'), ('0xffff44030A00', 'FD829')],
+    '830': [('0x44050000', 'FD830'), ('0x44050001', 'FD830'), ('0xffff44050000', 'FD830')],
+    '840': [('0xffff44050A31', 'FD840'), ('0x44050A00', 'FD840')],
+}
+
+inject = '\n# ALL_GPU_DEVICES_INJECTED\n'
+
+for gpu, ids in a7xx_ids.items():
+    present = all(chip_id in c for chip_id, _ in ids)
+    if present:
+        continue
+    id_lines = '\n'.join(f"        GPUId(chip_id={chip_id}, name=\"{name}\")," for chip_id, name in ids)
+    inject += f'''
+add_gpus([
+{id_lines}
+    ], A6xxGPUInfo(
+        CHIP.A7XX,
+        [a7xx_base, a7xx_gen1],
+        num_ccu = 4,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = [],
+    ))
+'''
+
+for gpu, ids in a8xx_ids.items():
+    present = all(chip_id in c for chip_id, _ in ids)
+    if present:
+        continue
+    id_lines = '\n'.join(f"        GPUId(chip_id={chip_id}, name=\"{name}\")," for chip_id, name in ids)
+    disable_gmem = 'True' if gpu == '810' else 'False'
+    inject += f'''
+add_gpus([
+{id_lines}
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base],
+        num_ccu = 2 if {gpu} == 810 else 4,
+        num_slices = 1 if {gpu} == 810 else 2,
+        tile_align_w = 96,
+        tile_align_h = 32,
+        tile_max_w = 16416,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        magic_regs = dict(),
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+'''
+
+m = re.search(r'\nadd_gpus\(', c)
+if m:
+    c = c[:m.start()] + inject + c[m.start():]
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] GPU device entries injected (a7xx 725/730/735/740/750 + a8xx 810/825/829/830/840)')
+else:
+    c += inject
+    with open(fp, 'w') as f: f.write(c)
+    print('[OK] GPU device entries appended')
+PYEOF
+    log_success "Full GPU device support applied"
+}
+
+apply_a8xx_patches() {
+    log_info "Applying a8xx-specific patches"
     local kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
     local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
     local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
     local gmem_cache="${MESA_DIR}/src/freedreno/common/fd6_gmem_cache.h"
-    local gralloc_fb="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
 
     if [[ "$ENABLE_UBWC_HACK" == "true" ]] && [[ -f "$kgsl_file" ]] && ! grep -q "UBWC_56_APPLIED" "$kgsl_file"; then
@@ -262,44 +365,20 @@ inject = (
     '      break;\n'
     '   /* UBWC_56_APPLIED */\n'
 )
-pat = r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)'
-m = re.search(pat, c, re.DOTALL)
-if m:
-    c = c[:m.start(2)] + inject + c[m.start(2):]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] UBWC 5.0/6.0 cases inserted')
-else:
-    pat2 = r'(KGSL_UBWC_3_0.*?break;\n)([ \t]*default:)'
-    m2 = re.search(pat2, c, re.DOTALL)
-    if m2:
-        c = c[:m2.start(2)] + inject + c[m2.start(2):]
+for pat in [
+    r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)',
+    r'(case KGSL_UBWC_3_0:.*?break;\n)([ \t]*default:)',
+]:
+    m = re.search(pat, c, re.DOTALL)
+    if m:
+        c = c[:m.start(2)] + inject + c[m.start(2):]
         with open(fp, 'w') as f: f.write(c)
-        print('[OK] UBWC 5.0/6.0 inserted after UBWC_3_0')
-    else:
-        print('[WARN] UBWC switch pattern not found, skipping')
+        print('[OK] UBWC 5.0/6.0 cases inserted')
+        break
+else:
+    print('[WARN] UBWC switch pattern not found')
 PYEOF
         log_success "UBWC 5.0/6.0 support applied"
-    fi
-
-    if [[ -f "$gralloc_fb" ]] && ! grep -q "UBWC_GRALLOC_FORCED" "$gralloc_fb"; then
-        python3 - "$gralloc_fb" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-if 'always_use_ubwc' in c.lower() or 'UBWC_GRALLOC_FORCED' in c:
-    print('[OK] u_gralloc UBWC already forced'); sys.exit(0)
-pat = r'(static\s+\w+\s+\w*get_buffer\w*\s*\([^)]*\)\s*\{)'
-m = re.search(pat, c)
-if m:
-    inject = '\n   /* UBWC_GRALLOC_FORCED: always use UBWC detection path for a8xx */\n   return false;\n'
-    ins = m.end()
-    c = c[:ins] + inject + c[ins:]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] u_gralloc always-ubwc path forced')
-else:
-    print('[WARN] get_buffer function not found in u_gralloc_fallback.c')
-PYEOF
-        log_success "u_gralloc UBWC detection forced"
     fi
 
     if [[ -f "$dev_info_h" ]] && ! grep -q "disable_gmem" "$dev_info_h"; then
@@ -308,49 +387,35 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 field = '   bool disable_gmem;\n'
-pat = r'(struct\s+fd_dev_info\s*\{[^}]*?)(};)'
-m = re.search(pat, c, re.DOTALL)
-if m:
-    ins = m.start(2)
-    c = c[:ins] + field + c[ins:]
+all_m = list(re.finditer(r'bool\s+has_\w+;', c))
+if all_m:
+    eol = c.find('\n', all_m[-1].end())
+    c = c[:eol+1] + field + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] disable_gmem field added to fd_dev_info')
+    print('[OK] disable_gmem added to fd_dev_info')
 else:
-    pat2 = r'(bool\s+has_\w+;\s*\n)'
-    all_m = list(re.finditer(pat2, c))
-    if all_m:
-        eol = c.find('\n', all_m[-1].start())
-        c = c[:eol+1] + field + c[eol+1:]
-        with open(fp, 'w') as f: f.write(c)
-        print('[OK] disable_gmem field added after last bool field')
-    else:
-        print('[WARN] Could not find insertion point for disable_gmem')
+    print('[WARN] Insertion point not found in fd_dev_info.h')
 PYEOF
-        log_success "disable_gmem property added to fd_dev_info"
+        log_success "disable_gmem property added"
     fi
 
     if [[ -f "$cmd_buffer" ]] && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
-        python3 - "$cmd_buffer" "$dev_info_h" << 'PYEOF'
+        python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
-dev_h = sys.argv[2]
 with open(fp) as f: c = f.read()
-disable_gmem_exists = False
-if dev_h and open(dev_h).read().find('disable_gmem') != -1:
-    disable_gmem_exists = True
-inject = '\n   /* A8XX_DISABLE_GMEM: force sysmem for a8xx GPUs with small cache */\n   if (cmd->device->physical_device->dev_info.disable_gmem)\n      return true;\n'
+inject = '\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.disable_gmem)\n      return true;\n'
 pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)'
 m = re.search(pat, c)
 if m:
-    brace = c.find('{', m.start())
-    ins = c.find('\n', brace) + 1
+    ins = c.find('\n', c.find('{', m.start())) + 1
     c = c[:ins] + inject + c[ins:]
     with open(fp, 'w') as f: f.write(c)
     print('[OK] disable_gmem guard added to use_sysmem_rendering')
 else:
-    print('[WARN] use_sysmem_rendering not found in tu_cmd_buffer.cc')
+    print('[WARN] use_sysmem_rendering not found')
 PYEOF
-        log_success "A8xx disable_gmem guard added to tu_cmd_buffer.cc"
+        log_success "A8xx sysmem guard added"
     fi
 
     if [[ -f "$gmem_cache" ]] && ! grep -q "A8XX_GMEM_OFFSET_FIX" "$gmem_cache"; then
@@ -358,14 +423,14 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-pat = r'(if\s*\(info->chip\s*>=\s*8\s*&&\s*info->num_slices\s*>\s*1\s*\)[^}]*\})'
+pat = r'if\s*\(\s*info->chip\s*>=\s*8\s*&&\s*info->num_slices\s*>\s*1\s*\)[^}]*\}'
 m = re.search(pat, c, re.DOTALL)
 if m:
-    c = c[:m.start()] + '/* A8XX_GMEM_OFFSET_FIX: removed - causes assertion with <2MB cache */' + c[m.end():]
+    c = c[:m.start()] + '/* A8XX_GMEM_OFFSET_FIX */' + c[m.end():]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] A8xx gmem cache offset guard removed')
+    print('[OK] A8xx gmem cache offset removed')
 else:
-    print('[INFO] gmem offset block not found (may already be patched or absent)')
+    print('[INFO] gmem offset block not found (may already be patched)')
 PYEOF
         log_success "A8xx gmem cache offset fix applied"
     fi
@@ -375,154 +440,216 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-pat = r'(if\s*\([^)]*chip\s*==\s*A8XX[^)]*\)[^{]*\{[^}]*TU_DEBUG_FLUSHALL[^}]*\})'
+pat = r'if\s*\([^)]*chip\s*==\s*A8XX[^)]*\)[^{]*\{[^}]*TU_DEBUG_FLUSHALL[^}]*\}'
 m = re.search(pat, c, re.DOTALL)
 if m:
     c = c[:m.start()] + '/* A8XX_FLUSHALL_REMOVED */' + c[m.end():]
     with open(fp, 'w') as f: f.write(c)
     print('[OK] A8xx forced FLUSHALL removed')
 else:
-    pat2 = r'(TU_DEBUG_FLUSHALL[^;]+;)'
-    m2 = re.search(pat2, c)
-    if m2:
-        c = c[:m2.start()] + '/* A8XX_FLUSHALL_REMOVED */' + c[m2.end():]
-        with open(fp, 'w') as f: f.write(c)
-        print('[OK] FLUSHALL flag removed (generic pattern)')
-    else:
-        print('[INFO] FLUSHALL block not found (may be absent in this Mesa version)')
+    print('[INFO] FLUSHALL block not found in this version')
 PYEOF
         log_success "A8xx FLUSHALL removed"
     fi
 
-    if [[ -f "$devices_py" ]] && ! grep -q "A8XX_DEVICES_INJECTED" "$devices_py"; then
-        python3 - "$devices_py" << 'PYEOF'
+    log_success "A8xx patches complete"
+}
+
+apply_vulkan_extensions_support() {
+    log_info "Unlocking all Turnip-implemented Vulkan extensions"
+    local tu_extensions="${MESA_DIR}/src/freedreno/vulkan/tu_extensions.py"
+    [[ ! -f "$tu_extensions" ]] && { log_warn "tu_extensions.py not found, skipping"; return 0; }
+    if grep -q "EXT_UNLOCK_APPLIED" "$tu_extensions"; then
+        log_info "Extension unlock already applied"
+        return 0
+    fi
+    python3 - "$tu_extensions" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-has_830 = '0x44050000' in c
-has_825 = '0x44030000' in c
-has_829 = '0x44030A00' in c or '0x44030a00' in c
-has_810 = '0x44010000' in c
+SAFE_UNLOCK = [
+    "VK_KHR_synchronization2",
+    "VK_KHR_dynamic_rendering",
+    "VK_KHR_dynamic_rendering_local_read",
+    "VK_KHR_shader_non_semantic_info",
+    "VK_KHR_shader_expect_assume",
+    "VK_KHR_shader_maximal_reconvergence",
+    "VK_KHR_shader_subgroup_rotate",
+    "VK_KHR_shader_subgroup_uniform_control_flow",
+    "VK_KHR_shader_quad_control",
+    "VK_KHR_shader_float_controls2",
+    "VK_KHR_shader_atomic_int64",
+    "VK_KHR_shader_float16_int8",
+    "VK_KHR_shader_clock",
+    "VK_KHR_compute_shader_derivatives",
+    "VK_KHR_cooperative_matrix",
+    "VK_KHR_global_priority",
+    "VK_KHR_performance_query",
+    "VK_KHR_pipeline_executable_properties",
+    "VK_KHR_pipeline_library",
+    "VK_KHR_ray_query",
+    "VK_KHR_ray_tracing_maintenance1",
+    "VK_KHR_ray_tracing_pipeline",
+    "VK_KHR_ray_tracing_position_fetch",
+    "VK_KHR_acceleration_structure",
+    "VK_KHR_deferred_host_operations",
+    "VK_KHR_fragment_shader_barycentric",
+    "VK_KHR_fragment_shading_rate",
+    "VK_KHR_present_id",
+    "VK_KHR_present_wait",
+    "VK_KHR_shared_presentable_image",
+    "VK_KHR_video_queue",
+    "VK_KHR_video_decode_queue",
+    "VK_KHR_video_decode_h264",
+    "VK_KHR_video_decode_h265",
+    "VK_EXT_descriptor_buffer",
+    "VK_EXT_descriptor_indexing",
+    "VK_EXT_mesh_shader",
+    "VK_EXT_shader_object",
+    "VK_EXT_shader_tile_image",
+    "VK_EXT_shader_stencil_export",
+    "VK_EXT_shader_atomic_float",
+    "VK_EXT_shader_atomic_float2",
+    "VK_EXT_shader_demote_to_helper_invocation",
+    "VK_EXT_shader_module_identifier",
+    "VK_EXT_shader_replicated_composites",
+    "VK_EXT_shader_subgroup_ballot",
+    "VK_EXT_shader_subgroup_vote",
+    "VK_EXT_shader_viewport_index_layer",
+    "VK_EXT_subgroup_size_control",
+    "VK_EXT_image_compression_control",
+    "VK_EXT_image_compression_control_swapchain",
+    "VK_EXT_image_robustness",
+    "VK_EXT_image_sliced_view_of_3d",
+    "VK_EXT_image_view_min_lod",
+    "VK_EXT_image_2d_view_of_3d",
+    "VK_EXT_filter_cubic",
+    "VK_EXT_fragment_density_map",
+    "VK_EXT_fragment_density_map2",
+    "VK_EXT_fragment_shader_interlock",
+    "VK_EXT_frame_boundary",
+    "VK_EXT_memory_budget",
+    "VK_EXT_memory_priority",
+    "VK_EXT_multi_draw",
+    "VK_EXT_multisampled_render_to_single_sampled",
+    "VK_EXT_mutable_descriptor_type",
+    "VK_EXT_non_seamless_cube_map",
+    "VK_EXT_opacity_micromap",
+    "VK_EXT_pageable_device_local_memory",
+    "VK_EXT_pipeline_creation_cache_control",
+    "VK_EXT_pipeline_creation_feedback",
+    "VK_EXT_pipeline_library_group_handles",
+    "VK_EXT_pipeline_protected_access",
+    "VK_EXT_pipeline_robustness",
+    "VK_EXT_post_depth_coverage",
+    "VK_EXT_primitives_generated_query",
+    "VK_EXT_primitive_topology_list_restart",
+    "VK_EXT_provoking_vertex",
+    "VK_EXT_rasterization_order_attachment_access",
+    "VK_EXT_robustness2",
+    "VK_EXT_sample_locations",
+    "VK_EXT_sampler_filter_minmax",
+    "VK_EXT_scalar_block_layout",
+    "VK_EXT_separate_stencil_usage",
+    "VK_EXT_subpass_merge_feedback",
+    "VK_EXT_swapchain_maintenance1",
+    "VK_EXT_texel_buffer_alignment",
+    "VK_EXT_texture_compression_astc_hdr",
+    "VK_EXT_tooling_info",
+    "VK_EXT_transform_feedback",
+    "VK_EXT_vertex_attribute_divisor",
+    "VK_EXT_vertex_input_dynamic_state",
+    "VK_EXT_ycbcr_2plane_444_formats",
+    "VK_EXT_ycbcr_image_arrays",
+    "VK_EXT_attachment_feedback_loop_layout",
+    "VK_EXT_attachment_feedback_loop_dynamic_state",
+    "VK_EXT_border_color_swizzle",
+    "VK_EXT_color_write_enable",
+    "VK_EXT_conditional_rendering",
+    "VK_EXT_conservative_rasterization",
+    "VK_EXT_custom_border_color",
+    "VK_EXT_depth_bias_control",
+    "VK_EXT_depth_clamp_control",
+    "VK_EXT_depth_clamp_zero_one",
+    "VK_EXT_depth_clip_control",
+    "VK_EXT_depth_clip_enable",
+    "VK_EXT_depth_range_unrestricted",
+    "VK_EXT_device_address_binding_report",
+    "VK_EXT_device_fault",
+    "VK_EXT_device_memory_report",
+    "VK_EXT_discard_rectangles",
+    "VK_EXT_display_control",
+    "VK_EXT_dynamic_rendering_unused_attachments",
+    "VK_EXT_extended_dynamic_state",
+    "VK_EXT_extended_dynamic_state2",
+    "VK_EXT_extended_dynamic_state3",
+    "VK_EXT_external_memory_dma_buf",
+    "VK_EXT_global_priority",
+    "VK_EXT_global_priority_query",
+    "VK_EXT_graphics_pipeline_library",
+    "VK_EXT_host_image_copy",
+    "VK_EXT_host_query_reset",
+    "VK_EXT_index_type_uint8",
+    "VK_EXT_inline_uniform_block",
+    "VK_EXT_legacy_dithering",
+    "VK_EXT_legacy_vertex_attributes",
+    "VK_EXT_line_rasterization",
+    "VK_EXT_load_store_op_none",
+    "VK_EXT_map_memory_placed",
+    "VK_EXT_mesh_shader",
+    "VK_EXT_nested_command_buffer",
+    "VK_AMD_buffer_marker",
+    "VK_AMD_device_coherent_memory",
+    "VK_AMD_memory_overallocation_behavior",
+    "VK_AMD_shader_core_properties",
+    "VK_AMD_shader_core_properties2",
+    "VK_AMD_shader_info",
+    "VK_QCOM_filter_cubic_clamp",
+    "VK_QCOM_filter_cubic_weights",
+    "VK_QCOM_image_processing",
+    "VK_QCOM_image_processing2",
+    "VK_QCOM_multiview_per_view_render_areas",
+    "VK_QCOM_multiview_per_view_viewports",
+    "VK_QCOM_render_pass_shader_resolve",
+    "VK_QCOM_render_pass_store_ops",
+    "VK_QCOM_render_pass_transform",
+    "VK_QCOM_tile_properties",
+    "VK_QCOM_ycbcr_degamma",
+    "VK_VALVE_descriptor_set_host_mapping",
+    "VK_VALVE_mutable_descriptor_type",
+    "VK_NV_compute_shader_derivatives",
+    "VK_NV_cooperative_matrix",
+    "VK_NV_device_diagnostic_checkpoints",
+    "VK_NV_device_diagnostics_config",
+    "VK_NVX_image_view_handle",
+    "VK_GOOGLE_decorate_string",
+    "VK_GOOGLE_display_timing",
+    "VK_GOOGLE_hlsl_functionality1",
+    "VK_GOOGLE_user_type",
+    "VK_IMG_filter_cubic",
+    "VK_IMG_relaxed_line_rasterization",
+    "VK_INTEL_performance_query",
+    "VK_INTEL_shader_integer_functions2",
+    "VK_MESA_image_alignment_control",
+]
 
-missing = []
-if not has_830: missing.append('830')
-if not has_825: missing.append('825')
-if not has_829: missing.append('829')
-if not has_810: missing.append('810')
+changed = 0
+for ext in SAFE_UNLOCK:
+    pat_false = rf'(Extension\s*\(\s*"{re.escape(ext)}"\s*,\s*)False(\s*,)'
+    pat_none  = rf'(Extension\s*\(\s*"{re.escape(ext)}"\s*,\s*)None(\s*,)'
+    if re.search(pat_false, c):
+        c = re.sub(pat_false, r'\1True\2', c)
+        changed += 1
+    elif re.search(pat_none, c):
+        c = re.sub(pat_none, r'\1True\2', c)
+        changed += 1
 
-if not missing:
-    print('[OK] All a8xx GPU entries already present')
-    sys.exit(0)
-
-inject = '\n# A8XX_DEVICES_INJECTED\n'
-
-if not has_830:
-    inject += '''
-add_gpus([
-        GPUId(chip_id=0x44050000, name="FD830"),
-        GPUId(chip_id=0x44050001, name="FD830"),
-        GPUId(chip_id=0xffff44050000, name="FD830"),
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base],
-        num_ccu = 6,
-        num_slices = 2,
-        tile_align_w = 96,
-        tile_align_h = 32,
-        tile_max_w = 16416,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_base_raw_magic_regs,
-    ))
-'''
-
-if not has_825:
-    inject += '''
-add_gpus([
-        GPUId(chip_id=0x44030000, name="FD825"),
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base],
-        num_ccu = 4,
-        num_slices = 2,
-        tile_align_w = 96,
-        tile_align_h = 32,
-        tile_max_w = 16416,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_base_raw_magic_regs,
-    ))
-'''
-
-if not has_829:
-    inject += '''
-add_gpus([
-        GPUId(chip_id=0x44030A00, name="FD829"),
-        GPUId(chip_id=0x44030A20, name="FD829"),
-        GPUId(chip_id=0xffff44030A00, name="FD829"),
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base],
-        num_ccu = 4,
-        num_slices = 2,
-        tile_align_w = 96,
-        tile_align_h = 32,
-        tile_max_w = 16416,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_base_raw_magic_regs,
-    ))
-'''
-
-if not has_810:
-    inject += '''
-add_gpus([
-        GPUId(chip_id=0x44010000, name="FD810"),
-    ], A6xxGPUInfo(
-        CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base],
-        num_ccu = 2,
-        num_slices = 1,
-        tile_align_w = 96,
-        tile_align_h = 32,
-        tile_max_w = 16416,
-        tile_max_h = 16384,
-        num_vsc_pipes = 32,
-        cs_shared_mem_size = 32 * 1024,
-        wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
-        magic_regs = dict(),
-        raw_magic_regs = a8xx_base_raw_magic_regs,
-    ))
-'''
-
-m = re.search(r'(# Values from blob.*?\n)', c)
-if m:
-    ins = m.start()
-    c = c[:ins] + inject + c[ins:]
-else:
-    c = c + inject
-
+c += '\n# EXT_UNLOCK_APPLIED\n'
 with open(fp, 'w') as f: f.write(c)
-print(f'[OK] Injected a8xx GPU entries: {missing}')
+print(f'[OK] Enabled {changed} additional Vulkan extensions')
 PYEOF
-        log_success "A8xx GPU device entries injected (830/825/829/810)"
-    fi
-
-    log_success "A8xx full support applied"
+    log_success "Vulkan extensions unlock applied"
 }
 
 apply_deck_emu_support() {
@@ -546,7 +673,6 @@ apply_deck_emu_support() {
             device_name="AMD Custom GPU 0405 (RADV VANGOGH)"
             ;;
         *)
-            log_warn "Unknown deck emu target: $DECK_EMU_TARGET, using nvidia"
             vendor_id="0x10de"; device_id="0x2684"
             driver_version="0x61d0000"
             device_name="NVIDIA GeForce RTX 4090"
@@ -557,7 +683,6 @@ import sys, re
 fp, vendor_id, device_id, driver_version, device_name = sys.argv[1:6]
 with open(fp) as f: c = f.read()
 spoof_code = f"""
-   
    if (getenv("TU_DECK_EMU")) {{
       props->vendorID      = {vendor_id};
       props->deviceID      = {device_id};
@@ -569,58 +694,17 @@ m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if not m:
     m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if m:
-    ins = m.end()
-    c = c[:ins] + spoof_code + c[ins:]
+    c = c[:m.end()] + spoof_code + c[m.end():]
     with open(fp, 'w') as f: f.write(c)
     print(f'[OK] Deck emu ({device_name}) applied')
 else:
-    print('[WARN] Could not find properties function for deck emu')
-    with open(fp, 'w') as f: f.write(c)
+    print('[WARN] Properties function not found for deck emu')
 PYEOF
     log_success "Deck emulation applied ($DECK_EMU_TARGET)"
 }
 
-apply_vulkan_extensions_support() {
-    log_info "Applying Vulkan extension spoofing"
-    local tu_extensions="${MESA_DIR}/src/freedreno/vulkan/tu_extensions.py"
-    [[ ! -f "$tu_extensions" ]] && { log_warn "tu_extensions.py not found, skipping ext spoof"; return 0; }
-    if grep -q "EXT_SPOOF" "$tu_extensions"; then
-        log_info "Extension spoof already applied"
-        return 0
-    fi
-    python3 - "$tu_extensions" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-extra_exts = [
-    "VK_EXT_descriptor_buffer",
-    "VK_EXT_mesh_shader",
-    "VK_KHR_ray_query",
-    "VK_KHR_acceleration_structure",
-]
-to_add = [e for e in extra_exts if e not in c]
-if to_add:
-    spoof_block = "\n# EXT_SPOOF: additional extensions\n"
-    for ext in to_add:
-        spoof_block += f'    Extension("{ext}", True, None),\n'
-    m = re.search(r'(extensions\s*=\s*\[.*?\])', c, re.DOTALL)
-    if m:
-        ins = m.end() - 1
-        c = c[:ins] + spoof_block + c[ins:]
-        with open(fp, 'w') as f: f.write(c)
-        print(f'[OK] Added {len(to_add)} spoofed extensions')
-    else:
-        with open(fp, 'w') as f: f.write(c)
-        print('[WARN] Extension list not found')
-else:
-    print('[OK] All target extensions already present')
-PYEOF
-    log_success "Vulkan extension spoofing applied"
-}
-
 apply_custom_debug_flags() {
-    log_info "Adding custom TU_DEBUG flags: force_vrs, push_regs, ubwc_all, slc_pin, turbo, defrag, cp_prefetch, shfl, vgt_pref, unroll"
-
+    log_info "Adding custom TU_DEBUG flags"
     local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
     local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -635,7 +719,7 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 if 'TU_DEBUG_FORCE_VRS' in c:
-    print('[OK] tu_util.h already has custom flags'); sys.exit(0)
+    print('[OK] custom flags already in tu_util.h'); sys.exit(0)
 bits = list(map(int, re.findall(r'BITFIELD64_BIT\((\d+)\)', c)))
 if not bits:
     print('[WARN] No BITFIELD64_BIT found'); sys.exit(0)
@@ -649,13 +733,12 @@ flags = [
 lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
 all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
 if all_m:
-    last = all_m[-1]
-    eol = c.find('\n', last.end())
+    eol = c.find('\n', all_m[-1].end())
     c = c[:eol+1] + lines + '\n' + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print(f'[OK] Added {len(flags)} custom TU_DEBUG flags starting at bit {next_bit}')
+    print(f'[OK] Added {len(flags)} custom TU_DEBUG flags')
 else:
-    print('[WARN] Could not find enum insertion point in tu_util.h')
+    print('[WARN] Enum insertion point not found')
 PYEOF
 
     python3 - "$tu_util_cc" << 'PYEOF'
@@ -678,11 +761,10 @@ new_entries = (
 )
 all_m = list(re.finditer(r'\{\s*"[a-z_]+"\s*,\s*TU_DEBUG_\w+\s*\}', c))
 if all_m:
-    last = all_m[-1]
-    eol = c.find('\n', last.end())
+    eol = c.find('\n', all_m[-1].end())
     c = c[:eol+1] + new_entries + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] Added 10 custom entries to debug table in tu_util.cc')
+    print('[OK] Added 10 entries to debug table')
 else:
     print('[WARN] Debug table not found in tu_util.cc')
 PYEOF
@@ -692,7 +774,6 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
 turbo_func = """
 static void
 tu_try_activate_turbo(void)
@@ -717,57 +798,17 @@ tu_try_activate_turbo(void)
    }
 }
 """
-
-turbo_call = """
-   
-   if (TU_DEBUG(TURBO))
-      tu_try_activate_turbo();
-"""
-
+turbo_call = "\n   if (TU_DEBUG(TURBO))\n      tu_try_activate_turbo();\n"
 m_func = re.search(r'\n(static |VkResult |void )', c)
 if m_func and 'tu_try_activate_turbo' not in c:
     c = c[:m_func.start()+1] + turbo_func + '\n' + c[m_func.start()+1:]
-
-m_call = re.search(r'(result\s*=\s*tu_physical_device_init\([^;]+;\s*\n\s*if\s*\([^)]+\)[^{]*\{[^}]*\}\s*\n)', c, re.DOTALL)
-if not m_call:
-    m_call = re.search(r'(tu_physical_device_init\([^;]+;\s*\n)', c)
+m_call = re.search(r'(tu_physical_device_init\([^;]+;\s*\n)', c)
 if m_call:
     c = c[:m_call.end()] + turbo_call + c[m_call.end():]
-
 with open(fp, 'w') as f: f.write(c)
-print('[OK] turbo mode injected into tu_device.cc')
+print('[OK] TU_DEBUG_TURBO injected')
 PYEOF
-        log_success "TU_DEBUG_TURBO implementation added"
-    fi
-
-    if [[ -f "$tu_device_cc" ]] && ! grep -q "TU_DEBUG_DEFRAG" "$tu_device_cc"; then
-        python3 - "$tu_device_cc" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-defrag_code = """
-   if (TU_DEBUG(DEFRAG) && size > (1u << 20))
-      size = ALIGN(size, 64 * 1024);
-"""
-
-m = re.search(r'(VkResult\s+\w*bo_init_new\w*\s*\([^{]+\{)', c)
-if m:
-    body_start = m.end()
-    first_stmt = re.search(r'\n\s+\S', c[body_start:])
-    if first_stmt:
-        ins = body_start + first_stmt.start() + 1
-        c = c[:ins] + defrag_code + c[ins:]
-        with open(fp, 'w') as f: f.write(c)
-        print('[OK] defrag alignment injected into tu_device.cc')
-    else:
-        with open(fp, 'w') as f: f.write(c)
-        print('[WARN] defrag: body start not found')
-else:
-    with open(fp, 'w') as f: f.write(c)
-    print('[WARN] defrag: bo_init_new not found, skipping')
-PYEOF
-        log_success "TU_DEBUG_DEFRAG implementation added"
+        log_success "TU_DEBUG_TURBO added"
     fi
 
     if [[ -f "$tu_image_cc" ]] && ! grep -q "TU_DEBUG_UBWC_ALL" "$tu_image_cc"; then
@@ -775,7 +816,6 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
 ubwc_code = """
    if (TU_DEBUG(UBWC_ALL)) {
       if (!vk_format_is_depth_or_stencil(image->vk.format) &&
@@ -786,24 +826,20 @@ ubwc_code = """
       }
    }
 """
-
 m = re.search(r'VkResult\s+(tu_image_init|tu_image_create)[^{]*\{', c)
 if m:
-    func_start = m.end()
-    returns = list(re.finditer(r'return VK_SUCCESS;', c[func_start:]))
+    returns = list(re.finditer(r'return VK_SUCCESS;', c[m.end():]))
     if returns:
-        last_ret = returns[-1]
-        ins = func_start + last_ret.start()
+        ins = m.end() + returns[-1].start()
         c = c[:ins] + ubwc_code + '\n   ' + c[ins:]
         with open(fp, 'w') as f: f.write(c)
-        print('[OK] ubwc_all injected into tu_image.cc')
+        print('[OK] TU_DEBUG_UBWC_ALL injected')
     else:
-        print('[WARN] ubwc_all: no return point found')
-        with open(fp, 'w') as f: f.write(c)
+        print('[WARN] No return VK_SUCCESS found')
 else:
-    print('[WARN] ubwc_all: tu_image_init not found')
+    print('[WARN] tu_image_init not found')
 PYEOF
-        log_success "TU_DEBUG_UBWC_ALL implementation added"
+        log_success "TU_DEBUG_UBWC_ALL added"
     fi
 
     if [[ -f "$ir3_ra_c" ]] && ! grep -q "ir3_ra_max_regs_override" "$ir3_ra_c"; then
@@ -811,7 +847,6 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-
 helper = """
 static inline unsigned
 ir3_ra_max_regs_override(unsigned default_max)
@@ -822,60 +857,26 @@ ir3_ra_max_regs_override(unsigned default_max)
    return default_max;
 }
 """
-
 includes = list(re.finditer(r'^#include\b.*', c, re.MULTILINE))
 if includes:
     eol = c.find('\n', includes[-1].start())
     c = c[:eol+1] + helper + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] push_regs helper added to ir3_ra.c')
+    print('[OK] TU_DEBUG_PUSH_REGS helper added')
 else:
-    print('[WARN] push_regs: no includes found in ir3_ra.c')
+    print('[WARN] No includes found in ir3_ra.c')
 PYEOF
-        log_success "TU_DEBUG_PUSH_REGS helper added"
+        log_success "TU_DEBUG_PUSH_REGS added"
     fi
 
-    if [[ -f "$ir3_compiler_nir" ]] && ! grep -q "TU_DEBUG.*unroll\|ir3_custom_unroll" "$ir3_compiler_nir"; then
-        python3 - "$ir3_compiler_nir" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-
-unroll_code = """
-   
-   {
-      const char *_dbg = getenv("TU_DEBUG");
-      if (_dbg && strstr(_dbg, "unroll"))
-         NIR_PASS(progress, nir, nir_opt_loop_unroll);
-   }
-"""
-
-m = re.search(r'(NIR_PASS[^;]+nir_opt_loop_unroll[^;]+;\s*\n)', c)
-if not m:
-    all_m = list(re.finditer(r'(NIR_PASS|OPT)\([^;]+;\s*\n', c))
-    m = all_m[-1] if all_m else None
-if m:
-    c = c[:m.end()] + unroll_code + c[m.end():]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] unroll pass injected into ir3_compiler_nir.c')
-else:
-    print('[WARN] unroll: no NIR pass insertion point found')
-PYEOF
-        log_success "TU_DEBUG_UNROLL implementation added"
-    fi
-
-    log_info "slc_pin / cp_prefetch / shfl / vgt_pref: flags registered (kernel-side implementation required)"
-    log_success "All custom TU_DEBUG flags applied"
+    log_success "Custom TU_DEBUG flags applied"
 }
 
 apply_patch_series() {
     local series_dir="$1"
     log_info "Applying patch series from: $series_dir"
     local series_file="${series_dir}/series"
-    if [[ ! -f "$series_file" ]]; then
-        log_warn "No series file found at $series_file"
-        return 0
-    fi
+    [[ ! -f "$series_file" ]] && { log_warn "No series file at $series_file"; return 0; }
     while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
         [[ -z "$patch_name" || "$patch_name" == \#* ]] && continue
         local patch_path="${series_dir}/${patch_name}"
@@ -883,7 +884,7 @@ apply_patch_series() {
             log_warn "Patch not found: $patch_name"
             continue
         fi
-        log_info "Applying series patch: $patch_name"
+        log_info "Applying: $patch_name"
         if git apply --check "$patch_path" 2>/dev/null; then
             git apply "$patch_path"
             log_success "Applied: $patch_name"
@@ -891,45 +892,33 @@ apply_patch_series() {
             log_warn "Could not apply: $patch_name (skipping)"
         fi
     done < "$series_file"
-    log_success "Patch series applied"
+    log_success "Patch series done"
 }
 
 apply_patches() {
-    log_info "Applying patches for $TARGET_GPU"
+    log_info "Applying patches"
     cd "$MESA_DIR"
-    if [[ "$BUILD_VARIANT" == "vanilla" ]]; then
-        log_info "Vanilla build - skipping all patches"
-        return 0
-    fi
+    [[ "$BUILD_VARIANT" == "vanilla" ]] && { log_info "Vanilla - skipping patches"; return 0; }
 
     if [[ "$APPLY_PATCH_SERIES" == "true" ]]; then
-        if [[ "$TARGET_GPU" == "a8xx" && -d "$PATCHES_DIR/a8xx" && -f "$PATCHES_DIR/a8xx/series" ]]; then
-            log_info "Applying a8xx patch series"
-            apply_patch_series "$PATCHES_DIR/a8xx"
-        fi
-        if [[ -f "$PATCHES_DIR/series" ]]; then
-            log_info "Applying common patch series"
-            apply_patch_series "$PATCHES_DIR"
-        fi
+        [[ -f "$PATCHES_DIR/series" ]] && apply_patch_series "$PATCHES_DIR"
+        [[ -d "$PATCHES_DIR/a8xx" && -f "$PATCHES_DIR/a8xx/series" ]] && apply_patch_series "$PATCHES_DIR/a8xx"
     fi
 
     if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
     apply_gralloc_ubwc_fix
+    apply_all_gpu_device_support
+    apply_a8xx_patches
     if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
     if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
     if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi
-    if [[ "$TARGET_GPU" == "a8xx" ]]; then
-        apply_a8xx_device_support
-    fi
 
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do
             [[ ! -f "$patch" ]] && continue
-            local patch_name=$(basename "$patch")
-            if [[ "$patch_name" == *"a8xx"* ]] || [[ "$patch_name" == *"A8xx"* ]]; then
-                if [[ "$TARGET_GPU" != "a8xx" ]]; then continue; fi
-            fi
-            log_info "Applying: $patch_name"
+            local patch_name
+            patch_name=$(basename "$patch")
+            log_info "Applying loose patch: $patch_name"
             if git apply --check "$patch" 2>/dev/null; then
                 git apply "$patch"
                 log_success "Applied: $patch_name"
@@ -943,10 +932,10 @@ apply_patches() {
 }
 
 setup_subprojects() {
-    log_info "Setting up subprojects via Meson wraps"
+    log_info "Setting up subprojects"
     cd "$MESA_DIR"
     mkdir -p subprojects/packagecache
-    log_success "Subprojects ready (Meson wraps will resolve at configure time)"
+    log_success "Subprojects ready"
 }
 
 create_cross_file() {
@@ -986,17 +975,11 @@ EOF
 }
 
 configure_build() {
-    log_info "Configuring Mesa build"
+    log_info "Configuring Mesa build (unified a7xx + a8xx)"
     cd "$MESA_DIR"
     local buildtype="$BUILD_TYPE"
-    if [[ "$BUILD_VARIANT" == "debug" ]]; then buildtype="debug"; fi
-    if [[ "$BUILD_VARIANT" == "profile" ]]; then buildtype="debugoptimized"; fi
-
-    local extra_opts=""
-    if [[ "$TARGET_GPU" == "a8xx" ]]; then
-        extra_opts="-Dfreedreno-a8xx=true"
-    fi
-
+    [[ "$BUILD_VARIANT" == "debug"   ]] && buildtype="debug"
+    [[ "$BUILD_VARIANT" == "profile" ]] && buildtype="debugoptimized"
     meson setup build \
         --cross-file "${WORKDIR}/cross-aarch64.txt" \
         -Dbuildtype="$buildtype" \
@@ -1022,48 +1005,18 @@ configure_build() {
         -Dwerror=false \
         -Ddefault_library=shared \
         --force-fallback-for=spirv-tools,spirv-headers \
-        ${extra_opts} \
         2>&1 | tee "${WORKDIR}/meson.log"
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
-        log_warn "meson failed with extra_opts, retrying without a8xx flag"
-        meson setup build \
-            --cross-file "${WORKDIR}/cross-aarch64.txt" \
-            -Dbuildtype="$buildtype" \
-            -Dplatforms=android \
-            -Dplatform-sdk-version="$API_LEVEL" \
-            -Dandroid-stub=true \
-            -Dgallium-drivers= \
-            -Dvulkan-drivers=freedreno \
-            -Dvulkan-beta=true \
-            -Dfreedreno-kmds=kgsl \
-            -Degl=disabled \
-            -Dglx=disabled \
-            -Dgles1=disabled \
-            -Dgles2=disabled \
-            -Dopengl=false \
-            -Dgbm=disabled \
-            -Dllvm=disabled \
-            -Dlibunwind=disabled \
-            -Dlmsensors=disabled \
-            -Dzstd=disabled \
-            -Dvalgrind=disabled \
-            -Dbuild-tests=false \
-            -Dwerror=false \
-            -Ddefault_library=shared \
-            --force-fallback-for=spirv-tools,spirv-headers \
-            --wipe \
-            2>&1 | tee "${WORKDIR}/meson.log"
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            log_error "Meson configuration failed"
-            exit 1
-        fi
+        log_error "Meson configuration failed"
+        exit 1
     fi
     log_success "Build configured"
 }
 
 compile_driver() {
     log_info "Compiling Turnip driver"
-    local cores=$(nproc 2>/dev/null || echo 4)
+    local cores
+    cores=$(nproc 2>/dev/null || echo 4)
     ninja -C "${MESA_DIR}/build" -j"$cores" 2>&1 | tee "${WORKDIR}/ninja.log"
     local driver="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     [[ ! -f "$driver" ]] && { log_error "Build failed: driver not found"; exit 1; }
@@ -1072,40 +1025,35 @@ compile_driver() {
 
 package_driver() {
     log_info "Packaging driver"
-    local version=$(cat "${WORKDIR}/version.txt")
-    local commit=$(cat "${WORKDIR}/commit.txt")
-    local vulkan_version=$(get_vulkan_version)
-    local build_date=$(date +'%Y-%m-%d')
+    local version commit vulkan_version build_date
+    version=$(cat "${WORKDIR}/version.txt")
+    commit=$(cat "${WORKDIR}/commit.txt")
+    vulkan_version=$(get_vulkan_version)
+    build_date=$(date +'%Y-%m-%d')
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name
-
-    if [[ "$TARGET_GPU" == "a8xx" ]]; then
-        driver_name="vulkan.adreno.so"
-    else
-        local name_suffix="${TARGET_GPU:1}"
-        driver_name="vulkan.ad0${name_suffix}.so"
-    fi
-
+    local driver_name="vulkan.ad00xx.so"
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
-    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "${driver_name}" "${pkg_dir}/${driver_name}"
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
-    local driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
-    local variant_suffix=""
+    local driver_size
+    driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
+    local variant_suffix
     case "$BUILD_VARIANT" in
         optimized) variant_suffix="opt"     ;;
         autotuner) variant_suffix="at"      ;;
         vanilla)   variant_suffix="vanilla" ;;
         debug)     variant_suffix="debug"   ;;
         profile)   variant_suffix="profile" ;;
+        *)         variant_suffix="opt"     ;;
     esac
-    local filename="turnip_${TARGET_GPU}_v${version}_${variant_suffix}_${build_date}"
+    local filename="turnip_a0xx_v${version}_${variant_suffix}_${build_date}"
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip ${TARGET_GPU} ${BUILD_VARIANT}",
+  "name": "Turnip Unified",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",
@@ -1120,29 +1068,31 @@ EOF
     echo "$build_date"      > "${WORKDIR}/build_date.txt"
     cd "$pkg_dir"
     zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
-    log_success "Package created: ${filename}.zip ($driver_size)"
+    log_success "Package: ${filename}.zip ($driver_size)"
 }
 
 print_summary() {
-    local version=$(cat "${WORKDIR}/version.txt")
-    local commit=$(cat "${WORKDIR}/commit.txt")
-    local vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
-    local build_date=$(cat "${WORKDIR}/build_date.txt")
+    local version commit vulkan_version build_date
+    version=$(cat "${WORKDIR}/version.txt")
+    commit=$(cat "${WORKDIR}/commit.txt")
+    vulkan_version=$(cat "${WORKDIR}/vulkan_version.txt")
+    build_date=$(cat "${WORKDIR}/build_date.txt")
     echo ""
     log_info "Build Summary"
-    echo "  Target GPU     : $TARGET_GPU"
     echo "  Mesa Version   : $version"
     echo "  Vulkan Version : $vulkan_version"
     echo "  Commit         : $commit"
     echo "  Build Date     : $build_date"
+    echo "  Driver Name    : vulkan.ad00xx.so"
     echo "  Build Variant  : $BUILD_VARIANT"
+    echo "  GPU Support    : a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840)"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
 }
 
 main() {
-    log_info "Turnip Driver Builder"
+    log_info "Turnip Unified Driver Builder (a7xx + a8xx)"
     check_deps
     prepare_workdir
     clone_mesa

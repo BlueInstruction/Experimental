@@ -287,59 +287,23 @@ PYEOF
         log_success "UBWC 5.0/6.0 support applied"
     fi
 
-    if [[ -f "$dev_info_h" ]] && ! grep -q "disable_gmem" "$dev_info_h"; then
-        python3 - "$dev_info_h" << 'PYEOF'
-import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
-field = "   bool disable_gmem;\n"
-inserted = False
-for pat in [
-    r'bool\s+has_\w+;',
-    r'unsigned\s+num_ccu;',
-    r'uint32_t\s+\w+;',
-]:
-    all_m = list(re.finditer(pat, c))
-    if all_m:
-        eol = c.find("\n", all_m[-1].end())
-        c = c[:eol+1] + field + c[eol+1:]
-        inserted = True
-        break
-if not inserted:
-    m = re.search(r'(struct\s+fd_dev_info\s*\{)', c)
-    if m:
-        ins = c.find('{', m.start()) + 1
-        eol = c.find("\n", ins)
-        c = c[:eol+1] + field + c[eol+1:]
-        inserted = True
-if inserted:
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] disable_gmem added to fd_dev_info')
-else:
-    print('[WARN] Could not add disable_gmem - will skip cmd_buffer patch')
-PYEOF
-        log_success "disable_gmem property added"
-    fi
-
-    if [[ -f "$cmd_buffer" ]] && grep -q "disable_gmem" "$dev_info_h" 2>/dev/null && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
+    if [[ -f "$cmd_buffer" ]] && ! grep -q "A8XX_DISABLE_GMEM" "$cmd_buffer"; then
         python3 - "$cmd_buffer" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.disable_gmem)\n      return true;\n"
-pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)'
+inject = "\n   /* A8XX_DISABLE_GMEM: force sysmem on a8xx */\n   return true;\n"
+pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
 m = re.search(pat, c)
 if m:
-    ins = c.find("\n", c.find('{', m.start())) + 1
+    ins = c.find("\n", c.find("{", m.start())) + 1
     c = c[:ins] + inject + c[ins:]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] disable_gmem guard added to use_sysmem_rendering')
+    with open(fp, "w") as f: f.write(c)
+    print("[OK] A8xx force-sysmem added to use_sysmem_rendering")
 else:
-    print('[WARN] use_sysmem_rendering not found')
+    print("[WARN] use_sysmem_rendering not found, skipping")
 PYEOF
         log_success "A8xx sysmem guard added"
-    elif ! grep -q "disable_gmem" "$dev_info_h" 2>/dev/null; then
-        log_warn "disable_gmem not in fd_dev_info.h - skipping cmd_buffer guard to avoid compile error"
     fi
 
     if [[ -f "$gmem_cache" ]] && ! grep -q "A8XX_GMEM_OFFSET_FIX" "$gmem_cache"; then
@@ -1072,7 +1036,7 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip Unified",
+  "name": "Turnip Unified (a7xx + a8xx)",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",

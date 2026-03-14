@@ -261,19 +261,15 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
-kgsl_header = fp.replace('tu_knl_kgsl.cc', 'msm/msm_kgsl.h')
-import os
-for hdr in [kgsl_header,
-            '/usr/include/linux/msm_kgsl.h',
-            os.path.join(os.path.dirname(fp), '..', '..', 'winsys', 'kgsl', 'msm_kgsl.h')]:
-    if os.path.exists(hdr):
-        with open(hdr) as f: h = f.read()
-        if 'KGSL_UBWC_5_0' not in h:
-            with open(hdr, 'a') as f:
-                f.write("\n#ifndef KGSL_UBWC_5_0\n#define KGSL_UBWC_5_0 5\n#endif\n")
-                f.write("#ifndef KGSL_UBWC_6_0\n#define KGSL_UBWC_6_0 6\n#endif\n")
-            print(f'[OK] KGSL_UBWC_5_0/6_0 defined in {os.path.basename(hdr)}')
-        break
+if 'bank_swizzle_levels' not in c:
+    print('[WARN] bank_swizzle_levels not found in kgsl file - skipping UBWC 5/6 injection')
+    sys.exit(0)
+
+var_m = re.search(r'(\w+)\.bank_swizzle_levels|(\w+)->bank_swizzle_levels', c)
+if not var_m:
+    print('[WARN] Could not determine ubwc config variable name - skipping')
+    sys.exit(0)
+var = (var_m.group(1) or var_m.group(2))
 
 ubwc_pat = re.compile(r'case\s+KGSL_UBWC_4_0\s*:.*?break\s*;', re.DOTALL)
 m4 = ubwc_pat.search(c)
@@ -282,34 +278,50 @@ if not m4:
     m4 = ubwc_pat.search(c)
 
 if not m4:
-    print('[WARN] KGSL UBWC switch not found, skipping')
+    print('[WARN] KGSL UBWC switch not found - skipping')
     sys.exit(0)
-
-var_m = re.search(r'(\w+)->bank_swizzle_levels', c[:m4.start()])
-if not var_m:
-    var_m = re.search(r'(\w+)->ubwc', c[:m4.start()])
-var = var_m.group(1) if var_m else 'ubwc_config'
 
 default_m = re.search(r'([ 	]*default\s*:)', c[m4.end():])
 if not default_m:
-    print('[WARN] default: case not found after UBWC switch, skipping')
+    print('[WARN] default: case not found - skipping')
+    sys.exit(0)
+
+defines = (
+    "\n#ifndef KGSL_UBWC_5_0\n"
+    "#define KGSL_UBWC_5_0 5\n"
+    "#endif\n"
+    "#ifndef KGSL_UBWC_6_0\n"
+    "#define KGSL_UBWC_6_0 6\n"
+    "#endif\n"
+)
+first_include = c.find("#include")
+if first_include != -1 and "KGSL_UBWC_5_0" not in c:
+    eol = c.find("\n", first_include)
+    c = c[:eol+1] + defines + c[eol+1:]
+
+m4 = ubwc_pat.search(c)
+if not m4:
+    print('[WARN] Pattern lost after defines injection')
+    sys.exit(0)
+default_m = re.search(r'([ 	]*default\s*:)', c[m4.end():])
+if not default_m:
     sys.exit(0)
 
 ins = m4.end() + default_m.start()
 inject = (
     f"   case KGSL_UBWC_5_0:\n"
-    f"      {var}->bank_swizzle_levels = 0x4;\n"
-    f"      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    f"      {var}.bank_swizzle_levels = 0x4;\n"
+    f"      {var}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
     f"      break;\n"
     f"   case KGSL_UBWC_6_0:\n"
-    f"      {var}->bank_swizzle_levels = 0x6;\n"
-    f"      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    f"      {var}.bank_swizzle_levels = 0x6;\n"
+    f"      {var}.macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
     f"      break;\n"
     f"   /* UBWC_56_APPLIED */\n"
 )
 c = c[:ins] + inject + c[ins:]
-with open(fp, 'w') as f: f.write(c)
-print(f'[OK] UBWC 5.0/6.0 inserted using var={var}')
+with open(fp, "w") as f: f.write(c)
+print(f"[OK] UBWC 5.0/6.0 inserted using var={var}.")
 PYEOF
         log_success "UBWC 5.0/6.0 support applied"
     fi

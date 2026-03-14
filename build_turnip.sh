@@ -38,6 +38,8 @@ ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 ENABLE_CUSTOM_FLAGS="${ENABLE_CUSTOM_FLAGS:-true}"
+ENABLE_A7XX_COMPAT="${ENABLE_A7XX_COMPAT:-true}"
+ENABLE_A7XX_PERF="${ENABLE_A7XX_PERF:-true}"
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
@@ -336,7 +338,7 @@ INNEREOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = "Unsupported GPU";\n      return true;\n   }\n"
+inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = \"Unsupported GPU\";\n      return true;\n   }\n"
 pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
 m = re.search(pat, c)
 if m:
@@ -773,28 +775,39 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-if 'force_vrs' in c:
-    print('[OK] tu_util.cc already patched'); sys.exit(0)
-new_entries = (
-    '   { "force_vrs",   TU_DEBUG_FORCE_VRS   },\n'
-    '   { "push_regs",   TU_DEBUG_PUSH_REGS   },\n'
-    '   { "ubwc_all",    TU_DEBUG_UBWC_ALL    },\n'
-    '   { "slc_pin",     TU_DEBUG_SLC_PIN     },\n'
-    '   { "turbo",       TU_DEBUG_TURBO       },\n'
-    '   { "defrag",      TU_DEBUG_DEFRAG      },\n'
-    '   { "cp_prefetch", TU_DEBUG_CP_PREFETCH },\n'
-    '   { "shfl",        TU_DEBUG_SHFL        },\n'
-    '   { "vgt_pref",    TU_DEBUG_VGT_PREF    },\n'
-    '   { "unroll",      TU_DEBUG_UNROLL      },\n'
-)
-all_m = list(re.finditer(r'\{\s*"[a-z_]+"\s*,\s*TU_DEBUG_\w+\s*\}', c))
-if all_m:
-    eol = c.find('\n', all_m[-1].end())
-    c = c[:eol+1] + new_entries + c[eol+1:]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] Added 10 entries to debug table')
-else:
-    print('[WARN] Debug table not found in tu_util.cc')
+if 'TU_DEBUG_REMAP_APPLIED' in c:
+    print('[OK] tu_util.cc already remapped'); sys.exit(0)
+REMAP = [
+    ("perf",                  "TU_DEBUG_TURBO"),
+    ("push_consts_per_stage", "TU_DEBUG_PUSH_REGS"),
+    ("noconform",             "TU_DEBUG_UBWC_ALL"),
+    ("bos",                   "TU_DEBUG_SLC_PIN"),
+    ("dynamic",               "TU_DEBUG_FORCE_VRS"),
+    ("fdm",                   "TU_DEBUG_DEFRAG"),
+    ("rd",                    "TU_DEBUG_CP_PREFETCH"),
+    ("3d_load",               "TU_DEBUG_SHFL"),
+    ("rast_order",            "TU_DEBUG_VGT_PREF"),
+    ("log_skip_gmem_ops",     "TU_DEBUG_UNROLL"),
+]
+remapped = []
+added = []
+for name, new_flag in REMAP:
+    pat = rf'(\{{\s*"{re.escape(name)}"\s*,\s*)TU_DEBUG_\w+(\s*\}})'
+    c, k = re.subn(pat, rf'\g<1>{new_flag}\2', c)
+    if k:
+        remapped.append(name)
+    else:
+        all_m = list(re.finditer(r'\{\s*"[a-z_3]+"\s*,\s*TU_DEBUG_\w+\s*\}', c))
+        if all_m:
+            eol = c.find('\n', all_m[-1].end())
+            entry = f'   {{ "{name}", {new_flag} }},\n'
+            c = c[:eol+1] + entry + c[eol+1:]
+            added.append(name)
+c += '\n/* TU_DEBUG_REMAP_APPLIED */\n'
+with open(fp, 'w') as f: f.write(c)
+print(f'[OK] Remapped: {remapped}')
+if added:
+    print(f'[OK] Added (not found in table): {added}')
 PYEOF
 
     if [[ -f "$tu_device_cc" ]] && ! grep -q "tu_try_activate_turbo" "$tu_device_cc"; then
@@ -900,6 +913,213 @@ PYEOF
     log_success "Custom TU_DEBUG flags applied"
 }
 
+apply_a7xx_series_compat() {
+    log_info "Applying a7xx series compat (inline fallbacks)"
+    local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+
+    if [[ -f "$ir3_compiler" ]] && ! grep -q "A7XX_BRANCH_AND_OR_DISABLED" "$ir3_compiler"; then
+        python3 - "$ir3_compiler" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+c, n = re.subn(r'(compiler->has_branch_and_or\s*=\s*)true', r'\1false /* A7XX_BRANCH_AND_OR_DISABLED */', c)
+if n:
+    with open(fp, 'w') as f: f.write(c)
+    print("[OK] has_branch_and_or disabled")
+else:
+    print("[INFO] has_branch_and_or not found or already patched")
+PYEOF
+        log_success "has_branch_and_or disabled"
+    fi
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "A7XX_WORKGROUP_MEM_DISABLED" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+c, k = re.subn(
+    r'(\.KHR_workgroup_memory_explicit_layout\s*=\s*)true',
+    r'\1false /* A7XX_WORKGROUP_MEM_DISABLED */', c)
+n += k
+for field in [
+    'workgroupMemoryExplicitLayout',
+    'workgroupMemoryExplicitLayoutScalarBlockLayout',
+    'workgroupMemoryExplicitLayout8BitAccess',
+    'workgroupMemoryExplicitLayout16BitAccess',
+]:
+    c, k = re.subn(rf'(features->{re.escape(field)}\s*=\s*)true', r'\1false', c)
+    n += k
+if n:
+    with open(fp, 'w') as f: f.write(c)
+    print(f"[OK] workgroup_memory_explicit_layout disabled ({n} replacements)")
+else:
+    print("[INFO] workgroup_memory fields not found")
+PYEOF
+        log_success "workgroup_memory_explicit_layout disabled"
+    fi
+
+    if [[ -f "$devices_py" ]] && ! grep -q "A7XX_COMPUTE_CONSTLEN_QUIRK" "$devices_py"; then
+        python3 - "$devices_py" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+m = re.search(r'(reading_shading_rate_requires_smask_quirk\s*=\s*True[^\n]*\n)', c)
+if m:
+    c = c[:m.end()] + "        compute_constlen_quirk = True,\n" + c[m.end():]
+    c += "\n# A7XX_COMPUTE_CONSTLEN_QUIRK\n"
+    with open(fp, 'w') as f: f.write(c)
+    print("[OK] compute_constlen_quirk added after smask_quirk")
+else:
+    m2 = re.search(r'(a7xx_gen1\s*=\s*A7XXProps\s*\()', c)
+    if m2:
+        ep = c.find(')', m2.end())
+        c = c[:ep] + "\n        compute_constlen_quirk = True,\n    " + c[ep:]
+        c += "\n# A7XX_COMPUTE_CONSTLEN_QUIRK\n"
+        with open(fp, 'w') as f: f.write(c)
+        print("[OK] compute_constlen_quirk injected into a7xx_gen1")
+    else:
+        print("[WARN] a7xx_gen1 block not found")
+PYEOF
+        log_success "compute_constlen_quirk added"
+    fi
+
+    log_success "a7xx series compat done"
+}
+
+apply_sysmem_mode_fix() {
+    log_info "Fixing sysmem mode gating"
+    local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    [[ ! -f "$cmd_buffer" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    python3 - "$cmd_buffer" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+if "SYSMEM_MODE_FIXED" in c:
+    print("[OK] sysmem mode fix already applied")
+    sys.exit(0)
+pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)\s*\n[ \t]*return true;\s*\n'
+if not re.search(pat, c):
+    print("[INFO] unconditional sysmem return not found, skipping")
+    sys.exit(0)
+conditional = (
+    "\n   /* SYSMEM_MODE_FIXED */\n"
+    "   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n"
+    "      cmd->state.rp.gmem_disable_reason = \"disable_gmem\";\n"
+    "      return true;\n"
+    "   }\n"
+)
+c = re.sub(pat, r'\1' + conditional, c, count=1)
+with open(fp, 'w') as f: f.write(c)
+print("[OK] unconditional sysmem -> conditional disable_gmem check")
+PYEOF
+    log_success "sysmem mode gating fixed"
+}
+
+apply_a7xx_perf_patches() {
+    log_info "Applying a7xx performance patches"
+    local tu_lrz="${MESA_DIR}/src/freedreno/vulkan/tu_lrz.cc"
+    local tu_image_cc="${MESA_DIR}/src/freedreno/vulkan/tu_image.cc"
+    local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+
+    if [[ -f "$tu_lrz" ]] && ! grep -q "A7XX_REVZ_PRESEED" "$tu_lrz"; then
+        python3 - "$tu_lrz" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(lrz->direction\s*=\s*TU_LRZ_UNKNOWN\s*;)'
+m = re.search(pat, c)
+if m:
+    preseed = (
+        "\n   /* A7XX_REVZ_PRESEED */\n"
+        "   if (cmd->state.lrz.depth_clear_value == 0.0f)\n"
+        "      lrz->direction = TU_LRZ_GREATER;\n"
+    )
+    eol = c.find('\n', m.end())
+    c = c[:eol+1] + preseed + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print("[OK] LRZ reverse-Z pre-seed injected")
+else:
+    print("[WARN] TU_LRZ_UNKNOWN assignment not found, skipping")
+PYEOF
+        log_success "LRZ reverse-Z pre-seed applied"
+    fi
+
+    if [[ -f "$tu_image_cc" ]] && ! grep -q "A7XX_STORAGE_NO_UBWC" "$tu_image_cc"; then
+        python3 - "$tu_image_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+guard = (
+    "\n   /* A7XX_STORAGE_NO_UBWC */\n"
+    "   if (image->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) {\n"
+    "      for (unsigned _p = 0; _p < ARRAY_SIZE(image->layout); _p++)\n"
+    "         image->layout[_p].ubwc = false;\n"
+    "   }\n"
+)
+m = re.search(r'VkResult\s+(tu_image_init|tu_image_create)[^{]*\{', c)
+if m:
+    returns = list(re.finditer(r'return VK_SUCCESS;', c[m.end():]))
+    if returns:
+        ins = m.end() + returns[-1].start()
+        c = c[:ins] + guard + '\n   ' + c[ins:]
+        with open(fp, 'w') as f: f.write(c)
+        print("[OK] UBWC disabled for storage images")
+    else:
+        print("[WARN] return VK_SUCCESS not found in tu_image_init")
+else:
+    print("[WARN] tu_image_init not found")
+PYEOF
+        log_success "UBWC disabled for storage images"
+    fi
+
+    if [[ -f "$ir3_compiler" ]] && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
+        python3 - "$ir3_compiler" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(compiler->num_predicates\s*=\s*4\s*;)'
+m = re.search(pat, c)
+if m:
+    eol = c.find('\n', m.end())
+    inject = "      compiler->cs_wave64 = true; /* A7XX_CS_WAVE64 */\n"
+    c = c[:eol+1] + inject + c[eol+1:]
+    with open(fp, 'w') as f: f.write(c)
+    print("[OK] CS wave64 preference set for a7xx")
+else:
+    print("[WARN] a7xx block (num_predicates=4) not found")
+PYEOF
+        log_success "CS wave64 preference added"
+    fi
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "A7XX_MESH_INVOC_CAP" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+pat = r'(maxMeshWorkGroupInvocations\s*=\s*)(\d+)'
+m = re.search(pat, c)
+if m:
+    old_val = int(m.group(2))
+    if old_val > 128:
+        c = c[:m.start(1)] + m.group(1) + "128 /* A7XX_MESH_INVOC_CAP */" + c[m.end():]
+        with open(fp, 'w') as f: f.write(c)
+        print(f"[OK] maxMeshWorkGroupInvocations capped 128 (was {old_val})")
+    else:
+        print(f"[INFO] maxMeshWorkGroupInvocations already <= 128 ({old_val})")
+else:
+    print("[WARN] maxMeshWorkGroupInvocations not found")
+PYEOF
+        log_success "Mesh shader invocation cap applied"
+    fi
+
+    log_success "a7xx performance patches done"
+}
+
+
 apply_patch_series() {
     local series_dir="$1"
     log_info "Applying patch series from: $series_dir"
@@ -936,6 +1156,9 @@ apply_patches() {
     if [[ "$ENABLE_TIMELINE_HACK" == "true" ]]; then apply_timeline_semaphore_fix; fi
     apply_gralloc_ubwc_fix
     apply_a8xx_patches
+    apply_sysmem_mode_fix
+    if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then apply_a7xx_series_compat; fi
+    if [[ "$ENABLE_A7XX_PERF" == "true" ]]; then apply_a7xx_perf_patches; fi
     if [[ "$ENABLE_CUSTOM_FLAGS" == "true" ]]; then apply_custom_debug_flags; fi
     if [[ "$ENABLE_DECK_EMU" == "true" ]]; then apply_deck_emu_support; fi
     if [[ "$ENABLE_EXT_SPOOF" == "true" ]]; then apply_vulkan_extensions_support; fi

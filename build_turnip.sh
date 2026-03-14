@@ -260,29 +260,72 @@ apply_a8xx_patches() {
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = (
-    '   case KGSL_UBWC_5_0:\n'
-    '      ubwc_config->bank_swizzle_levels = 0x4;\n'
-    '      ubwc_config->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
-    '      break;\n'
-    '   case KGSL_UBWC_6_0:\n'
-    '      ubwc_config->bank_swizzle_levels = 0x6;\n'
-    '      ubwc_config->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n'
-    '      break;\n'
-    '   /* UBWC_56_APPLIED */\n'
-)
-for pat in [
-    r'(case KGSL_UBWC_4_0:.*?break;\n)([ \t]*default:)',
-    r'(case KGSL_UBWC_3_0:.*?break;\n)([ \t]*default:)',
-]:
-    m = re.search(pat, c, re.DOTALL)
-    if m:
-        c = c[:m.start(2)] + inject + c[m.start(2):]
-        with open(fp, 'w') as f: f.write(c)
-        print('[OK] UBWC 5.0/6.0 cases inserted')
+
+kgsl_header = fp.replace('tu_knl_kgsl.cc', 'msm/msm_kgsl.h')
+import os
+for hdr in [kgsl_header,
+            '/usr/include/linux/msm_kgsl.h',
+            os.path.join(os.path.dirname(fp), '..', '..', 'winsys', 'kgsl', 'msm_kgsl.h')]:
+    if os.path.exists(hdr):
+        with open(hdr) as f: h = f.read()
+        if 'KGSL_UBWC_5_0' not in h:
+            with open(hdr, 'a') as f:
+                f.write('
+#ifndef KGSL_UBWC_5_0
+#define KGSL_UBWC_5_0 5
+#endif
+')
+                f.write('#ifndef KGSL_UBWC_6_0
+#define KGSL_UBWC_6_0 6
+#endif
+')
+            print(f'[OK] KGSL_UBWC_5_0/6_0 defined in {os.path.basename(hdr)}')
         break
-else:
-    print('[WARN] UBWC switch pattern not found')
+
+ubwc_pat = re.compile(r'case\s+KGSL_UBWC_4_0\s*:.*?break\s*;', re.DOTALL)
+m4 = ubwc_pat.search(c)
+if not m4:
+    ubwc_pat = re.compile(r'case\s+KGSL_UBWC_3_0\s*:.*?break\s*;', re.DOTALL)
+    m4 = ubwc_pat.search(c)
+
+if not m4:
+    print('[WARN] KGSL UBWC switch not found, skipping')
+    sys.exit(0)
+
+var_m = re.search(r'(\w+)->bank_swizzle_levels', c[:m4.start()])
+if not var_m:
+    var_m = re.search(r'(\w+)->ubwc', c[:m4.start()])
+var = var_m.group(1) if var_m else 'ubwc_config'
+
+default_m = re.search(r'([ 	]*default\s*:)', c[m4.end():])
+if not default_m:
+    print('[WARN] default: case not found after UBWC switch, skipping')
+    sys.exit(0)
+
+ins = m4.end() + default_m.start()
+inject = (
+    f'   case KGSL_UBWC_5_0:
+'
+    f'      {var}->bank_swizzle_levels = 0x4;
+'
+    f'      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;
+'
+    f'      break;
+'
+    f'   case KGSL_UBWC_6_0:
+'
+    f'      {var}->bank_swizzle_levels = 0x6;
+'
+    f'      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;
+'
+    f'      break;
+'
+    f'   /* UBWC_56_APPLIED */
+'
+)
+c = c[:ins] + inject + c[ins:]
+with open(fp, 'w') as f: f.write(c)
+print(f'[OK] UBWC 5.0/6.0 inserted using var={var}')
 PYEOF
         log_success "UBWC 5.0/6.0 support applied"
     fi
@@ -1036,7 +1079,7 @@ package_driver() {
     cat > "${pkg_dir}/meta.json" << EOF
 {
   "schemaVersion": 1,
-  "name": "Turnip Unified (a7xx + a8xx)",
+  "name": "Turnip Unified",
   "description": "Compiled From Mesa Freedreno",
   "author": "BlueInstruction",
   "packageVersion": "1",

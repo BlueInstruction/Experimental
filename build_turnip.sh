@@ -282,7 +282,7 @@ if "#define KGSL_UBWC_5_0" not in c:
 else:
     print("[OK] KGSL_UBWC_5_0 already defined")
 
-if "case KGSL_UBWC_5_0" in c:
+if "case KGSL_UBWC_5_0" in c or "case 5:" in c:
     with open(fp, "w") as f: f.write(c)
     print("[OK] UBWC 5/6 cases already present from patch series")
     sys.exit(0)
@@ -318,11 +318,8 @@ if not default_m:
 
 ins = m4.end() + default_m.start()
 inject = (
-    "   case KGSL_UBWC_5_0:\n"
-    f"      {var}{arrow}bank_swizzle_levels = 0x4;\n"
-    f"      {var}{arrow}macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
-    "      break;\n"
-    "   case KGSL_UBWC_6_0:\n"
+    "   case 5:\n"
+    "   case 6:\n"
     f"      {var}{arrow}bank_swizzle_levels = 0x6;\n"
     f"      {var}{arrow}macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
     "      break;\n"
@@ -339,7 +336,7 @@ INNEREOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = "\n   /* A8XX_DISABLE_GMEM: force sysmem on a8xx */\n   return true;\n"
+inject = "\n   /* A8XX_DISABLE_GMEM */\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = "Unsupported GPU";\n      return true;\n   }\n"
 pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
 m = re.search(pat, c)
 if m:

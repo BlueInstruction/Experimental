@@ -961,7 +961,10 @@ PYEOF
         log_success "workgroup_memory_explicit_layout disabled"
     fi
 
-    if [[ -f "$devices_py" ]] && ! grep -q "A7XX_COMPUTE_CONSTLEN_QUIRK" "$devices_py"; then
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
+    if [[ -f "$devices_py" ]] && [[ -f "$dev_info_h" ]] \
+        && grep -q "compute_constlen_quirk" "$dev_info_h" \
+        && ! grep -q "A7XX_COMPUTE_CONSTLEN_QUIRK" "$devices_py"; then
         python3 - "$devices_py" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -984,6 +987,8 @@ else:
         print("[WARN] a7xx_gen1 block not found")
 PYEOF
         log_success "compute_constlen_quirk added"
+    elif [[ -f "$dev_info_h" ]] && ! grep -q "compute_constlen_quirk" "$dev_info_h"; then
+        log_warn "compute_constlen_quirk not in freedreno_dev_info.h — skipping (Mesa too old)"
     fi
 
     log_success "a7xx series compat done"

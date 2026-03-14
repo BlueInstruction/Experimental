@@ -297,24 +297,15 @@ if not default_m:
 
 ins = m4.end() + default_m.start()
 inject = (
-    f'   case KGSL_UBWC_5_0:
-'
-    f'      {var}->bank_swizzle_levels = 0x4;
-'
-    f'      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;
-'
-    f'      break;
-'
-    f'   case KGSL_UBWC_6_0:
-'
-    f'      {var}->bank_swizzle_levels = 0x6;
-'
-    f'      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;
-'
-    f'      break;
-'
-    f'   /* UBWC_56_APPLIED */
-'
+    f"   case KGSL_UBWC_5_0:\n"
+    f"      {var}->bank_swizzle_levels = 0x4;\n"
+    f"      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    f"      break;\n"
+    f"   case KGSL_UBWC_6_0:\n"
+    f"      {var}->bank_swizzle_levels = 0x6;\n"
+    f"      {var}->macrotile_mode = FDL_MACROTILE_8_CHANNEL;\n"
+    f"      break;\n"
+    f"   /* UBWC_56_APPLIED */\n"
 )
 c = c[:ins] + inject + c[ins:]
 with open(fp, 'w') as f: f.write(c)

@@ -525,7 +525,7 @@ apply_vulkan_extensions_support() {
     if [[ -z "$tu_extensions" ]]; then
         local _vk_ext_py
         _vk_ext_py=$(find "${MESA_DIR}/src/freedreno" -maxdepth 3 -name "*.py" 2>/dev/null \
-            | xargs grep -l 'Extension(' 2>/dev/null | head -1)
+            | (xargs grep -l 'Extension(' 2>/dev/null || true) | head -1)
         [[ -n "$_vk_ext_py" ]] && tu_extensions="$_vk_ext_py"
     fi
     if [[ -z "$tu_extensions" ]]; then

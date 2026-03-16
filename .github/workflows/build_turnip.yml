@@ -237,7 +237,7 @@ jobs:
         ${{ inputs.enable_perf == true
             && '-Wl,--gc-sections -Wl,--icf=safe'
             || '-Wl,--gc-sections' }}
-      BUILD_SCRIPT: "scripts/build_turnip.sh"
+      BUILD_SCRIPT: "build_turnip.sh"
 
     steps:
       - name: Checkout repository

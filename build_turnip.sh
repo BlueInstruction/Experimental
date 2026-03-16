@@ -549,16 +549,10 @@ INJECT = """
    ext->KHR_video_maintenance2 = true;
    ext->KHR_video_queue = true;
    ext->MESA_image_alignment_control = true;
-   ext->NVX_binary_import = true;
    ext->NVX_image_view_handle = true;
    ext->NV_cooperative_matrix = true;
-   ext->NV_cooperative_matrix2 = true;
    ext->NV_device_diagnostic_checkpoints = true;
    ext->NV_device_diagnostics_config = true;
-   ext->NV_device_generated_commands = true;
-   ext->NV_low_latency = true;
-   ext->NV_low_latency2 = true;
-   ext->NV_optical_flow = true;
    ext->QCOM_filter_cubic_clamp = true;
    ext->QCOM_filter_cubic_weights = true;
    ext->QCOM_image_processing2 = true;
@@ -567,6 +561,22 @@ INJECT = """
    ext->QCOM_tile_properties = true;
    ext->QCOM_ycbcr_degamma = true;
    ext->VALVE_descriptor_set_host_mapping = true;
+   ext->EXT_zero_initialize_device_memory = true;
+   ext->KHR_shader_bfloat16 = true;
+   ext->KHR_unified_image_layouts = true;
+   ext->QCOM_cooperative_matrix_conversion = true;
+   ext->QCOM_data_graph_model = true;
+   ext->QCOM_fragment_density_map_offset = true;
+   ext->QCOM_image_processing = true;
+   ext->QCOM_multiview_per_view_render_areas = true;
+   ext->QCOM_multiview_per_view_viewports = true;
+   ext->QCOM_render_pass_shader_resolve = true;
+   ext->QCOM_rotated_copy_commands = true;
+   ext->QCOM_tile_memory_heap = true;
+   ext->QCOM_tile_shading = true;
+   ext->VALVE_fragment_density_map_layered = true;
+   ext->VALVE_shader_mixed_float_dot_product = true;
+   ext->VALVE_video_encode_rgb_conversion = true;
 """
 
 # Find get_device_extensions function and inject before its closing brace
@@ -673,15 +683,9 @@ for ext in all_exts:
             break
 
 UPSCALER_EXTS = [
-    "VK_NV_optical_flow",
-    "VK_NV_low_latency2",
-    "VK_NV_low_latency",
-    "VK_NV_cooperative_matrix2",
-    "VK_NVX_binary_import",
     "VK_AMD_anti_lag",
     "VK_KHR_shader_bfloat16",
     "VK_EXT_full_screen_exclusive",
-    "VK_NV_device_generated_commands",
 ]
 
 added_exts = []

@@ -12,38 +12,36 @@ def patch_vk_extensions(vk_ext_py_path):
         print("[OK] vk_extensions.py already patched")
         return
 
-    # Detect Extension() signature by finding class definition or existing calls
-    # Mesa vk_extensions.py uses: Extension(name, ext_version, platform=None)
-    # where ext_version can be True/False or a string like "DEVICE"
-    # We need to match whatever format the file uses
+    # Detect ext_version type from __init__:
+    # self.ext_version = int(ext_version)  -> needs integer
+    # self.ext_version = ext_version       -> needs bool/None
+    needs_int = bool(re.search(r'self\.ext_version\s*=\s*int\(', c))
 
-    # Check __init__ signature to determine required args
-    init_m = re.search(r'def __init__\s*\(self,\s*([^)]+)\)', c)
-    num_required = 3  # default: name, ext_version, platform
-    if init_m:
-        params = [p.strip() for p in init_m.group(1).split(',')]
-        # count params without default values (no '=')
-        num_required = sum(1 for p in params if '=' not in p and p != 'self')
-
-    # Find the format used in existing entries to copy
+    # Find the version used in existing Extension() calls
+    # e.g. Extension("VK_FOO", 1, None) or Extension("VK_FOO", True, None)
     existing_m = re.search(
-        r'Extension\s*\(\s*"VK_\w+"(?:\s*,\s*[^,\n)]+){1,3}\s*\)',
-        c,
-        re.DOTALL
+        r'Extension\s*\(\s*"VK_\w+"\s*,\s*(\d+|True|False|None)\s*(?:,\s*([^)]+))?\s*\)',
+        c
     )
 
-    if existing_m and num_required >= 3:
-        # Extract args from first existing Extension call
-        inner = existing_m.group(0)
-        args = re.findall(r',\s*([^,)]+)', inner)
-        if len(args) >= 2:
-            entry_args = ', '.join(a.strip() for a in args[:2])
+    if needs_int:
+        # Must pass integer version — use 1 as safe default
+        if existing_m:
+            ver = existing_m.group(1)
+            try:
+                int(ver)
+                entry_args = ver + ", None"
+            except ValueError:
+                entry_args = "1, None"
         else:
-            entry_args = 'True, None'
-    elif num_required == 2:
-        entry_args = '"DEVICE"'
+            entry_args = "1, None"
     else:
-        entry_args = 'True, None'
+        if existing_m:
+            ver = existing_m.group(1)
+            extra = existing_m.group(2)
+            entry_args = ver + (", " + extra.strip() if extra else "")
+        else:
+            entry_args = "True, None"
 
     MISSING = [
         "VK_KHR_unified_image_layouts",

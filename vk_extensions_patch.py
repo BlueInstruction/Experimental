@@ -12,6 +12,28 @@ def patch_vk_extensions(vk_ext_py_path):
         print("[OK] vk_extensions.py already patched")
         return
 
+    # Detect the Extension() call signature from existing entries
+    # Pattern 1: Extension("VK_FOO", True, None)        -> 3 args (name, supported, platform)
+    # Pattern 2: Extension("VK_FOO", "DEVICE")          -> 2 args (name, ext_type)
+    # Pattern 3: Extension("VK_FOO", "DEVICE", version) -> 3 args with version
+    m_sig = re.search(
+        r'Extension\s*\(\s*"VK_\w+"\s*,\s*([^)]+)\)',
+        c
+    )
+
+    entry_template = None
+    if m_sig:
+        args = m_sig.group(1).strip()
+        arg_parts = [a.strip() for a in args.split(',')]
+        if len(arg_parts) == 1:
+            entry_template = '"DEVICE"'
+        elif len(arg_parts) == 2:
+            entry_template = arg_parts[0] + ', ' + arg_parts[1]
+        else:
+            entry_template = ', '.join(arg_parts)
+    else:
+        entry_template = '"DEVICE"'
+
     MISSING = [
         "VK_KHR_unified_image_layouts",
         "VK_KHR_cooperative_matrix",
@@ -43,7 +65,7 @@ def patch_vk_extensions(vk_ext_py_path):
             m = re.search(r"(extensions\s*=\s*\[)", c)
         if m:
             ins = c.find("\n", m.end())
-            entry = '\n    Extension("' + ext + '", "DEVICE"),'
+            entry = '\n    Extension("' + ext + '", ' + entry_template + '),'
             c = c[:ins] + entry + c[ins:]
             added.append(ext)
         else:
@@ -54,7 +76,7 @@ def patch_vk_extensions(vk_ext_py_path):
 
     with open(vk_ext_py_path, "w") as f:
         f.write(c)
-    print(f"[OK] vk_extensions.py: added {len(added)} entries: {added}")
+    print(f"[OK] vk_extensions.py: added {len(added)} entries (template: {entry_template}): {added}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

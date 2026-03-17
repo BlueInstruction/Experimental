@@ -12,27 +12,38 @@ def patch_vk_extensions(vk_ext_py_path):
         print("[OK] vk_extensions.py already patched")
         return
 
-    # Detect the Extension() call signature from existing entries
-    # Pattern 1: Extension("VK_FOO", True, None)        -> 3 args (name, supported, platform)
-    # Pattern 2: Extension("VK_FOO", "DEVICE")          -> 2 args (name, ext_type)
-    # Pattern 3: Extension("VK_FOO", "DEVICE", version) -> 3 args with version
-    m_sig = re.search(
-        r'Extension\s*\(\s*"VK_\w+"\s*,\s*([^)]+)\)',
-        c
+    # Detect Extension() signature by finding class definition or existing calls
+    # Mesa vk_extensions.py uses: Extension(name, ext_version, platform=None)
+    # where ext_version can be True/False or a string like "DEVICE"
+    # We need to match whatever format the file uses
+
+    # Check __init__ signature to determine required args
+    init_m = re.search(r'def __init__\s*\(self,\s*([^)]+)\)', c)
+    num_required = 3  # default: name, ext_version, platform
+    if init_m:
+        params = [p.strip() for p in init_m.group(1).split(',')]
+        # count params without default values (no '=')
+        num_required = sum(1 for p in params if '=' not in p and p != 'self')
+
+    # Find the format used in existing entries to copy
+    existing_m = re.search(
+        r'Extension\s*\(\s*"VK_\w+"(?:\s*,\s*[^,\n)]+){1,3}\s*\)',
+        c,
+        re.DOTALL
     )
 
-    entry_template = None
-    if m_sig:
-        args = m_sig.group(1).strip()
-        arg_parts = [a.strip() for a in args.split(',')]
-        if len(arg_parts) == 1:
-            entry_template = '"DEVICE"'
-        elif len(arg_parts) == 2:
-            entry_template = arg_parts[0] + ', ' + arg_parts[1]
+    if existing_m and num_required >= 3:
+        # Extract args from first existing Extension call
+        inner = existing_m.group(0)
+        args = re.findall(r',\s*([^,)]+)', inner)
+        if len(args) >= 2:
+            entry_args = ', '.join(a.strip() for a in args[:2])
         else:
-            entry_template = ', '.join(arg_parts)
+            entry_args = 'True, None'
+    elif num_required == 2:
+        entry_args = '"DEVICE"'
     else:
-        entry_template = '"DEVICE"'
+        entry_args = 'True, None'
 
     MISSING = [
         "VK_KHR_unified_image_layouts",
@@ -65,7 +76,7 @@ def patch_vk_extensions(vk_ext_py_path):
             m = re.search(r"(extensions\s*=\s*\[)", c)
         if m:
             ins = c.find("\n", m.end())
-            entry = '\n    Extension("' + ext + '", ' + entry_template + '),'
+            entry = '\n    Extension("' + ext + '", ' + entry_args + '),'
             c = c[:ins] + entry + c[ins:]
             added.append(ext)
         else:
@@ -76,7 +87,7 @@ def patch_vk_extensions(vk_ext_py_path):
 
     with open(vk_ext_py_path, "w") as f:
         f.write(c)
-    print(f"[OK] vk_extensions.py: added {len(added)} entries (template: {entry_template}): {added}")
+    print(f"[OK] vk_extensions.py: added {len(added)} entries (args: {entry_args}): {added}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

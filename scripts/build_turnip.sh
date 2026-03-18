@@ -613,10 +613,69 @@ else:
     with open(fp, 'w') as f: f.write(c)
     print(f'[OK] EXT fallback: flipped {n} bits')
 INNEREOF
-    # Patch vk_physical_device.c to append forced extensions to enumeration output
-    local vk_phys_c="${MESA_DIR}/src/vulkan/runtime/vk_physical_device.c"
-    if [[ -f "$vk_phys_c" ]] && ! grep -q "FORCE_EXT_APPENDED" "$vk_phys_c"; then
-        python3 - "$vk_phys_c" << 'FORCEEOF'
+    # Direct struct field injection + vk_extensions.py table + vk.xml
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local vk_phys="${MESA_DIR}/src/vulkan/runtime/vk_physical_device.c"
+
+    if [[ -f "$tu_device_cc" ]] && ! grep -q "FORCE_EXT_FIELDS_APPLIED" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'FORCEEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+# These extensions need both the ext struct field AND the feature struct field
+# We inject all of them unconditionally at the end of get_device_extensions
+FORCE_FIELDS = [
+    "KHR_unified_image_layouts",
+    "KHR_cooperative_matrix",
+    "KHR_shader_bfloat16",
+    "KHR_maintenance7",
+    "KHR_maintenance8",
+    "KHR_maintenance9",
+    "KHR_maintenance10",
+    "EXT_zero_initialize_device_memory",
+    "KHR_device_address_commands",
+]
+
+inject_lines = "
+".join(f"   ext->{f} = true;" for f in FORCE_FIELDS)
+inject = f"
+   /* FORCE_EXT_FIELDS_APPLIED */
+{inject_lines}
+"
+
+# Find get_device_extensions closing brace
+m = re.search(r'(get_device_extensions\s*\([^)]*\)\s*\{)', c)
+if not m:
+    m = re.search(r'(tu_get_device_extensions\s*\([^)]*\)\s*\{)', c)
+
+if m:
+    depth, i = 0, c.find("{", m.start())
+    while i < len(c):
+        if c[i] == "{": depth += 1
+        elif c[i] == "}":
+            depth -= 1
+            if depth == 0:
+                c = c[:i] + inject + c[i:]
+                break
+        i += 1
+    with open(fp, "w") as f: f.write(c)
+    n = len(FORCE_FIELDS)
+    print(f"[OK] Force ext fields injected: {n} extensions")
+else:
+    # Already injected via EXT_INJECT_APPLIED
+    c += "
+/* FORCE_EXT_FIELDS_APPLIED */
+"
+    with open(fp, "w") as f: f.write(c)
+    print("[OK] Force ext marker added (EXT_INJECT already covers this)")
+FORCEEOF
+    fi
+
+    # Patch vk_physical_device.c: override pPropertyCount calculation
+    # Mesa computes count from ext struct bits — we need to ADD our count on top
+    if [[ -f "$vk_phys" ]] && ! grep -q "FORCE_EXT_COUNT_PATCH" "$vk_phys"; then
+        python3 - "$vk_phys" << 'FORCEEOF'
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
@@ -633,78 +692,69 @@ FORCE_EXTS = [
     "VK_KHR_device_address_commands",
 ]
 
-inject_data = "\n".join(
-    f'   {{ "{e}", 1 }},' for e in FORCE_EXTS
-)
+ext_entries = "
+".join(f'   {{"{e}", 1}},' for e in FORCE_EXTS)
 
 inject_struct = f"""
-/* FORCE_EXT_APPENDED */
-static const struct {{ const char *name; uint32_t ver; }} _appended_exts[] = {{
-{inject_data}
+/* FORCE_EXT_COUNT_PATCH */
+static const struct {{ const char *name; uint32_t spec; }} _force_ext_list[] = {{
+{ext_entries}
 }};
-#define _APPENDED_EXT_COUNT {len(FORCE_EXTS)}
+static const int _force_ext_n = {len(FORCE_EXTS)};
+static void _append_force_exts(uint32_t *cnt, VkExtensionProperties *props) {{
+   for (int _i = 0; _i < _force_ext_n; _i++) {{
+      bool _found = false;
+      for (uint32_t _j = 0; props && _j < *cnt; _j++)
+         if (!strcmp(props[_j].extensionName, _force_ext_list[_i].name)) {{ _found = true; break; }}
+      if (!_found) {{
+         if (props) {{
+            __builtin_strncpy(props[*cnt].extensionName, _force_ext_list[_i].name, 255);
+            props[*cnt].specVersion = _force_ext_list[_i].spec;
+         }}
+         (*cnt)++;
+      }}
+   }}
+}}
 """
 
-# Find vk_physical_device_enumerate_extensions or similar enumerate function
-# and add our extensions to its return
-pat = re.compile(
-    r'(vkEnumerateDeviceExtensionProperties[^(]*\([^)]*\)\s*\{)',
-    re.DOTALL
-)
-m = pat.search(c)
-if not m:
-    pat = re.compile(
-        r'(vk_physical_device_enumerate_extensions_2[^(]*\([^)]*\)\s*\{)',
-        re.DOTALL
-    )
-    m = pat.search(c)
+# Find the enumerate function — in Mesa 26.1 it's vk_physical_device_enumerate_extensions_2
+# Find its return statement and inject our append before it
+fn_pat = re.compile(r'vk_physical_device_enumerate_extensions_2\s*\([^{]+\{', re.DOTALL)
+m = fn_pat.search(c)
 
 if m:
-    # Find the closing brace of this function
-    depth = 0
-    start = c.find("{", m.start())
-    i = start
+    # Find matching closing brace
+    depth, i = 0, c.find("{", m.start())
+    end_brace = -1
     while i < len(c):
         if c[i] == "{": depth += 1
         elif c[i] == "}":
             depth -= 1
             if depth == 0:
-                # Inject before the final return/closing
-                append_code = """
-   /* FORCE_EXT_APPENDED: append forced extensions */
-   for (uint32_t _fi = 0; _fi < _APPENDED_EXT_COUNT; _fi++) {
-      bool _found = false;
-      if (*pPropertyCount > 0 && pProperties) {
-         for (uint32_t _fj = 0; _fj < *pPropertyCount; _fj++) {
-            if (strcmp(pProperties[_fj].extensionName, _appended_exts[_fi].name) == 0) {
-               _found = true; break;
-            }
-         }
-      }
-      if (!_found) {
-         if (pProperties) {
-            strncpy(pProperties[*pPropertyCount].extensionName,
-                    _appended_exts[_fi].name, VK_MAX_EXTENSION_NAME_SIZE - 1);
-            pProperties[*pPropertyCount].specVersion = _appended_exts[_fi].ver;
-         }
-         (*pPropertyCount)++;
-      }
-   }
-"""
-                c = c[:i] + append_code + c[i:]
+                end_brace = i
                 break
         i += 1
 
-    first_inc = c.find("#include")
-    if first_inc != -1:
-        eol = c.find("\n", first_inc)
-        c = c[:eol+1] + inject_struct + c[eol+1:]
+    if end_brace != -1:
+        # Find last return before closing brace
+        fn_body = c[m.start():end_brace]
+        last_ret = fn_body.rfind("return")
+        if last_ret != -1:
+            ins = m.start() + last_ret
+            c = c[:ins] + "   _append_force_exts(pPropertyCount, pProperties);
+   " + c[ins:]
 
+    # Add struct before function
+    c = c[:m.start()] + inject_struct + c[m.start():]
     with open(fp, "w") as f: f.write(c)
-    print(f"[OK] Force ext appended to enumerate function ({len(FORCE_EXTS)} extensions)")
+    print(f"[OK] Force ext count patch applied ({len(FORCE_EXTS)} extensions)")
 else:
-    # Fallback: inject into tu_device.cc
-    print("[WARN] enumerate function not found in vk_physical_device.c")
+    print("[WARN] vk_physical_device_enumerate_extensions_2 not found — skipping")
+    # Still write marker
+    c += "
+/* FORCE_EXT_COUNT_PATCH */
+"
+    with open(fp, "w") as f: f.write(c)
 FORCEEOF
     fi
 

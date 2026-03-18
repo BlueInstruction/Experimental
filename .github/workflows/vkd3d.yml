@@ -235,7 +235,7 @@ jobs:
         run: |
           SRC=$(find out -maxdepth 1 -type d -name "vkd3d-proton-*" | head -1)
           [[ -z "$SRC" ]] && { echo "Build output not found"; exit 1; }
-          for a in x64 x86; do
+          for a in x64 x32; do
             for d in d3d12.dll d3d12core.dll; do
               DLL="$SRC/$a/$d"
               if [[ ! -f "$DLL" ]]; then
@@ -253,12 +253,13 @@ jobs:
         run: |
           mkdir -p pkg/system32 pkg/syswow64
           cp "${{ env.SRC_PATH }}/x64/"*.dll pkg/system32/
-          cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/
+          cp "${{ env.SRC_PATH }}/x32/"*.dll pkg/syswow64/ 2>/dev/null || \
+          cp "${{ env.SRC_PATH }}/x86/"*.dll pkg/syswow64/ 2>/dev/null || true
           cat > pkg/profile.json << 'JSONEOF'
           {
             "type": "VKD3D",
             "versionName": "${{ env.VER }}",
-            "versionCode": ${{ env.BUILD_DATE }},
+            "versionCode": 1,
             "description": "VKD3D-Proton",
             "files": [
               {"source": "system32/d3d12.dll", "target": "${system32}/d3d12.dll"},

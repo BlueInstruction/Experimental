@@ -1659,8 +1659,13 @@ patch_vk_extensions_table() {
     local vk_ext_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
     local patch_script="${GITHUB_WORKSPACE:-$(dirname "$(dirname "$0")")}/vk_extensions_patch.py"
     [[ ! -f "$vk_ext_py" ]] && { log_warn "vk_extensions.py not found"; return 0; }
+    local vk_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
     if [[ -f "$patch_script" ]]; then
-        python3 "$patch_script" "$vk_ext_py"
+        if [[ -f "$vk_xml" ]]; then
+            python3 "$patch_script" "$vk_ext_py" "$vk_xml"
+        else
+            python3 "$patch_script" "$vk_ext_py"
+        fi
     else
         log_warn "vk_extensions_patch.py not found at $patch_script, skipping"
     fi

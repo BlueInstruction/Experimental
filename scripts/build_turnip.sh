@@ -461,7 +461,7 @@ PYEOF
 
 
 apply_vulkan_extensions_vk_fallback() {
-    log_info "Applying extensions via get_device_extensions injection"
+    log_info "Applying extensions via get_device_extensions injection + force enumerate"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found for ext fallback"; return 0; }
     if grep -q "EXT_INJECT_APPLIED" "$tu_device_cc"; then
@@ -613,6 +613,66 @@ else:
     with open(fp, 'w') as f: f.write(c)
     print(f'[OK] EXT fallback: flipped {n} bits')
 INNEREOF
+    # Force-inject specific extensions directly into vkEnumerateDeviceExtensionProperties
+    if ! grep -q "FORCE_EXT_LIST_APPLIED" "$tu_device_cc"; then
+        python3 - "$tu_device_cc" << 'FORCEEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+FORCE_EXT_NAMES = [
+    "VK_KHR_unified_image_layouts",
+    "VK_KHR_cooperative_matrix",
+    "VK_KHR_shader_bfloat16",
+    "VK_KHR_maintenance7",
+    "VK_KHR_maintenance8",
+    "VK_KHR_maintenance9",
+    "VK_KHR_maintenance10",
+    "VK_EXT_zero_initialize_device_memory",
+    "VK_KHR_device_address_commands",
+]
+
+ext_entries = "\n".join(f'   {{ "{e}", 1 }},' for e in FORCE_EXT_NAMES)
+force_code = f"""
+/* FORCE_EXT_LIST_APPLIED */
+static const struct {{ const char *name; uint32_t specVersion; }} _force_exts[] = {{
+{ext_entries}
+}};
+static const uint32_t _force_ext_count = {len(FORCE_EXT_NAMES)};
+"""
+
+force_fn = """
+VKAPI_ATTR VkResult VKAPI_CALL
+tu_EnumerateDeviceExtensionProperties_forced(
+   VkPhysicalDevice physicalDevice,
+   const char *pLayerName,
+   uint32_t *pPropertyCount,
+   VkExtensionProperties *pProperties)
+{
+   TU_FROM_HANDLE(tu_physical_device, pdevice, physicalDevice);
+   (void)pLayerName;
+   VkResult result = tu_GetDeviceExtensions_base(
+      physicalDevice, pLayerName, pPropertyCount, pProperties);
+   if (!pProperties) {
+      *pPropertyCount += _force_ext_count;
+      return result;
+   }
+   return result;
+}
+"""
+
+# Find first #include and inject after it
+inc = c.find("#include")
+if inc != -1:
+    eol = c.find("\n", inc)
+    c = c[:eol+1] + force_code + c[eol+1:]
+    with open(fp, "w") as f: f.write(c)
+    print(f"[OK] Force ext list injected ({len(FORCE_EXT_NAMES)} extensions)")
+else:
+    print("[WARN] No #include found in tu_device.cc")
+FORCEEOF
+    fi
+
     log_success "Extension injection applied"
 }
 
@@ -1382,11 +1442,21 @@ for field in FORCE_TRUE_13:
 FORCE_TRUE_14 = [
     'maintenance5',
     'maintenance6',
+    'maintenance7',
+    'maintenance8',
+    'maintenance9',
+    'maintenance10',
     'pushDescriptor',
     'dynamicRenderingLocalRead',
     'shaderExpectAssume',
     'shaderFloatControls2',
     'globalPriorityQuery',
+    'cooperativeMatrix',
+    'cooperativeMatrixRobustBufferAccess',
+    'unifiedImageLayouts',
+    'shaderBFloat16',
+    'zeroInitializeDeviceMemory',
+    'deviceAddressCommands',
 ]
 for field in FORCE_TRUE_14:
     pat = rf'(features->{re.escape(field)}\s*=\s*)false'
@@ -1657,7 +1727,8 @@ apply_patch_series() {
 patch_vk_extensions_table() {
     log_info "Patching vk_extensions.py to add missing extensions"
     local vk_ext_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
-    local patch_script="${GITHUB_WORKSPACE:-$(dirname "$(dirname "$0")")}/vk_extensions_patch.py"
+    local patch_script="${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/scripts}/vk_extensions_patch.py"
+    [[ -z "${GITHUB_WORKSPACE:-}" ]] && patch_script="$(dirname "$0")/vk_extensions_patch.py"
     [[ ! -f "$vk_ext_py" ]] && { log_warn "vk_extensions.py not found"; return 0; }
     local vk_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
     if [[ -f "$patch_script" ]]; then

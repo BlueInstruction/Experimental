@@ -734,8 +734,7 @@ if m:
         last_ret = fn_body.rfind("return")
         if last_ret != -1:
             ins = m.start() + last_ret
-            c = c[:ins] + "   _append_force_exts(pPropertyCount, pProperties);
-   " + c[ins:]
+            c = c[:ins] + "   _append_force_exts(pPropertyCount, pProperties);\n" + c[ins:]
 
     # Add struct before function
     c = c[:m.start()] + inject_struct + c[m.start():]

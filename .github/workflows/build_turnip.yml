@@ -118,19 +118,9 @@ on:
         description: "Enable custom TU_DEBUG flags"
         default: true
 
-      enable_a7xx_compat:
+      enable_a7xx_patches:
         type: boolean
-        description: "Apply a7xx compat patches (branch_and_or, workgroup_mem, constlen)"
-        default: true
-
-      enable_a7xx_perf:
-        type: boolean
-        description: "Apply a7xx perf patches (LRZ preseed, storage UBWC, wave64, mesh cap)"
-        default: true
-
-      enable_a7xx_visibility:
-        type: boolean
-        description: "Apply a7xx visibility fixes (LRZ fast_clear, occlusion query)"
+        description: "Apply all a7xx patches (compat + perf + visibility fixes)"
         default: true
 
       enable_vk14_promo:
@@ -152,11 +142,6 @@ on:
         description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
         required: false
         default: "1"
-
-      strict_mode:
-        type: boolean
-        description: "Abort build if critical patch fails (LRZ, EXT inject)"
-        default: false
 
       create_release:
         type: boolean
@@ -228,10 +213,9 @@ jobs:
       ENABLE_DECK_EMU:      ${{ inputs.enable_deck_emu }}
       DECK_EMU_TARGET:      ${{ inputs.deck_emu_target }}
       ENABLE_PERF:          ${{ inputs.enable_perf }}
-      ENABLE_A7XX_COMPAT:   ${{ inputs.enable_a7xx_compat }}
-      ENABLE_A7XX_PERF:     ${{ inputs.enable_a7xx_perf }}
-      ENABLE_A7XX_VIS:      ${{ inputs.enable_a7xx_visibility }}
-      STRICT_MODE:          ${{ inputs.strict_mode }}
+      ENABLE_A7XX_COMPAT:   ${{ inputs.enable_a7xx_patches }}
+      ENABLE_A7XX_PERF:     ${{ inputs.enable_a7xx_patches }}
+      ENABLE_A7XX_VIS:      ${{ inputs.enable_a7xx_patches }}
       ENABLE_VK14_PROMO:    ${{ inputs.enable_vk14_promo }}
       ENABLE_SHADER_PERF:   ${{ inputs.enable_shader_perf }}
       ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
@@ -404,9 +388,7 @@ jobs:
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
-            ${{ inputs.enable_a7xx_compat == true && '- a7xx Compat Patches' || '' }}
-            ${{ inputs.enable_a7xx_visibility == true && '- a7xx Visibility Fix (LRZ + Occlusion)' || '' }}
-            ${{ inputs.enable_a7xx_perf == true && '- a7xx Performance Patches' || '' }}
+            ${{ inputs.enable_a7xx_patches == true && '- a7xx Patches (Compat + Perf + Visibility)' || '' }}
             ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
@@ -434,8 +416,7 @@ jobs:
             echo "Vulkan API    : $(cat build/vulkan_version.txt 2>/dev/null || echo N/A)"
           fi
           echo "Artifacts     : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
-          echo "A7xx Vis Fix  : ${{ inputs.enable_a7xx_visibility }}"
-          echo "Strict Mode   : ${{ inputs.strict_mode }}"
+          echo "A7xx Patches  : ${{ inputs.enable_a7xx_patches }}"
           if [[ "${{ inputs.enable_custom_flags }}" == "true" ]]; then
             echo "TU_DEBUG      : ${{ inputs.custom_tu_debug }}"
           fi

@@ -312,7 +312,7 @@ jobs:
       - name: Prepare build script
         run: |
           chmod +x "${{ env.BUILD_SCRIPT }}"
-          chmod +x scripts/vk_extensions_patch.py 2>/dev/null || true
+          find scripts/ -name "*.py" -exec chmod +x {} \;
 
       - name: Build Turnip Driver
         id: build

@@ -196,12 +196,43 @@ update_vulkan_headers() {
     # but new headers rename them to KHR
     local new_xml="${headers_dir}/registry/vk.xml"
     local mesa_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
-    if [[ -f "$new_xml" && -f "$mesa_xml" ]]; then
-        cp "$new_xml" "$mesa_xml"
-        log_success "Vulkan registry updated to $target_tag"
-    else
+    if [[ ! -f "$new_xml" || ! -f "$mesa_xml" ]]; then
         log_warn "vk.xml not found, skipping registry update"
+        return 0
     fi
+
+    cp "$new_xml" "$mesa_xml"
+
+    # v1.4.347 vk.xml contains both FaultFeaturesEXT and FaultFeaturesKHR
+    # during the EXT→KHR promotion transition — Mesa's generator rejects duplicates.
+    # Remove the old EXT feature struct entries to keep only the KHR versions.
+    python3 - "$mesa_xml" << 'XMLFIX'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+
+# Remove <type category="struct" name="VkPhysicalDeviceFaultFeaturesEXT"...>...</type>
+# and the corresponding <type alias=...> entries
+c = re.sub(
+    r'<type[^>]*name="VkPhysicalDeviceFaultFeaturesEXT"[^/]*/?>(?:.*?</type>)?',
+    '', c, flags=re.DOTALL
+)
+# Remove <require> blocks that only contain EXT fault feature entries
+c = re.sub(
+    r'\s*<member[^>]*><type>VkBool32</type>\s*<name>deviceFault(?:VendorBinary)?</name></member>\s*(?=.*FaultFeaturesEXT)',
+    '', c, flags=re.DOTALL
+)
+# Remove extension entries for VK_EXT_device_fault if KHR version exists
+if 'VK_KHR_device_fault' in c:
+    c = re.sub(
+        r'<extension[^>]*name="VK_EXT_device_fault"[^>]*/?>(?:.*?</extension>)?',
+        '', c, flags=re.DOTALL
+    )
+with open(fp, 'w') as f: f.write(c)
+print("[OK] vk.xml: removed EXT→KHR duplicate fault entries")
+XMLFIX
+
+    log_success "Vulkan registry updated to $target_tag (EXT/KHR compat fixed)"
 }
 apply_timeline_semaphore_fix() {
     log_info "Applying timeline semaphore fix"

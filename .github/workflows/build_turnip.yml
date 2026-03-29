@@ -96,13 +96,13 @@ on:
 
       enable_deck_emu:
         type: boolean
-        description: "Enable GPU identity spoof"        
+        description: "Enable GPU identity spoof"       
         default: true
 
       deck_emu_target:
         type: choice
         description: "GPU vendor to spoof"
-        default: "nvidia"
+        default: "amd"
         options:
           - nvidia
           - amd
@@ -110,7 +110,7 @@ on:
       enable_perf:
         type: boolean
         description: "Enable performance flags (-O3 + ARMv8.2-A)"
-        default: false
+        default: true
 
       enable_custom_flags:
         type: boolean
@@ -134,22 +134,22 @@ on:
 
       custom_tu_debug:
         description: "Custom TU_DEBUG flags (comma-separated)"
-        required: false
+        required: true
         default: "noconform,fdm,log_skip_gmem_ops"
 
       build_number:
         description: "Build number (e.g. 1 -> Turnip-26.1.0-B1)"
-        required: false
+        required: true
         default: "1"
 
       create_release:
         type: boolean
         description: "Create GitHub Release"
-        default: true
+        default: false
       release_as_draft:
         type: boolean
         description: "Save release as draft"
-        default: false
+        default: true
 
       enable_viewport_clamp:
         type: boolean
@@ -159,7 +159,7 @@ on:
       enable_timeline_fix:
         type: boolean
         description: "Apply vk_sync_timeline safety fix"
-        default: false
+        default: true
 
       enable_a750_autotune:
         type: boolean
@@ -193,17 +193,17 @@ on:
 
       enable_present_wait_fix:
         type: boolean
-        description: "Enable KHR_present_wait optimization for vkd3d-proton"
+        description: "Enable KHR_present_wait optimization"
         default: true
       enable_frame_pacing:
         type: boolean
-        description: "Enable frame pacing optimization for Winlator"
+        description: "Enable frame pacing optimization"
         default: true
 
       enable_vsync_bypass:
         type: boolean
         description: "Enable VSync bypass for fake frame boost"
-        default: false
+        default: true
 
       enable_android_prop_control:
         type: boolean
@@ -293,7 +293,7 @@ jobs:
             || '-O2' }}
       CXXFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
-            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions'            || '-O2' }}
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions' || '-O2' }}
       LDFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-Wl,--gc-sections -Wl,--icf=safe'
@@ -342,7 +342,7 @@ jobs:
 
       - name: Cache ccache
         uses: actions/cache@v4
-        with:         
+        with:          
           path: ~/.cache/ccache
           key: ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
@@ -490,6 +490,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Notify build failure
-        run: |
-          echo "Build failed for Turnip Driver"
+        run: |          
+         echo "Build failed for Turnip Driver"
           echo "Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

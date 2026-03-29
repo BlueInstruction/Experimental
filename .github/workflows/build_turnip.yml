@@ -152,17 +152,17 @@ on:
 
       enable_viewport_clamp:
         type: boolean
-        description: "Apply Viewport/Scissor clamp fix (prevents GPU faults)"
+        description: "Apply Viewport/Scissor clamp fix"
         default: true
 
       enable_timeline_fix:
         type: boolean
-        description: "Apply vk_sync_timeline safety fix (optional compatibility)"
+        description: "Apply vk_sync_timeline safety fix"
         default: false
 
       enable_a750_autotune:
         type: boolean
-        description: "Enable A750 Dynamic GMEM/SYSMEM Balancer (Gen3 only)"
+        description: "Enable A750 Dynamic GMEM/SYSMEM Balancer"
         default: true
 
       a750_gmem_limit_mb:
@@ -204,6 +204,11 @@ on:
         description: "Enable VSync bypass for fake frame boost"
         default: false
 
+      enable_android_prop_control:
+        type: boolean
+        description: "Enable Android property-based dynamic control"
+        default: true
+
 permissions:
   contents: write
   actions: read
@@ -216,7 +221,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       validated: ${{ steps.validate.outputs.ok }}
-      mesa_ref:   ${{ steps.resolve.outputs.ref }}
+      mesa_ref: ${{ steps.resolve.outputs.ref }}
     steps:
       - name: Validate inputs
         id: validate
@@ -239,38 +244,38 @@ jobs:
             *)                ref="main" ;;
           esac
           echo "ref=$ref" >> $GITHUB_OUTPUT
-
   build-turnip:
     needs: pre-check
     if: needs.pre-check.outputs.validated == 'true'
-    runs-on: ubuntu-latest    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     env:
-      MESA_SOURCE:          ${{ inputs.mesa_source }}
-      STAGING_BRANCH:       ${{ inputs.staging_branch }}
-      CUSTOM_TAG:           ${{ inputs.custom_tag }}
-      MESA_LOCAL_PATH:      ""
-      BUILD_TYPE:           ${{ inputs.build_type }}
-      BUILD_VARIANT:        ${{ inputs.build_variant }}
-      TARGET_GPU:           ${{ inputs.target_gpu }}
-      NDK_PATH:             ${{ github.workspace }}/android-ndk
-      NDK_VERSION:          ${{ inputs.ndk_version }}
-      API_LEVEL:            ${{ inputs.api_level }}
+      MESA_SOURCE: ${{ inputs.mesa_source }}
+      STAGING_BRANCH: ${{ inputs.staging_branch }}
+      CUSTOM_TAG: ${{ inputs.custom_tag }}
+      MESA_LOCAL_PATH: ""
+      BUILD_TYPE: ${{ inputs.build_type }}
+      BUILD_VARIANT: ${{ inputs.build_variant }}
+      TARGET_GPU: ${{ inputs.target_gpu }}
+      NDK_PATH: ${{ github.workspace }}/android-ndk
+      NDK_VERSION: ${{ inputs.ndk_version }}
+      API_LEVEL: ${{ inputs.api_level }}
       ENABLE_TIMELINE_HACK: ${{ inputs.enable_timeline_hack }}
-      ENABLE_UBWC_HACK:     ${{ inputs.enable_ubwc_hack }}
-      APPLY_PATCH_SERIES:   ${{ inputs.apply_patch_series }}
-      ENABLE_EXT_SPOOF:     ${{ inputs.enable_ext_spoof }}
-      ENABLE_DECK_EMU:      ${{ inputs.enable_deck_emu }}
-      DECK_EMU_TARGET:      ${{ inputs.deck_emu_target }}
-      ENABLE_PERF:          ${{ inputs.enable_perf }}
-      ENABLE_A7XX_COMPAT:   ${{ inputs.enable_a7xx_patches }}
-      ENABLE_A7XX_PERF:     ${{ inputs.enable_a7xx_patches }}
-      ENABLE_A7XX_VIS:      ${{ inputs.enable_a7xx_patches }}
-      ENABLE_VK14_PROMO:    ${{ inputs.enable_vk14_promo }}
-      ENABLE_SHADER_PERF:   ${{ inputs.enable_shader_perf }}
-      ENABLE_CUSTOM_FLAGS:  ${{ inputs.enable_custom_flags }}
-      CUSTOM_TU_DEBUG:      ${{ inputs.custom_tu_debug }}
-      BUILD_NUMBER:         ${{ inputs.build_number }}
+      ENABLE_UBWC_HACK: ${{ inputs.enable_ubwc_hack }}
+      APPLY_PATCH_SERIES: ${{ inputs.apply_patch_series }}
+      ENABLE_EXT_SPOOF: ${{ inputs.enable_ext_spoof }}
+      ENABLE_DECK_EMU: ${{ inputs.enable_deck_emu }}
+      DECK_EMU_TARGET: ${{ inputs.deck_emu_target }}
+      ENABLE_PERF: ${{ inputs.enable_perf }}
+      ENABLE_A7XX_COMPAT: ${{ inputs.enable_a7xx_patches }}
+      ENABLE_A7XX_PERF: ${{ inputs.enable_a7xx_patches }}
+      ENABLE_A7XX_VIS: ${{ inputs.enable_a7xx_patches }}
+      ENABLE_VK14_PROMO: ${{ inputs.enable_vk14_promo }}
+      ENABLE_SHADER_PERF: ${{ inputs.enable_shader_perf }}
+      ENABLE_CUSTOM_FLAGS: ${{ inputs.enable_custom_flags }}
+      CUSTOM_TU_DEBUG: ${{ inputs.custom_tu_debug }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
       ENABLE_VIEWPORT_CLAMP: ${{ inputs.enable_viewport_clamp }}
       ENABLE_TIMELINE_FIX: ${{ inputs.enable_timeline_fix }}
       ENABLE_A750_AUTOTUNE: ${{ inputs.enable_a750_autotune }}
@@ -280,19 +285,20 @@ jobs:
       ENABLE_PRESENT_WAIT_FIX: ${{ inputs.enable_present_wait_fix }}
       ENABLE_FRAME_PACING: ${{ inputs.enable_frame_pacing }}
       ENABLE_VSYNC_BYPASS: ${{ inputs.enable_vsync_bypass }}
+      ENABLE_ANDROID_PROP_CONTROL: ${{ inputs.enable_android_prop_control }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
             || '-O2' }}
       CXXFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
-            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions'
-            || '-O2' }}
+            && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-exceptions'            || '-O2' }}
       LDFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-Wl,--gc-sections -Wl,--icf=safe'
             || '-Wl,--gc-sections' }}
       BUILD_SCRIPT: "build_turnip.sh"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -335,12 +341,13 @@ jobs:
 
       - name: Cache ccache
         uses: actions/cache@v4
-        with:
+        with:         
           path: ~/.cache/ccache
           key: ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-${{ needs.pre-check.outputs.mesa_ref }}-${{ env.CACHE_VERSION }}
           restore-keys: |
             ccache-${{ inputs.target_gpu }}-${{ inputs.build_variant }}-
             ccache-${{ inputs.target_gpu }}-
+
       - name: Cache Meson subproject downloads
         uses: actions/cache@v4
         with:
@@ -368,11 +375,11 @@ jobs:
             zip_file=$(ls build/Turnip-*.zip 2>/dev/null | head -1)
             if [[ -n "$zip_file" ]]; then
               echo "filename=$(basename "$zip_file")" >> $GITHUB_OUTPUT
-              echo "zip_path=$zip_file"              >> $GITHUB_OUTPUT
+              echo "zip_path=$zip_file" >> $GITHUB_OUTPUT
             fi
-            echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')"         >> $GITHUB_OUTPUT
-            echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)"                 >> $GITHUB_OUTPUT
-            echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')"     >> $GITHUB_OUTPUT
+            echo "version=$(cat build/version.txt 2>/dev/null || echo 'unknown')" >> $GITHUB_OUTPUT
+            echo "commit=$(cat build/commit.txt 2>/dev/null | head -c 8)" >> $GITHUB_OUTPUT
+            echo "vulkan=$(cat build/vulkan_version.txt 2>/dev/null || echo '1.4.0')" >> $GITHUB_OUTPUT
             echo "build_date=$(cat build/build_date.txt 2>/dev/null || date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           fi
           ccache --show-stats --verbose || true
@@ -385,12 +392,12 @@ jobs:
             exit 1
           fi
           ls -lh build/*.zip
-
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.filename || 'turnip-a0xx' }}
-          path: build/*.zip          retention-days: 30
+          path: build/*.zip
+          retention-days: 30
           compression-level: 0
 
       - name: Create GitHub Release
@@ -402,19 +409,19 @@ jobs:
           body: |
             ## Turnip Unified Vulkan Driver ${{ steps.build.outputs.version }}
 
-            | Property     | Value |
-            |--------------|-------|
+            | Property | Value |
+            |----------|-------|
             | Mesa Version | `${{ steps.build.outputs.version }}` |
-            | Commit       | `${{ steps.build.outputs.commit }}` |
-            | Vulkan API   | `${{ steps.build.outputs.vulkan }}` |
-            | Driver File  | `vulkan.ad00xx.so` |
-            | GPU Support  | a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840) |
-            | Build Type   | `${{ inputs.build_type }}` |
-            | Variant      | `${{ inputs.build_variant }}` |
-            | Mesa Source  | `${{ inputs.mesa_source }}` |
-            | NDK          | `${{ inputs.ndk_version }}` |
-            | API Level    | `${{ inputs.api_level }}` |
-            | Build Date   | `${{ steps.build.outputs.build_date }}` |
+            | Commit | `${{ steps.build.outputs.commit }}` |
+            | Vulkan API | `${{ steps.build.outputs.vulkan }}` |
+            | Driver File | `vulkan.ad00xx.so` |
+            | GPU Support | a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840) |
+            | Build Type | `${{ inputs.build_type }}` |
+            | Variant | `${{ inputs.build_variant }}` |
+            | Mesa Source | `${{ inputs.mesa_source }}` |
+            | NDK | `${{ inputs.ndk_version }}` |
+            | API Level | `${{ inputs.api_level }}` |
+            | Build Date | `${{ steps.build.outputs.build_date }}` |
 
             ### TU_DEBUG (Winlator EnvVars)
 
@@ -433,18 +440,20 @@ jobs:
 
             > In Winlator: Container Settings -> Environment Variables -> TU_DEBUG
 
-            ### Features
-            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock' || '' }}
+            ### Features            ${{ inputs.enable_ext_spoof == true && '- Vulkan Extensions Unlock' || '' }}
             ${{ inputs.enable_deck_emu == true && format('- GPU Spoof: {0}', inputs.deck_emu_target) || '' }}
             ${{ inputs.enable_timeline_hack == true && '- Timeline Semaphore Optimization' || '' }}
             ${{ inputs.enable_ubwc_hack == true && '- UBWC 5/6 Support' || '' }}
             ${{ inputs.enable_perf == true && '- Performance Flags (-O3 + ARMv8.2-A)' || '' }}
-            ${{ inputs.enable_a7xx_patches == true && '- a7xx Patches (Compat + Perf + Visibility)' || '' }}            ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
+            ${{ inputs.enable_a7xx_patches == true && '- a7xx Patches (Compat + Perf + Visibility)' || '' }}
+            ${{ inputs.enable_vk14_promo == true && '- Vulkan 1.4 Promotion (apiVersion + features)' || '' }}
             ${{ inputs.enable_shader_perf == true && '- Shader Compiler Optimizations' || '' }}
             ${{ inputs.enable_custom_flags == true && format('- TU_DEBUG: {0}', inputs.custom_tu_debug) || '' }}
             ${{ inputs.enable_viewport_clamp == true && '- Viewport Clamp Fix' || '' }}
             ${{ inputs.enable_a750_autotune == true && '- A750 Dynamic Autotune' || '' }}
             ${{ inputs.enable_present_wait_fix == true && '- Present Wait Optimization' || '' }}
+            ${{ inputs.enable_frame_pacing == true && '- Frame Pacing Fix' || '' }}
+            ${{ inputs.enable_android_prop_control == true && '- Android Property Control' || '' }}
 
             Compiled from Mesa freedreno
           files: build/*.zip
@@ -457,21 +466,21 @@ jobs:
       - name: Build Summary
         if: always()
         run: |
-          echo "Status        : ${{ job.status }}"
-          echo "Mesa Source   : ${{ inputs.mesa_source }}"
-          echo "Mesa Ref      : ${{ needs.pre-check.outputs.mesa_ref }}"
+          echo "Status : ${{ job.status }}"
+          echo "Mesa Source : ${{ inputs.mesa_source }}"
+          echo "Mesa Ref : ${{ needs.pre-check.outputs.mesa_ref }}"
           echo "Build Variant : ${{ inputs.build_variant }}"
-          echo "NDK           : ${{ inputs.ndk_version }} (API ${{ inputs.api_level }})"
-          echo "Driver        : vulkan.ad00xx.so"
+          echo "NDK : ${{ inputs.ndk_version }} (API ${{ inputs.api_level }})"
+          echo "Driver : vulkan.ad00xx.so"
           if [[ -f "build/version.txt" ]]; then
-            echo "Version       : $(cat build/version.txt)"
-            echo "Commit        : $(cat build/commit.txt)"
-            echo "Vulkan API    : $(cat build/vulkan_version.txt 2>/dev/null || echo N/A)"
+            echo "Version : $(cat build/version.txt)"
+            echo "Commit : $(cat build/commit.txt)"
+            echo "Vulkan API : $(cat build/vulkan_version.txt 2>/dev/null || echo N/A)"
           fi
-          echo "Artifacts     : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
-          echo "A7xx Patches  : ${{ inputs.enable_a7xx_patches }}"
+          echo "Artifacts : $(ls build/*.zip 2>/dev/null | wc -l) file(s)"
+          echo "A7xx Patches : ${{ inputs.enable_a7xx_patches }}"
           if [[ "${{ inputs.enable_custom_flags }}" == "true" ]]; then
-            echo "TU_DEBUG      : ${{ inputs.custom_tu_debug }}"
+            echo "TU_DEBUG : ${{ inputs.custom_tu_debug }}"
           fi
 
   notify-on-failure:

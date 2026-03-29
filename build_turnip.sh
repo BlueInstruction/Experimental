@@ -21,11 +21,11 @@ BUILD_VARIANT="${BUILD_VARIANT:-optimized}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-35}"
 TARGET_GPU="${TARGET_GPU:-a0xx}"
-ENABLE_PERF="${ENABLE_PERF:-false}"
+ENABLE_PERF="${ENABLE_PERF:-true}"
 MESA_LOCAL_PATH="${MESA_LOCAL_PATH:-}"
 ENABLE_EXT_SPOOF="${ENABLE_EXT_SPOOF:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
-DECK_EMU_TARGET="${DECK_EMU_TARGET:-nvidia}"
+DECK_EMU_TARGET="${DECK_EMU_TARGET:-amd}"
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
@@ -36,18 +36,22 @@ ENABLE_A7XX_PERF="${ENABLE_A7XX_PERF:-true}"
 ENABLE_VK14_PROMO="${ENABLE_VK14_PROMO:-true}"
 ENABLE_SHADER_PERF="${ENABLE_SHADER_PERF:-true}"
 ENABLE_VIEWPORT_CLAMP="${ENABLE_VIEWPORT_CLAMP:-true}"
-ENABLE_TIMELINE_FIX="${ENABLE_TIMELINE_FIX:-false}"
+ENABLE_TIMELINE_FIX="${ENABLE_TIMELINE_FIX:-true}"
 ENABLE_A750_AUTOTUNE="${ENABLE_A750_AUTOTUNE:-true}"
 A750_GMEM_LIMIT_MB="${A750_GMEM_LIMIT_MB:-4}"
 A750_DRAWCALL_THRESHOLD="${A750_DRAWCALL_THRESHOLD:-500}"
 ENABLE_AUTOTUNE_LOGGING="${ENABLE_AUTOTUNE_LOGGING:-false}"
 ENABLE_PRESENT_WAIT_FIX="${ENABLE_PRESENT_WAIT_FIX:-true}"
 ENABLE_FRAME_PACING="${ENABLE_FRAME_PACING:-true}"
-ENABLE_VSYNC_BYPASS="${ENABLE_VSYNC_BYPASS:-false}"
+ENABLE_VSYNC_BYPASS="${ENABLE_VSYNC_BYPASS:-true}"
 ENABLE_ANDROID_PROP_CONTROL="${ENABLE_ANDROID_PROP_CONTROL:-true}"
+PATCH_PRESET="${PATCH_PRESET:-performance}"
+FRAME_CONTROL_PRESET="${FRAME_CONTROL_PRESET:-winlator}"
+LOG_LEVEL="${LOG_LEVEL:-info}"TU_FORCE_IMMEDIATE_PRESENT="${TU_FORCE_IMMEDIATE_PRESENT:-1}"
 CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
+
 log_info() { echo "[INFO] $*"; }
 log_success() { echo "[OK] $*"; }
 log_warn() { echo "[WARN] $*"; }
@@ -61,6 +65,78 @@ strict_check() {
     fi
 }
 
+expand_presets() {
+    log_info "Expanding preset configurations"
+    
+    if [[ -z "${ENABLE_TIMELINE_HACK:-}" ]]; then
+        case "${PATCH_PRESET:-performance}" in
+            minimal)
+                ENABLE_TIMELINE_HACK=false
+                ENABLE_UBWC_HACK=false
+                APPLY_PATCH_SERIES=false
+                ENABLE_EXT_SPOOF=false
+                ENABLE_VIEWPORT_CLAMP=false
+                ENABLE_TIMELINE_FIX=false
+                log_info "Preset: minimal patches"
+                ;;
+            stability)
+                ENABLE_TIMELINE_HACK=true
+                ENABLE_UBWC_HACK=true
+                APPLY_PATCH_SERIES=true
+                ENABLE_EXT_SPOOF=false
+                ENABLE_VIEWPORT_CLAMP=true
+                ENABLE_TIMELINE_FIX=true
+                log_info "Preset: stability patches"
+                ;;
+            performance)
+                ENABLE_TIMELINE_HACK=true
+                ENABLE_UBWC_HACK=true
+                APPLY_PATCH_SERIES=true
+                ENABLE_EXT_SPOOF=true
+                ENABLE_VIEWPORT_CLAMP=true
+                ENABLE_TIMELINE_FIX=true
+                log_info "Preset: performance patches"
+                ;;            experimental)
+                ENABLE_TIMELINE_HACK=true
+                ENABLE_UBWC_HACK=true
+                APPLY_PATCH_SERIES=true
+                ENABLE_EXT_SPOOF=true
+                ENABLE_VIEWPORT_CLAMP=true
+                ENABLE_TIMELINE_FIX=true
+                log_info "Preset: experimental patches"
+                ;;
+        esac
+    fi
+
+    if [[ -z "${ENABLE_PRESENT_WAIT_FIX:-}" ]]; then
+        case "${FRAME_CONTROL_PRESET:-winlator}" in
+            standard)
+                ENABLE_PRESENT_WAIT_FIX=true
+                ENABLE_FRAME_PACING=true
+                ENABLE_VSYNC_BYPASS=false
+                ENABLE_ANDROID_PROP_CONTROL=true
+                log_info "Frame control: standard"
+                ;;
+            winlator|aggressive)
+                ENABLE_PRESENT_WAIT_FIX=true
+                ENABLE_FRAME_PACING=true
+                ENABLE_VSYNC_BYPASS=true
+                ENABLE_ANDROID_PROP_CONTROL=true
+                log_info "Frame control: winlator/aggressive"
+                ;;
+            disabled)
+                ENABLE_PRESENT_WAIT_FIX=false
+                ENABLE_FRAME_PACING=false
+                ENABLE_VSYNC_BYPASS=false
+                ENABLE_ANDROID_PROP_CONTROL=false
+                log_info "Frame control: disabled"
+                ;;
+        esac
+    fi
+    
+    log_success "Preset configurations expanded"
+}
+
 check_deps() {
     local deps="git meson ninja patchelf zip ccache curl python3"
     for dep in $deps; do
@@ -69,8 +145,7 @@ check_deps() {
             exit 1
         fi
     done
-    log_success "Dependencies check passed"
-}
+    log_success "Dependencies check passed"}
 
 fetch_latest_release() {
     local tags=""
@@ -96,7 +171,8 @@ get_vulkan_version() {
         minor=$(grep -m1 "#define VK_HEADER_VERSION_COMPLETE" "$vk_header" | grep -oP 'VK_MAKE_API_VERSION\(\d+,\s*\d+,\s*\K\d+' || echo "4")
         patch=$(grep -m1 "^#define VK_HEADER_VERSION " "$vk_header" | awk '{print $3}' || echo "0")
         echo "${major}.${minor}.${patch}"
-    else        echo "1.4.0"
+    else
+        echo "1.4.0"
     fi
 }
 
@@ -118,8 +194,7 @@ clone_mesa() {
             ;;
         staging_branch)
             ref="$STAGING_BRANCH"
-            repo="$MESA_REPO"
-            ;;
+            repo="$MESA_REPO"            ;;
         main_branch|latest_main)
             ref="main"
             repo="$MESA_REPO"
@@ -145,7 +220,8 @@ clone_mesa() {
                 exit 1
             }
             local version commit
-            version=$(get_mesa_version)            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            version=$(get_mesa_version)
+            commit=$(git -C "$MESA_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
             echo "$version" > "${WORKDIR}/version.txt"
             echo "$commit"  > "${WORKDIR}/commit.txt"
             log_success "AutoTuner Mesa cloned: $version @ $commit"
@@ -167,8 +243,7 @@ clone_mesa() {
         cp -r "$MESA_LOCAL_PATH" "$MESA_DIR"
     else
         log_info "Cloning Mesa @ $ref"
-        git clone --depth=1 --branch "$ref" "$repo" "$MESA_DIR" 2>/dev/null || \
-        git clone --depth=1 --branch "$ref" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null || {
+        git clone --depth=1 --branch "$ref" "$repo" "$MESA_DIR" 2>/dev/null || \        git clone --depth=1 --branch "$ref" "$MESA_MIRROR" "$MESA_DIR" 2>/dev/null || {
             log_error "Failed to clone Mesa"
             exit 1
         }
@@ -194,7 +269,8 @@ update_vulkan_headers() {
 
     git clone --depth=1 --branch "$target_tag" "$VULKAN_HEADERS_REPO" "$headers_dir" 2>/dev/null || {
         log_warn "Failed to clone Vulkan headers — using Mesa bundled headers"
-        return 0    }
+        return 0
+    }
 
     [[ ! -d "${headers_dir}/include/vulkan" ]] && { log_warn "Headers dir missing"; return 0; }
     cp -r "${headers_dir}/include/vulkan" "${MESA_DIR}/include/"
@@ -216,8 +292,7 @@ update_vulkan_headers() {
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
 #endif
 #ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT
-#define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR
-#endif
+#define VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_KHR#endif
 #ifndef VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR
 #define VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_KHR VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT
 #endif
@@ -243,7 +318,8 @@ COMPAT_EOF
 apply_viewport_clamp_fix() {
     log_info "Applying Viewport/Scissor Clamp Fix"
     local tu_pipeline="${MESA_DIR}/src/freedreno/vulkan/tu_pipeline.cc"
-    [[ ! -f "$tu_pipeline" ]] && { log_warn "tu_pipeline.cc not found"; return 0; }    
+    [[ ! -f "$tu_pipeline" ]] && { log_warn "tu_pipeline.cc not found"; return 0; }
+    
     if grep -q "CLAMP.*16383" "$tu_pipeline"; then
         log_info "Viewport clamp fix already applied"
         return 0
@@ -265,8 +341,7 @@ apply_viewport_clamp_fix() {
 apply_timeline_semaphore_fix() {
     log_info "Applying vk_sync_timeline Fix"
     local vk_sync="${MESA_DIR}/src/vulkan/runtime/vk_sync_timeline.c"
-    [[ ! -f "$vk_sync" ]] && { log_warn "vk_sync_timeline.c not found"; return 0; }
-    
+    [[ ! -f "$vk_sync" ]] && { log_warn "vk_sync_timeline.c not found"; return 0; }    
     if grep -q "TIMELINE_FIX_APPLIED" "$vk_sync"; then
         log_info "Timeline fix already applied"
         return 0
@@ -292,7 +367,8 @@ if m:
         c = c[:eol+1] + injection + c[eol+1:]
         with open(fp, 'w') as f: f.write(c)
         print("[OK] Timeline semaphore safety check added")
-PYEOF    log_success "Timeline semaphore fix applied"
+PYEOF
+    log_success "Timeline semaphore fix applied"
 }
 
 apply_present_wait_fix() {
@@ -315,7 +391,6 @@ c, n = re.subn(pat, r'\1true', c)
 
 pat2 = r'(\.KHR_present_wait2\s*=\s*)false'
 c, n2 = re.subn(pat2, r'\1true', c)
-
 if n > 0 or n2 > 0:
     c += '\n'
     with open(fp, 'w') as f: f.write(c)
@@ -341,6 +416,7 @@ apply_frame_pacing_fix() {
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
+
 pat = r'(tu_acquire_next_image[^{]*\{)'
 m = re.search(pat, c)
 if m:
@@ -363,8 +439,7 @@ PYEOF
 }
 
 apply_vsync_bypass_fix() {
-    log_info "Applying VSync bypass for fake frame boost"
-    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    log_info "Applying VSync bypass for fake frame boost"    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
     
     if grep -q "VSYNC_BYPASS_APPLIED" "$tu_device_cc"; then
@@ -390,7 +465,8 @@ PYEOF
     log_success "VSync bypass optimization applied"
 }
 
-apply_android_prop_control() {    log_info "Applying Android property-based dynamic control"
+apply_android_prop_control() {
+    log_info "Applying Android property-based dynamic control"
     local tu_autotune="${MESA_DIR}/src/freedreno/vulkan/tu_autotune.cc"
     
     [[ ! -f "$tu_autotune" ]] && { log_warn "tu_autotune.cc not found"; return 0; }
@@ -412,8 +488,7 @@ static uint32_t get_android_int_prop(const char* prop, uint32_t default_val) {
 static bool get_android_bool_prop(const char* prop, bool default_val) {
     char val[PROP_VALUE_MAX];
     if (__system_property_get(prop, val) > 0) return strcmp(val, "1") == 0;
-    return default_val;
-}
+    return default_val;}
 """
 
 if "get_android_int_prop" not in c:
@@ -439,7 +514,8 @@ if m:
         with open(fp, 'w') as f: f.write(c)
         print("[OK] Android property control injected into autotune")
 else:
-    print("[WARN] tu_autotune_use_bypass function not found")PYEOF
+    print("[WARN] tu_autotune_use_bypass function not found")
+PYEOF
     log_success "Android property-based dynamic control applied"
 }
 
@@ -461,8 +537,7 @@ tu_dynamic_autotune_bypass(const struct tu_cmd_buffer *cmd, uint32_t total_draws
     if (!pass || !fb) return false;
 
     uint32_t area = fb->width * fb->height * fb->layers;
-    if (cmd->state.rp.msaa_samples > 1)
-        area *= cmd->state.rp.msaa_samples;
+    if (cmd->state.rp.msaa_samples > 1)        area *= cmd->state.rp.msaa_samples;
 
     uint32_t bpp_total = 0;
     for (uint32_t i = 0; i < pass->attachment_count; i++) {
@@ -488,7 +563,8 @@ tu_dynamic_autotune_bypass(const struct tu_cmd_buffer *cmd, uint32_t total_draws
 
     bool has_color = false;
     for (uint32_t s = 0; s < pass->subpass_count; s++) {
-        if (pass->subpasses[s].color_count > 0) { has_color = true; break; }    }
+        if (pass->subpasses[s].color_count > 0) { has_color = true; break; }
+    }
     if (!has_color && area > (2048 * 2048)) {
         return true;
     }
@@ -510,8 +586,7 @@ if m:
     brace = c.find('{', m.start())
     eol = c.find('\n', brace)
     if eol != -1:
-        injection = '''
-   if (cmd->device->physical_device->info.chip >= 7) {
+        injection = '''   if (cmd->device->physical_device->info.chip >= 7) {
       if (tu_dynamic_autotune_bypass(cmd, cmd->state.rp.drawcall_count)) {
          return true;
       }
@@ -537,7 +612,8 @@ if matches:
     new_flag = f'   TU_DEBUG_LOG_AUTOTUNE = BITFIELD64_BIT({bit_num + 1}),'
     end_pos = last_match.end()
     eol = c.find('\n', end_pos)
-    if eol != -1:        c = c[:eol+1] + new_flag + '\n' + c[eol+1:]
+    if eol != -1:
+        c = c[:eol+1] + new_flag + '\n' + c[eol+1:]
         with open(fp, 'w') as f: f.write(c)
         print("[OK] Added TU_DEBUG_LOG_AUTOTUNE flag")
 DEBUGEOF
@@ -559,8 +635,7 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 if 'UBWC_GRALLOC_FORCED' in c:
     print('[OK] u_gralloc UBWC already forced'); sys.exit(0)
-pat = r'(static\s+int\s+\w*get_buffer\w*\s*\([^)]*\)\s*\{[^}]*?\n)([ \t]+)'
-m = re.search(pat, c, re.DOTALL)
+pat = r'(static\s+int\s+\w*get_buffer\w*\s*\([^)]*\)\s*\{[^}]*?\n)([ \t]+)'m = re.search(pat, c, re.DOTALL)
 if m:
     inject = '\n   return 0;\n'
     ins = c.find('{', c.find('get_buffer')) + 1
@@ -586,7 +661,8 @@ else:
     print('[WARN] Gralloc usage pattern not found')
 PYEOF
     fi
-    log_success "Gralloc UBWC fix applied"}
+    log_success "Gralloc UBWC fix applied"
+}
 
 apply_a8xx_patches() {
     log_info "Applying a8xx-specific patches"
@@ -608,8 +684,7 @@ defines = (
     "#endif\n"
     "#ifndef KGSL_UBWC_6_0\n"
     "#define KGSL_UBWC_6_0 6\n"
-    "#endif\n"
-)
+    "#endif\n")
 
 if "#define KGSL_UBWC_5_0" not in c:
     first_include = c.find("#include")
@@ -635,7 +710,8 @@ if not m4:
     m4 = ubwc_pat.search(c)
 
 if not m4:
-    with open(fp, "w") as f: f.write(c)    print("[WARN] UBWC switch not found, defines only")
+    with open(fp, "w") as f: f.write(c)
+    print("[WARN] UBWC switch not found, defines only")
     sys.exit(0)
 
 case_body = c[m4.start():m4.end()]
@@ -657,8 +733,7 @@ lval = lval_m.group(1)
 
 default_m = re.search(r'[ \t]*default\s*:', c[m4.end():])
 if not default_m:
-    with open(fp, "w") as f: f.write(c)
-    print("[WARN] default: not found, defines only")
+    with open(fp, "w") as f: f.write(c)    print("[WARN] default: not found, defines only")
     sys.exit(0)
 
 ins = m4.end() + default_m.start()
@@ -684,7 +759,8 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-inject = "\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = \"Unsupported GPU\";\n      return true;\n   }\n"pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
+inject = "\n   if (cmd->device->physical_device->dev_info.props.disable_gmem) {\n      cmd->state.rp.gmem_disable_reason = \"Unsupported GPU\";\n      return true;\n   }\n"
+pat = r'use_sysmem_rendering\s*\([^)]*\)\s*\{'
 m = re.search(pat, c)
 if m:
     ins = c.find("\n", c.find("{", m.start())) + 1
@@ -706,8 +782,7 @@ pat = r'if\s*\(\s*info->chip\s*>=\s*8\s*&&\s*info->num_slices\s*>\s*1\s*\)[^}]*\
 m = re.search(pat, c, re.DOTALL)
 if m:
     c = c[:m.start()] + c[m.end():]
-    with open(fp, 'w') as f: f.write(c)
-    print('[OK] A8xx gmem cache offset removed')
+    with open(fp, 'w') as f: f.write(c)    print('[OK] A8xx gmem cache offset removed')
 else:
     print('[INFO] gmem offset block not found (may already be patched)')
 PYEOF
@@ -733,7 +808,8 @@ PYEOF
 
     local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
     if [[ -f "$devices_py" ]] && ! grep -q "A8XX_DEVICES_INJECTED" "$devices_py"; then
-        python3 - "$devices_py" << 'PYEOF'import sys, re
+        python3 - "$devices_py" << 'PYEOF'
+import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 
@@ -755,8 +831,7 @@ for gpu, ids in a8xx_ids.items():
     num_slices = 1 if gpu == '810' else 2
     inject += f"""
 add_gpus([
-{id_lines}
-    ], A6xxGPUInfo(
+{id_lines}    ], A6xxGPUInfo(
         CHIP.A8XX,
         [a7xx_base, a7xx_gen3, a8xx_base],
         num_ccu = {num_ccu},
@@ -782,7 +857,8 @@ if added:
 else:
     print('[OK] All a8xx GPU entries already present in Mesa')
 PYEOF
-        log_success "A8xx device entries checked/injected"    fi
+        log_success "A8xx device entries checked/injected"
+    fi
 
     log_success "A8xx patches complete"
 }
@@ -804,8 +880,7 @@ INJECT = """
    ext->AMD_anti_lag = true;
    ext->AMD_device_coherent_memory = true;
    ext->AMD_memory_overallocation_behavior = true;
-   ext->AMD_shader_core_properties = true;
-   ext->AMD_shader_core_properties2 = true;
+   ext->AMD_shader_core_properties = true;   ext->AMD_shader_core_properties2 = true;
    ext->AMD_shader_info = true;
    ext->EXT_blend_operation_advanced = true;
    ext->EXT_buffer_device_address = true;
@@ -831,7 +906,8 @@ INJECT = """
    ext->EXT_post_depth_coverage = true;
    ext->EXT_shader_atomic_float2 = true;
    ext->EXT_shader_object = true;
-   ext->EXT_shader_subgroup_ballot = true;   ext->EXT_shader_subgroup_vote = true;
+   ext->EXT_shader_subgroup_ballot = true;
+   ext->EXT_shader_subgroup_vote = true;
    ext->EXT_shader_tile_image = true;
    ext->EXT_subpass_merge_feedback = true;
    ext->EXT_swapchain_maintenance1 = true;
@@ -853,8 +929,7 @@ INJECT = """
    ext->KHR_performance_query = true;
    ext->KHR_pipeline_binary = true;
    ext->KHR_present_id = true;
-   ext->KHR_present_id2 = true;
-   ext->KHR_present_wait = true;
+   ext->KHR_present_id2 = true;   ext->KHR_present_wait = true;
    ext->KHR_present_wait2 = true;
    ext->KHR_ray_tracing_pipeline = true;
    ext->KHR_ray_tracing_position_fetch = true;
@@ -880,7 +955,8 @@ INJECT = """
    ext->NV_device_diagnostics_config = true;
    ext->QCOM_filter_cubic_clamp = true;
    ext->QCOM_filter_cubic_weights = true;
-   ext->QCOM_image_processing2 = true;   ext->QCOM_render_pass_store_ops = true;
+   ext->QCOM_image_processing2 = true;
+   ext->QCOM_render_pass_store_ops = true;
    ext->QCOM_render_pass_transform = true;
    ext->QCOM_tile_properties = true;
    ext->QCOM_ycbcr_degamma = true;
@@ -902,8 +978,7 @@ INJECT = """
    ext->VALVE_shader_mixed_float_dot_product = true;
    ext->VALVE_video_encode_rgb_conversion = true;
    ext->AMDX_shader_enqueue = true;
-   ext->ARM_render_pass_striped = true;
-   ext->ARM_scheduling_controls = true;
+   ext->ARM_render_pass_striped = true;   ext->ARM_scheduling_controls = true;
    ext->ARM_shader_core_builtins = true;
    ext->ARM_shader_core_properties = true;
    ext->EXT_attachment_feedback_loop_dynamic_state = true;
@@ -929,7 +1004,8 @@ INJECT = """
    ext->EXT_layer_settings = true;
    ext->EXT_legacy_dithering = true;
    ext->EXT_line_rasterization = true;
-   ext->EXT_load_store_op_none = true;   ext->EXT_map_memory_placed = true;
+   ext->EXT_load_store_op_none = true;
+   ext->EXT_map_memory_placed = true;
    ext->EXT_memory_budget = true;
    ext->EXT_multi_draw = true;
    ext->EXT_multisampled_render_to_single_sampled = true;
@@ -951,8 +1027,7 @@ INJECT = """
    ext->EXT_shader_module_identifier = true;
    ext->EXT_shader_replicated_composites = true;
    ext->EXT_shader_stencil_export = true;
-   ext->EXT_shader_viewport_index_layer = true;
-   ext->EXT_transform_feedback = true;
+   ext->EXT_shader_viewport_index_layer = true;   ext->EXT_transform_feedback = true;
    ext->EXT_vertex_attribute_divisor = true;
    ext->EXT_vertex_input_dynamic_state = true;
    ext->EXT_video_encode_quantization_map = true;
@@ -978,7 +1053,8 @@ INJECT = """
    ext->NV_inherited_viewport_scissor = true;
    ext->NV_linear_color_attachment = true;
    ext->NV_mesh_shader = true;
-   ext->NV_raw_access_chains = true;   ext->NV_representative_fragment_test = true;
+   ext->NV_raw_access_chains = true;
+   ext->NV_representative_fragment_test = true;
    ext->NV_sample_mask_override_coverage = true;
    ext->NV_scissor_exclusive = true;
    ext->NV_shader_atomic_float16_vector = true;
@@ -1000,8 +1076,7 @@ if m:
     pos = m.start()
     start_brace = c.find('{', m.start())
     i = start_brace
-    while i < len(c):
-        if c[i] == '{': depth += 1
+    while i < len(c):        if c[i] == '{': depth += 1
         elif c[i] == '}':
             depth -= 1
             if depth == 0:
@@ -1027,7 +1102,8 @@ FORCEEOF
 }
 
 apply_vulkan_extensions_support() {
-    log_info "Applying Vulkan extensions unlock + upscaler stubs"    local meson_build="${MESA_DIR}/src/freedreno/vulkan/meson.build"
+    log_info "Applying Vulkan extensions unlock + upscaler stubs"
+    local meson_build="${MESA_DIR}/src/freedreno/vulkan/meson.build"
     local stubs_cc="${MESA_DIR}/src/freedreno/vulkan/tu_upscaler_stubs.cc"
     local tu_extensions=""
     local _candidates=(
@@ -1049,8 +1125,7 @@ apply_vulkan_extensions_support() {
         apply_vulkan_extensions_vk_fallback
         return 0
     fi
-    log_info "Found extension file: $tu_extensions"
-    if grep -q "EXT_UNLOCK_APPLIED" "$tu_extensions"; then
+    log_info "Found extension file: $tu_extensions"    if grep -q "EXT_UNLOCK_APPLIED" "$tu_extensions"; then
         log_info "Extension unlock already applied"
         return 0
     fi
@@ -1076,6 +1151,7 @@ NEVER_UNLOCK = {
     "VK_EXT_acquire_drm_display",
     "VK_EXT_acquire_xlib_display",
 }
+
 all_exts = re.findall(r'Extension\s*\(\s*"(VK_[A-Z0-9_]+)"\s*,\s*(?:False|None)\s*,', c)
 flipped = 0
 for ext in all_exts:
@@ -1098,8 +1174,7 @@ UPSCALER_EXTS = [
 
 added_exts = []
 for ext in UPSCALER_EXTS:
-    if ext in c:
-        continue
+    if ext in c:        continue
     m = re.search(r'(device_extensions\s*=\s*\[)', c)
     if not m:
         m = re.search(r'(extensions\s*=\s*\[)', c)
@@ -1126,6 +1201,7 @@ tu_GetPhysicalDeviceOpticalFlowImageFormatsNV(
    const VkOpticalFlowImageFormatInfoNV *pInfo,
    uint32_t *pCount, VkOpticalFlowImageFormatPropertiesNV *pProps)
 { if (pCount) *pCount = 0; return VK_SUCCESS; }
+
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_CreateOpticalFlowSessionNV(VkDevice d,
    const VkOpticalFlowSessionCreateInfoNV *pCI,
@@ -1147,8 +1223,7 @@ tu_CmdOpticalFlowExecuteNV(VkCommandBuffer cb,
 
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_SetLatencySleepModeNV(VkDevice d, VkSwapchainKHR sc,
-   const VkLatencySleepModeInfoNV *pSM)
-{ return VK_SUCCESS; }
+   const VkLatencySleepModeInfoNV *pSM){ return VK_SUCCESS; }
 
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_LatencySleepNV(VkDevice d, VkSwapchainKHR sc,
@@ -1174,6 +1249,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
 tu_CreateCuModuleNVX(VkDevice d, const VkCuModuleCreateInfoNVX *pCI,
    const VkAllocationCallbacks *pA, VkCuModuleNVX *pM)
 { return VK_ERROR_FEATURE_NOT_PRESENT; }
+
 VKAPI_ATTR VkResult VKAPI_CALL
 tu_CreateCuFunctionNVX(VkDevice d, const VkCuFunctionCreateInfoNVX *pCI,
    const VkAllocationCallbacks *pA, VkCuFunctionNVX *pF)
@@ -1196,8 +1272,7 @@ tu_AcquireFullScreenExclusiveModeEXT(VkDevice d, VkSwapchainKHR sc)
 { return VK_SUCCESS; }
 
 VKAPI_ATTR VkResult VKAPI_CALL
-tu_ReleaseFullScreenExclusiveModeEXT(VkDevice d, VkSwapchainKHR sc)
-{ return VK_SUCCESS; }
+tu_ReleaseFullScreenExclusiveModeEXT(VkDevice d, VkSwapchainKHR sc){ return VK_SUCCESS; }
 
 #ifdef __cplusplus
 }
@@ -1223,6 +1298,7 @@ if os.path.exists(fp_meson):
 PYEOF
     log_success "Vulkan extensions unlock + upscaler stubs applied"
 }
+
 apply_deck_emu_support() {
     log_info "Applying Steam Deck GPU emulation (spoof as: $DECK_EMU_TARGET)"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -1245,8 +1321,7 @@ apply_deck_emu_support() {
             ;;
         *)
             vendor_id="0x10de"; device_id="0x2684"
-            driver_version="0x61d0000"
-            device_name="NVIDIA GeForce RTX 4090"
+            driver_version="0x61d0000"            device_name="NVIDIA GeForce RTX 4090"
             ;;
     esac
     python3 - "$tu_device_cc" "$vendor_id" "$device_id" "$driver_version" "$device_name" << 'PYEOF'
@@ -1272,7 +1347,8 @@ tu_deck_perf_init(void)
    };
    for (int i = 0; pwrlevel_paths[i]; i++) {
       int fd = open(pwrlevel_paths[i], O_WRONLY | O_CLOEXEC);
-      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }   }
+      if (fd >= 0) { (void)write(fd, "0", 1); close(fd); break; }
+   }
    for (int i = 0; governor_paths[i]; i++) {
       int fd = open(governor_paths[i], O_WRONLY | O_CLOEXEC);
       if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
@@ -1294,8 +1370,7 @@ perf_call = """
 """
 
 m = re.search(r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
-if not m:
-    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
+if not m:    m = re.search(r'(vkGetPhysicalDeviceProperties2?\s*\([^{]*\{)', c)
 if m:
     c = c[:m.end()] + spoof_code + c[m.end():]
     print(f'[OK] Deck emu ({device_name}) applied')
@@ -1321,7 +1396,8 @@ PYEOF
 }
 
 apply_custom_debug_flags() {
-    log_info "Adding custom TU_DEBUG flags"    local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
+    log_info "Adding custom TU_DEBUG flags"
+    local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
     local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     local tu_image_cc="${MESA_DIR}/src/freedreno/vulkan/tu_image.cc"
@@ -1343,8 +1419,7 @@ flags = [
     'TU_DEBUG_SLC_PIN','TU_DEBUG_TURBO','TU_DEBUG_DEFRAG',
     'TU_DEBUG_CP_PREFETCH','TU_DEBUG_SHFL','TU_DEBUG_VGT_PREF',
     'TU_DEBUG_UNROLL',
-]
-lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
+]lines = '\n'.join(f'   {f:<32} = BITFIELD64_BIT({next_bit + i}),' for i, f in enumerate(flags))
 all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
 if all_m:
     eol = c.find('\n', all_m[-1].end())
@@ -1370,7 +1445,8 @@ REMAP = [
     ("3d_load",               "TU_DEBUG_SHFL"),
     ("rast_order",            "TU_DEBUG_VGT_PREF"),
     ("log_skip_gmem_ops",     "TU_DEBUG_UNROLL"),
-]remapped = []
+]
+remapped = []
 added = []
 for name, new_flag in REMAP:
     pat = rf'(\{{\s*"{re.escape(name)}"\s*,\s*)TU_DEBUG_\w+(\s*\}})'
@@ -1392,8 +1468,7 @@ if added:
 PYEOF
 
     if [[ -f "$tu_device_cc" ]] && ! grep -q "tu_try_activate_turbo" "$tu_device_cc"; then
-        python3 - "$tu_device_cc" << 'PYEOF'
-import sys, re
+        python3 - "$tu_device_cc" << 'PYEOF'import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 turbo_func = """
@@ -1419,7 +1494,8 @@ tu_try_activate_turbo(void)
       if (fd >= 0) { (void)write(fd, "performance", 11); close(fd); break; }
    }
 }
-"""turbo_call = "\n   if (TU_DEBUG(TURBO))\n      tu_try_activate_turbo();\n"
+"""
+turbo_call = "\n   if (TU_DEBUG(TURBO))\n      tu_try_activate_turbo();\n"
 m_func = re.search(r'\n(static |VkResult |void )', c)
 if m_func and 'tu_try_activate_turbo' not in c:
     c = c[:m_func.start()+1] + turbo_func + '\n' + c[m_func.start()+1:]
@@ -1441,8 +1517,7 @@ ubwc_code = """
    if (TU_DEBUG(UBWC_ALL)) {
       if (!vk_format_is_depth_or_stencil(image->vk.format) &&
           !vk_format_is_compressed(image->vk.format) &&
-          image->vk.format != VK_FORMAT_UNDEFINED) {
-         for (unsigned _p = 0; _p < ARRAY_SIZE(image->layout); _p++)
+          image->vk.format != VK_FORMAT_UNDEFINED) {         for (unsigned _p = 0; _p < ARRAY_SIZE(image->layout); _p++)
             image->layout[_p].ubwc = true;
       }
    }
@@ -1468,7 +1543,8 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
-helper = """static inline unsigned
+helper = """
+static inline unsigned
 ir3_ra_max_regs_override(unsigned default_max)
 {
    const char *dbg = getenv("TU_DEBUG");
@@ -1491,7 +1567,6 @@ PYEOF
 
     log_success "Custom TU_DEBUG flags applied"
 }
-
 apply_a7xx_series_compat() {
     log_info "Applying a7xx series compat (inline fallbacks)"
     local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
@@ -1517,7 +1592,8 @@ PYEOF
         python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
-with open(fp) as f: c = f.read()n = 0
+with open(fp) as f: c = f.read()
+n = 0
 c, k = re.subn(
     r'(\.KHR_workgroup_memory_explicit_layout\s*=\s*)true',
     r'\1false', c)
@@ -1539,8 +1615,7 @@ PYEOF
         log_success "workgroup_memory_explicit_layout disabled"
     fi
 
-    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    if [[ -f "$devices_py" ]] && [[ -f "$dev_info_h" ]] \
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"    if [[ -f "$devices_py" ]] && [[ -f "$dev_info_h" ]] \
         && grep -q "compute_constlen_quirk" "$dev_info_h" \
         && ! grep -q "A7XX_COMPUTE_CONSTLEN_QUIRK" "$devices_py"; then
         python3 - "$devices_py" << 'PYEOF'
@@ -1566,7 +1641,8 @@ else:
 PYEOF
         log_success "compute_constlen_quirk added"
     elif [[ -f "$dev_info_h" ]] && ! grep -q "compute_constlen_quirk" "$dev_info_h"; then
-        python3 - "$dev_info_h" << 'INNEREOF'import sys, re
+        python3 - "$dev_info_h" << 'INNEREOF'
+import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 anchor = re.search(r'(bool\s+fs_must_have_non_zero_constlen_quirk\s*;)', c)
@@ -1588,8 +1664,7 @@ INNEREOF
 apply_sysmem_mode_fix() {
     log_info "Fixing sysmem mode gating"
     local cmd_buffer="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
-    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
-    [[ ! -f "$cmd_buffer" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"    [[ ! -f "$cmd_buffer" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
     if [[ -f "$dev_info_h" ]] && ! grep -q "disable_gmem" "$dev_info_h"; then
         python3 - "$dev_info_h" << 'INNEREOF'
 import sys, re
@@ -1615,7 +1690,8 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 if "SYSMEM_MODE_FIXED" in c:
-    print("[OK] sysmem mode fix already applied")    sys.exit(0)
+    print("[OK] sysmem mode fix already applied")
+    sys.exit(0)
 pat = r'(use_sysmem_rendering\s*\([^)]*\)\s*\{)\s*\n[ \t]*return true;\s*\n'
 if not re.search(pat, c):
     print("[INFO] unconditional sysmem return not found, skipping")
@@ -1637,7 +1713,6 @@ apply_a7xx_visibility_fix() {
     log_info "Applying a7xx visibility fixes (LRZ + occlusion)"
     local tu_lrz="${MESA_DIR}/src/freedreno/vulkan/tu_lrz.cc"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
-
     if [[ -f "$tu_lrz" ]] && ! grep -q "A7XX_LRZ_SAFE" "$tu_lrz"; then
         python3 - "$tu_lrz" << 'INNEREOF'
 import sys, re
@@ -1664,7 +1739,8 @@ INNEREOF
     if [[ -f "$tu_device_cc" ]] && ! grep -q "A7XX_OCCLUSION_FIX" "$tu_device_cc"; then
         python3 - "$tu_device_cc" << 'INNEREOF'
 import sys, re
-fp = sys.argv[1]with open(fp) as f: c = f.read()
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
 n = 0
 
 for pat, label in [
@@ -1686,8 +1762,7 @@ INNEREOF
     log_success "a7xx visibility fixes done"
 }
 
-apply_a7xx_perf_patches() {
-    log_info "Applying a7xx performance patches"
+apply_a7xx_perf_patches() {    log_info "Applying a7xx performance patches"
     local tu_lrz="${MESA_DIR}/src/freedreno/vulkan/tu_lrz.cc"
     local tu_image_cc="${MESA_DIR}/src/freedreno/vulkan/tu_image.cc"
     local ir3_compiler="${MESA_DIR}/src/freedreno/ir3/ir3_compiler.c"
@@ -1714,6 +1789,7 @@ else:
 PYEOF
         log_success "LRZ reverse-Z pre-seed applied"
     fi
+
     if [[ -f "$tu_image_cc" ]] && ! grep -q "A7XX_STORAGE_NO_UBWC" "$tu_image_cc"; then
         python3 - "$tu_image_cc" << 'PYEOF'
 import sys, re
@@ -1735,8 +1811,7 @@ if m:
         print("[OK] UBWC disabled for storage images")
     else:
         print("[WARN] return VK_SUCCESS not found in tu_image_init")
-else:
-    print("[WARN] tu_image_init not found")
+else:    print("[WARN] tu_image_init not found")
 PYEOF
         log_success "UBWC disabled for storage images"
     fi
@@ -1762,7 +1837,8 @@ else:
 INNEREOF
     fi
     if [[ -f "$ir3_compiler" ]] && [[ -f "$ir3_compiler_h" ]] \
-        && grep -q "cs_wave64" "$ir3_compiler_h" \        && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
+        && grep -q "cs_wave64" "$ir3_compiler_h" \
+        && ! grep -q "A7XX_CS_WAVE64" "$ir3_compiler"; then
         python3 - "$ir3_compiler" << 'PYEOF'
 import sys, re
 fp = sys.argv[1]
@@ -1784,8 +1860,7 @@ PYEOF
     if [[ -f "$tu_device_cc" ]] && ! grep -q "A7XX_MESH_INVOC_CAP" "$tu_device_cc"; then
         python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
-fp = sys.argv[1]
-with open(fp) as f: c = f.read()
+fp = sys.argv[1]with open(fp) as f: c = f.read()
 pat = r'(maxMeshWorkGroupInvocations\s*=\s*)(\d+)'
 m = re.search(pat, c)
 if m:
@@ -1811,7 +1886,8 @@ apply_vulkan14_promotion() {
     local tu_physical="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
     if grep -q "VK14_PROMOTION_APPLIED" "$tu_device_cc"; then
-        log_info "Vulkan 1.4 promotion already applied"        return 0
+        log_info "Vulkan 1.4 promotion already applied"
+        return 0
     fi
     python3 - "$tu_device_cc" << 'INNEREOF'
 import sys, re, os
@@ -1833,8 +1909,7 @@ def detect_vk_patch(mesa_dir):
         m = re.search(r'VK_HEADER_VERSION_COMPLETE\s+VK_MAKE_API_VERSION\(\s*0\s*,\s*1\s*,\s*4\s*,\s*(\d+)', text)
         if m:
             return int(m.group(1))
-        m = re.search(r'#define\s+VK_HEADER_VERSION\s+(\d+)', text)
-        if m:
+        m = re.search(r'#define\s+VK_HEADER_VERSION\s+(\d+)', text)        if m:
             return int(m.group(1))
         m = re.search(r'<enum\s+value="(\d+)"\s+name="VK_HEADER_VERSION"', text)
         if m:
@@ -1860,7 +1935,8 @@ for pat in [
 for pat in [
     r'(\.KHR_maintenance5\s*=\s*)false',
     r'(\.KHR_maintenance5\s*=\s*)None',
-]:    c = re.sub(pat, r'\1true', c)
+]:
+    c = re.sub(pat, r'\1true', c)
 
 for pat in [
     r'(\.KHR_maintenance6\s*=\s*)false',
@@ -1882,8 +1958,7 @@ FORCE_TRUE_13 = [
     'descriptorIndexing',
     'shaderZeroInitializeWorkgroupMemory',
 ]
-n_feat = 0
-for field in FORCE_TRUE_13:
+n_feat = 0for field in FORCE_TRUE_13:
     pat = rf'(features->{re.escape(field)}\s*=\s*)false'
     c, k = re.subn(pat, r'\1true', c)
     n_feat += k
@@ -1909,7 +1984,8 @@ FORCE_TRUE_14 = [
 ]
 for field in FORCE_TRUE_14:
     pat = rf'(features->{re.escape(field)}\s*=\s*)false'
-    c, k = re.subn(pat, r'\1true', c)    n_feat += k
+    c, k = re.subn(pat, r'\1true', c)
+    n_feat += k
 
 with open(fp, 'w') as f: f.write(c)
 print(f"[OK] apiVersion patched: {n_api} sites -> 1.4.{patch_ver}, features forced: {n_feat}")
@@ -1931,7 +2007,6 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
-
 for pat in [
     r'(subgroupSize\s*=\s*)\d+',
     r'(props->subgroupSize\s*=\s*)\d+',
@@ -1958,7 +2033,8 @@ c, k = re.subn(pat_ops,
     c, count=1)
 n += k
 
-with open(fp, 'w') as f: f.write(c)print(f"[OK] Subgroup properties fixed ({n} replacements)")
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] Subgroup properties fixed ({n} replacements)")
 INNEREOF
     log_success "Subgroup optimization applied"
 }
@@ -1980,8 +2056,7 @@ FIELDS = [
     'descriptorBuffer',
     'descriptorBufferCaptureReplay',
     'descriptorBufferImageLayoutIgnored',
-    'descriptorBufferPushDescriptors',
-]
+    'descriptorBufferPushDescriptors',]
 for field in FIELDS:
     pat = rf'(features->{re.escape(field)}\s*=\s*)false'
     c, k = re.subn(pat, r'\1true', c, count=1)
@@ -2007,7 +2082,8 @@ apply_memory_perf_patches() {
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
     if grep -q "MEM_PERF_APPLIED" "$tu_device_cc"; then
-        log_info "Memory perf patches already applied"        return 0
+        log_info "Memory perf patches already applied"
+        return 0
     fi
     python3 - "$tu_device_cc" << 'INNEREOF'
 import sys, re
@@ -2029,8 +2105,7 @@ n += k
 pat_samp = r'(maxDescriptorSetSamplers\s*=\s*)(\d+)'
 def boost_samplers(m):
     val = int(m.group(2))
-    return m.group(1) + str(max(val, 4000))
-c, k = re.subn(pat_samp, boost_samplers, c)
+    return m.group(1) + str(max(val, 4000))c, k = re.subn(pat_samp, boost_samplers, c)
 n += k
 
 for pat in [
@@ -2056,7 +2131,8 @@ apply_renderpass_opt() {
         return 0
     fi
     python3 - "$tu_pass" << 'INNEREOF'
-import sys, refp = sys.argv[1]
+import sys, re
+fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
@@ -2078,7 +2154,6 @@ print(f"[OK] Renderpass optimizations applied ({n} changes)")
 INNEREOF
     log_success "Renderpass optimization applied"
 }
-
 apply_shader_perf_patches() {
     log_info "Applying shader performance patches"
     local ir3_nir="${MESA_DIR}/src/freedreno/ir3/ir3_nir.c"
@@ -2105,7 +2180,8 @@ if m:
         n += 1
 
 pat2 = r'(nir_opt_algebraic_before_ffma[^;]*;)'
-if re.search(pat2, c):    m2 = re.search(pat2, c)
+if re.search(pat2, c):
+    m2 = re.search(pat2, c)
     eol = c.find('\n', m2.end())
     c = c[:eol+1] + c[eol+1:]
     n += 1
@@ -2127,7 +2203,6 @@ print(f"[OK] Shader performance patches applied ({n} changes)")
 INNEREOF
     log_success "Shader performance patches applied"
 }
-
 apply_patch_series() {
     local series_dir="$1"
     log_info "Applying patch series from: $series_dir"
@@ -2154,7 +2229,8 @@ apply_patch_series() {
 patch_vk_extensions_table() {
     log_info "Patching vk_extensions.py to add missing extensions"
     local vk_ext_py="${MESA_DIR}/src/vulkan/util/vk_extensions.py"
-    local patch_script="${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/scripts}/vk_extensions_patch.py"    [[ -z "${GITHUB_WORKSPACE:-}" ]] && patch_script="$(dirname "$0")/vk_extensions_patch.py"
+    local patch_script="${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/scripts}/vk_extensions_patch.py"
+    [[ -z "${GITHUB_WORKSPACE:-}" ]] && patch_script="$(dirname "$0")/vk_extensions_patch.py"
     [[ ! -f "$vk_ext_py" ]] && { log_warn "vk_extensions.py not found"; return 0; }
     local vk_xml="${MESA_DIR}/src/vulkan/registry/vk.xml"
     if [[ -f "$patch_script" ]]; then
@@ -2176,8 +2252,7 @@ MISSING = [
     "VK_KHR_maintenance9",
     "VK_KHR_maintenance10",
     "VK_KHR_device_address_commands",
-    "VK_KHR_acceleration_structure",
-    "VK_KHR_ray_query",
+    "VK_KHR_acceleration_structure",    "VK_KHR_ray_query",
     "VK_KHR_ray_tracing_maintenance1",
     "VK_KHR_ray_tracing_pipeline",
     "VK_KHR_shader_subgroup_rotate",
@@ -2203,7 +2278,8 @@ MISSING = [
     "VK_EXT_video_encode_quantization_map",
     "VK_VALVE_video_encode_rgb_conversion",
     "VK_VALVE_fragment_density_map_layered",
-    "VK_VALVE_shader_mixed_float_dot_product",    "VK_QCOM_cooperative_matrix_conversion",
+    "VK_VALVE_shader_mixed_float_dot_product",
+    "VK_QCOM_cooperative_matrix_conversion",
     "VK_QCOM_data_graph_model",
     "VK_QCOM_rotated_copy_commands",
     "VK_QCOM_tile_memory_heap",
@@ -2225,8 +2301,7 @@ def patch_vk_xml(vk_xml_path):
     added = []
     for ext in MISSING:
         if f'name="{ext}"' in c:
-            continue
-        vendor = ext.split("_")[1]
+            continue        vendor = ext.split("_")[1]
         ext_lower = ext[len("VK_"):].lower()
         xml_entry = (
             f'\n    <extension name="{ext}" number="9999" type="device"'
@@ -2252,7 +2327,8 @@ def patch_vk_xml(vk_xml_path):
 def patch_vk_extensions(vk_ext_py_path):
     if not os.path.exists(vk_ext_py_path):
         print(f"[WARN] {vk_ext_py_path} not found")
-        return    with open(vk_ext_py_path) as f:
+        return
+    with open(vk_ext_py_path) as f:
         c = f.read()
     if "VK_MESA_EXT_TABLE_PATCHED" in c:
         print("[OK] vk_extensions.py already patched")
@@ -2274,8 +2350,7 @@ def patch_vk_extensions(vk_ext_py_path):
         entry_args = "1, None"
         if existing_m:
             ver = existing_m.group(1)
-            try:
-                int(ver)
+            try:                int(ver)
                 entry_args = ver + ", None"
             except ValueError:
                 pass
@@ -2301,7 +2376,8 @@ def patch_vk_extensions(vk_ext_py_path):
             c = c[:ins] + entry + c[ins:]
             added.append(ext)
         else:
-            c += "\n# auto-added: " + ext + "\n"            added.append(ext)
+            c += "\n# auto-added: " + ext + "\n"
+            added.append(ext)
 
     c += "\n"
     with open(vk_ext_py_path, "w") as f:
@@ -2323,8 +2399,7 @@ if __name__ == "__main__":
             os.path.join(base, "registry", "vk.xml"),
         ]
         for xml_path in xml_candidates:
-            xml_path = os.path.normpath(xml_path)
-            if os.path.exists(xml_path):
+            xml_path = os.path.normpath(xml_path)            if os.path.exists(xml_path):
                 patch_vk_xml(xml_path)
                 break
         else:
@@ -2340,6 +2415,8 @@ apply_patches() {
     cd "$MESA_DIR"
     [[ "$BUILD_VARIANT" == "vanilla" ]] && { log_info "Vanilla - skipping patches"; return 0; }
 
+    expand_presets
+
     if [[ "$ENABLE_VIEWPORT_CLAMP" == "true" ]]; then
         apply_viewport_clamp_fix
     fi
@@ -2350,7 +2427,8 @@ apply_patches() {
         apply_present_wait_fix
     fi
     if [[ "$ENABLE_FRAME_PACING" == "true" ]]; then
-        apply_frame_pacing_fix    fi
+        apply_frame_pacing_fix
+    fi
     if [[ "$ENABLE_VSYNC_BYPASS" == "true" ]]; then
         apply_vsync_bypass_fix
     fi
@@ -2370,8 +2448,7 @@ apply_patches() {
     
     if [[ "$ENABLE_A7XX_COMPAT" == "true" ]]; then 
         apply_a7xx_series_compat
-        apply_a7xx_visibility_fix
-    fi
+        apply_a7xx_visibility_fix    fi
     if [[ "$ENABLE_A7XX_PERF" == "true" ]]; then apply_a7xx_perf_patches; fi
     
     if [[ "$ENABLE_A750_AUTOTUNE" == "true" ]] && \
@@ -2399,7 +2476,8 @@ apply_patches() {
             log_info "Applying loose patch: $patch_name"
             if git apply --check "$patch" 2>/dev/null; then
                 git apply "$patch"
-                log_success "Applied: $patch_name"            else
+                log_success "Applied: $patch_name"
+            else
                 log_warn "Could not apply: $patch_name"
             fi
         done
@@ -2419,8 +2497,7 @@ create_cross_file() {
     log_info "Creating cross-compilation file"
     local ndk_bin="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sys="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    [[ ! -d "$ndk_bin" ]] && { log_error "NDK not found: $ndk_bin"; exit 1; }
-    local cver
+    [[ ! -d "$ndk_bin" ]] && { log_error "NDK not found: $ndk_bin"; exit 1; }    local cver
     cver=$(ls "${ndk_bin}/aarch64-linux-android"*"-clang" 2>/dev/null \
         | grep -oP "(?<=android)\d+" | sort -rn | head -1)
     [[ -z "$cver" ]] && cver="$API_LEVEL"
@@ -2448,7 +2525,8 @@ c_args        = [$c_args_list]
 cpp_args      = [$cpp_args_list]
 c_link_args   = [$link_args_list]
 cpp_link_args = [$link_args_list]
-EOF    log_success "Cross-compilation file created"
+EOF
+    log_success "Cross-compilation file created"
 }
 
 configure_build() {
@@ -2467,10 +2545,8 @@ configure_build() {
         -Dvulkan-drivers=freedreno \
         -Dvulkan-beta=true \
         -Dfreedreno-kmds=kgsl \
-        -Dvideo-codecs=all
         -Degl=disabled \
-        -Dglx=disabled \
-        -Dgles1=disabled \
+        -Dglx=disabled \        -Dgles1=disabled \
         -Dgles2=disabled \
         -Dopengl=false \
         -Dgbm=disabled \
@@ -2498,7 +2574,8 @@ compile_driver() {
     ninja -C "${MESA_DIR}/build" -j"$cores" 2>&1 | tee "${WORKDIR}/ninja.log"
     local driver="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     [[ ! -f "$driver" ]] && { log_error "Build failed: driver not found"; exit 1; }
-    log_success "Compilation complete"}
+    log_success "Compilation complete"
+}
 
 package_driver() {
     log_info "Packaging driver"
@@ -2518,8 +2595,7 @@ package_driver() {
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy" \
         --remove-section=.comment \
-        --remove-section=.note \
-        --remove-section=.note.gnu.build-id \
+        --remove-section=.note \        --remove-section=.note.gnu.build-id \
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
     local driver_size
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
@@ -2547,6 +2623,7 @@ EOF
     zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
     log_success "Package: ${filename}.zip ($driver_size)"
 }
+
 print_summary() {
     local version commit vulkan_version build_date
     version=$(cat "${WORKDIR}/version.txt")
@@ -2561,14 +2638,16 @@ print_summary() {
     echo "  Build Date     : $build_date"
     echo "  Driver Name    : vulkan.ad00xx.so"
     echo "  Build Variant  : $BUILD_VARIANT"
+    echo "  Patch Preset   : $PATCH_PRESET"
+    echo "  Frame Control  : $FRAME_CONTROL_PRESET"
     echo "  GPU Support    : a7xx (725/730/735/740/750) + a8xx (810/825/829/830/840)"
     echo "  Output         :"
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "    " $9 " (" $5 ")"}'
     echo ""
 }
-
 main() {
     log_info "Turnip Unified Driver Builder (a7xx + a8xx)"
+    expand_presets
     check_deps
     prepare_workdir
     clone_mesa

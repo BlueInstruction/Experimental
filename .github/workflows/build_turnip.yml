@@ -141,6 +141,7 @@ on:
         description: "Enable A750 Dynamic Autotune"
         default: true
 
+      # ── A750 Depth/Precision Hack Controls ──────────────────────────────
       enable_a750_f16_demote:
         type: boolean
         description: "A750: Force F32→F16 demotion (reduces ALU pressure, fixes invisible geometry)"
@@ -173,6 +174,21 @@ on:
       enable_a750_relaxed_precision:
         type: boolean
         description: "A750: RelaxedPrecision shader stripper (downgrades all highp → mediump)"
+        default: false
+
+      enable_a750_force_bindless:
+        type: boolean
+        description: "A750: Force Bindless Descriptors — overrides all update-after-bind limits to max (fixes missing meshes)"
+        default: false
+
+      enable_a750_barrier_noop:
+        type: boolean
+        description: "A750: Zero-Latency Barrier No-Op — collapses pipeline barriers (fixes slow-motion, hazardous)"
+        default: false
+
+      enable_a750_engine_spoof:
+        type: boolean
+        description: "A750: VKD3D engine-name AMD spoof — spoofs as AMD VanGogh when vkd3d detected"
         default: false
 
       a750_gmem_limit_mb:
@@ -223,7 +239,7 @@ env:
 
 jobs:
   pre-check:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     outputs:
       validated: ${{ steps.validate.outputs.ok }}
       mesa_ref: ${{ steps.resolve.outputs.ref }}
@@ -272,7 +288,7 @@ jobs:
               echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true" >> $GITHUB_OUTPUT
               ;;
             experimental)
-              echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true ENABLE_A750_F16_DEMOTE=true ENABLE_A750_DEPTH_BIAS=true ENABLE_A750_RELAXED_PRECISION=true" >> $GITHUB_OUTPUT
+              echo "patch_flags=ENABLE_TIMELINE_HACK=true ENABLE_UBWC_HACK=true APPLY_PATCH_SERIES=true ENABLE_EXT_SPOOF=true ENABLE_VIEWPORT_CLAMP=true ENABLE_TIMELINE_FIX=true ENABLE_A750_F16_DEMOTE=true ENABLE_A750_DEPTH_BIAS=true ENABLE_A750_RELAXED_PRECISION=true ENABLE_A750_FORCE_BINDLESS=true ENABLE_A750_BARRIER_NOOP=true ENABLE_A750_ENGINE_SPOOF=true" >> $GITHUB_OUTPUT
               ;;
           esac
 
@@ -321,11 +337,15 @@ jobs:
       TU_FORCE_IMMEDIATE_PRESENT: ${{ inputs.frame_control_preset != 'disabled' && '1' || '0' }}
       PATCH_PRESET: ${{ inputs.patch_preset }}
       FRAME_CONTROL_PRESET: ${{ inputs.frame_control_preset }}${{ needs.pre-check.outputs.patch_flags }}${{ needs.pre-check.outputs.frame_flags }}
+      # ── A750 Depth/Precision Hacks ───────────────────────────────────────
       ENABLE_A750_F16_DEMOTE: ${{ inputs.enable_a750_f16_demote }}
       ENABLE_A750_DEPTH_BIAS: ${{ inputs.enable_a750_depth_bias }}
       A750_DEPTH_BIAS_CONSTANT: ${{ inputs.a750_depth_bias_constant }}
       A750_DEPTH_BIAS_CLAMP: ${{ inputs.a750_depth_bias_clamp }}
       ENABLE_A750_RELAXED_PRECISION: ${{ inputs.enable_a750_relaxed_precision }}
+      ENABLE_A750_FORCE_BINDLESS: ${{ inputs.enable_a750_force_bindless }}
+      ENABLE_A750_BARRIER_NOOP: ${{ inputs.enable_a750_barrier_noop }}
+      ENABLE_A750_ENGINE_SPOOF: ${{ inputs.enable_a750_engine_spoof }}
       CFLAGS_EXTRA: >-
         ${{ inputs.enable_perf == true
             && '-O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only'
@@ -493,6 +513,9 @@ jobs:
             ${{ inputs.enable_a750_f16_demote == true && '- ⚡ A750 F32→F16 Force Demotion' || '' }}
             ${{ inputs.enable_a750_depth_bias == true && format('- 🔧 A750 Depth Bias (const={0}, clamp={1})', inputs.a750_depth_bias_constant, inputs.a750_depth_bias_clamp) || '' }}
             ${{ inputs.enable_a750_relaxed_precision == true && '- 🎯 A750 RelaxedPrecision Shader Stripper' || '' }}
+            ${{ inputs.enable_a750_force_bindless == true && '- 💥 A750 Force Bindless Descriptors (HAZARDOUS)' || '' }}
+            ${{ inputs.enable_a750_barrier_noop == true && '- ⚠️ A750 Zero-Latency Barrier No-Op (HAZARDOUS)' || '' }}
+            ${{ inputs.enable_a750_engine_spoof == true && '- 🎭 A750 VKD3D Engine AMD Spoof (VanGogh)' || '' }}
 
             ### Dynamic Control via ADB
             ```bash

@@ -2536,37 +2536,32 @@ pat_half = r'(options\.half_precision_derivatives\s*=\s*)false'
 c, k = re.subn(pat_half, r'\1true /* A750_F16_DEMOTE */', c, count=1)
 n += k
 
-# ── 3. Inject explicit mediump lowering call if not already present ────────
-# Some Mesa versions only call nir_lower_mediump when the driver requests it.
-inject_call = (
-    "\n   /* A750_F16_DEMOTE: force mediump lowering for a750 half-reg RA */\n"
-    "   NIR_PASS_V(s, nir_lower_mediump_vars, nir_var_function_temp);\n"
-    "   NIR_PASS_V(s, nir_lower_mediump_outputs);\n"
-)
-# Find the NIR optimization loop in ir3_nir_post_opts or ir3_optimize_loop
-m_opt = re.search(r'(ir3_optimize_loop|ir3_nir_post_opts)[^{]*\{', c)
-if m_opt and "nir_lower_mediump_outputs" not in c:
-    ins = c.find('{', m_opt.start()) + 1
-    eol = c.find('\n', ins)
-    c = c[:eol+1] + inject_call + c[eol+1:]
-    n += 1
+# ── 3. Enable lower_mediump in ir3_compiler options (Mesa 26.1 API) ──────
+# In Mesa 26.1 the correct way is to set the compiler option flag,
+# NOT to inject NIR_PASS_V calls (nir_lower_mediump_outputs was removed).
+# The ir3 backend reads this flag and calls the pass internally.
+for pat, repl in [
+    (r'(options\.lower_mediump\s*=\s*)false',
+     r'\g<1>true /* A750_F16_DEMOTE: mediump lowering enabled */'),
+    # Also flip the per-shader lower_mediump_ops flag if present
+    (r'(lower_mediump_ops\s*=\s*)false',
+     r'\g<1>true /* A750_F16_DEMOTE */'),
+    # Force half-precision for texture coords (reduces sampler register usage)
+    (r'(lower_mediump_samplers\s*=\s*)false',
+     r'\g<1>true /* A750_F16_DEMOTE */'),
+]:
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
 
-# ── 4. Protect gl_FragDepth — DO NOT demote depth output ──────────────────
-# Insert a guard that re-promotes the depth output var back to highp AFTER
-# the mediump lowering pass. This prevents black-screen from depth truncation.
-protect_depth = (
-    "\n   /* A750_F16_DEMOTE: protect gl_FragDepth from mediump demotion */\n"
-    "   nir_foreach_shader_out_variable(var, s) {\n"
-    "      if (var->data.location == FRAG_RESULT_DEPTH ||\n"
-    "          var->data.location == FRAG_RESULT_STENCIL)\n"
-    "         var->data.precision = GLSL_PRECISION_HIGH;\n"
-    "   }\n"
-)
-if "FRAG_RESULT_DEPTH" not in c and m_opt:
-    ins2 = c.find('{', m_opt.start()) + 1
-    eol2 = c.find('\n', ins2)
-    c = c[:eol2+1] + protect_depth + c[eol2+1:]
-    n += 1
+# ── 4. Depth output safety — use Mesa 26.1 compatible approach ────────────
+# In Mesa 26.1 we cannot inject nir_foreach_shader_out_variable without
+# including the right headers. Instead, set the "no_mediump_on_frag_depth"
+# compiler option if it exists (safe no-op if not present).
+pat_depth_safe = r'(no_mediump_on_frag_depth\s*=\s*)false'
+c, k = re.subn(pat_depth_safe,
+               r'\g<1>true /* A750_F16_DEMOTE: protect frag depth */',
+               c, count=1)
+n += k
 
 with open(fp_nir, 'w') as f: f.write(c)
 print(f"[OK] A750 F16 demotion: {n} changes in ir3_nir.c")
@@ -2745,29 +2740,30 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# Force relax_precision flag on all NIR shaders entering IR3
-# This makes the IR3 register allocator prefer .h half-register slots
-inject = (
-    "\n   /* A750_RELAXED_PREC_NIR: force RelaxedPrecision on all vars */\n"
-    "   nir_foreach_function_impl(impl, s) {\n"
-    "      nir_foreach_ssa_def(impl, def, {\n"
-    "         if (def->bit_size == 32 &&\n"
-    "             nir_alu_type_get_base_type(def->parent_instr->type) == nir_type_float)\n"
-    "            def->divergent = false; /* hint: allow half-reg folding */\n"
-    "      });\n"
-    "   }\n"
-)
+# Mesa 26.1: nir_foreach_ssa_def was REMOVED (SSA is now always used).
+# Correct approach: flip compiler option flags via regex — no code injection.
+# These flags tell the ir3 backend to prefer .h (half-register) slots
+# during register allocation, achieving the same effect safely.
 
-# Find the pre-IR3 NIR preparation function
-m = re.search(r'(ir3_nir_pre_opts|ir3_finalize_nir)[^{]*\{', c)
-if m:
-    ins = c.find('{', m.start()) + 1
-    eol = c.find('\n', ins)
-    c = c[:eol+1] + inject + c[eol+1:]
-    n += 1
+# lower_mediump: core flag enabling mediump→half-reg lowering
+for pat, repl in [
+    (r'(options\.lower_mediump\s*=\s*)false',
+     r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
+    # promote_mediump: promote mediump to half in the RA
+    (r'(options\.promote_mediump\s*=\s*)false',
+     r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
+    # Force f16 ALU where safe (Mesa 26.1 flag name)
+    (r'(options\.force_mediump_nir\s*=\s*)false',
+     r'\g<1>true /* A750_RELAXED_PREC_NIR */'),
+]:
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
+
+# Mark the file so we don't re-apply
+c += "\n/* A750_RELAXED_PREC_NIR */\n"
 
 with open(fp, 'w') as f: f.write(c)
-print(f"[OK] A750 RelaxedPrecision NIR pass injected ({n} sites)")
+print(f"[OK] A750 RelaxedPrecision: {n} compiler flags flipped in ir3_nir.c")
 PYEOF
     fi
 

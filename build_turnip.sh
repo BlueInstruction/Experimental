@@ -2140,16 +2140,15 @@ if last_inc == 0:
     sys.exit(0)
 
 helper = """
+#include <sys/system_properties.h>
 static uint32_t tu_get_android_prop_u32(const char* prop, uint32_t def) {
-    char val[PROP_VALUE_MAX] = {};
+    char val[92] = {};
     return (__system_property_get(prop, val) > 0) ? (uint32_t)atoi(val) : def;
 }
 static bool tu_get_android_prop_bool(const char* prop, bool def) {
-    char val[PROP_VALUE_MAX] = {};
-    return (__system_property_get(prop, val) > 0) ? (strcmp(val, "1") == 0) : def;
+    char val[92] = {};
+    return (__system_property_get(prop, val) > 0) ? (val[0] == '1') : def;
 }
-static uint32_t tu_get_android_prop_u32(const char*, uint32_t def) { return def; }
-static bool tu_get_android_prop_bool(const char*, bool def) { return def; }
 """
 
 if "tu_get_android_prop_u32" not in c:
@@ -2642,7 +2641,7 @@ tu_a750_apply_engine_spoof(struct tu_physical_device *pdev,
    if (!app_info || !app_info->pEngineName) return;
    if (!strstr(app_info->pEngineName, "vkd3d")) return;
 
-   char prop[PROP_VALUE_MAX] = {};
+   char prop[92] = {};
    if (__system_property_get("debug.tu.spoof_vkd3d", prop) <= 0 ||
        strcmp(prop, "1") != 0)
       return;
@@ -2704,6 +2703,281 @@ PYEOF
 }
 
 
+apply_a750_lrz_alpha_fix() {
+    log_info "A750: LRZ disable for alpha-blended pipelines"
+    local tu_pipeline="${MESA_DIR}/src/freedreno/vulkan/tu_pipeline.cc"
+    [[ ! -f "$tu_pipeline" ]] && { log_warn "tu_pipeline.cc not found"; return 0; }
+    if grep -q "A750_LRZ_ALPHA_FIX" "$tu_pipeline"; then
+        log_info "A750 LRZ alpha fix already applied"
+        return 0
+    fi
+    python3 - "$tu_pipeline" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+patch = (
+    "\n   if (pipeline->blend.blend_enable &&"
+    " builder->device->physical_device->dev_id.gpu_id == 0x750) {\n"
+    "      pipeline->lrz.valid = false; /* A750_LRZ_ALPHA_FIX */\n"
+    "      pipeline->lrz.enable = false;\n"
+    "   }\n"
+)
+for fn in [r'(tu_pipeline_builder_parse_depth_stencil[^{]*\{)',
+           r'(tu_pipeline_finish_lrz[^{]*\{)']:
+    m = re.search(fn, c)
+    if m and "A750_LRZ_ALPHA_FIX" not in c:
+        ins = c.find('{', m.start()) + 1
+        eol = c.find('\n', ins)
+        c = c[:eol+1] + patch + c[eol+1:]
+        n += 1
+        break
+for pat, repl in [
+    (r'(lrz\.write\s*=\s*)true', r'\1false /* A750_LRZ_ALPHA_FIX */'),
+]:
+    if "A750_LRZ_ALPHA_FIX" not in c:
+        c, k = re.subn(pat, repl, c, count=1)
+        n += k
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 LRZ alpha fix: {n} changes")
+PYEOF
+    log_success "A750 LRZ alpha fix applied"
+}
+
+
+apply_a750_vsc_fix() {
+    log_info "A750: VSC pipe stream pitch override"
+    local devices_py="${MESA_DIR}/src/freedreno/common/freedreno_devices.py"
+    [[ ! -f "$devices_py" ]] && { log_warn "freedreno_devices.py not found"; return 0; }
+    if grep -q "A750_VSC_FIX" "$devices_py"; then
+        log_info "A750 VSC fix already applied"
+        return 0
+    fi
+    python3 - "$devices_py" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+for pat, repl in [
+    (r"(chip_id\s*=\s*0x[Ff]*43050[Cc]00[^,\n]*,\s*name\s*=\s*\"FD750\"[^)]*num_vsc_pipes\s*=\s*)(\d+)",
+     r"\g<1>32 /* A750_VSC_FIX */"),
+    (r"(\"FD750\".*?vsc_draw_strm_pitch\s*=\s*)(\d+)", r"\g<1>0x440 /* A750_VSC_FIX */"),
+    (r"(\"FD750\".*?vsc_prim_strm_pitch\s*=\s*)(\d+)", r"\g<1>0x1040 /* A750_VSC_FIX */"),
+]:
+    c, k = re.subn(pat, repl, c, count=1, flags=re.DOTALL)
+    n += k
+if n == 0:
+    m = re.search(r'name\s*=\s*"FD750"', c)
+    if m:
+        a750_block = c[max(0, m.start()-200):m.start()+500]
+        print(f"[INFO] FD750 block found but patterns didn't match. Block: {a750_block[:200]}")
+    else:
+        print("[WARN] FD750 entry not found in freedreno_devices.py")
+else:
+    print(f"[OK] A750 VSC fix: {n} changes")
+with open(fp, 'w') as f: f.write(c + "\n# A750_VSC_FIX\n" if n > 0 else c)
+PYEOF
+    log_success "A750 VSC pipe fix applied"
+}
+
+
+apply_a750_gmem_tile_fix() {
+    log_info "A750: GMEM tile minimum size for open-world titles"
+    local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    [[ ! -f "$tu_cmd" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    if grep -q "A750_GMEM_TILE_FIX" "$tu_cmd"; then
+        log_info "A750 GMEM tile fix already applied"
+        return 0
+    fi
+    python3 - "$tu_cmd" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+patch = (
+    "\n   if (cmd->device->physical_device->dev_id.gpu_id == 0x750) {\n"
+    "      if (state->tiling->tile_count.width < 4)\n"
+    "         state->tiling->tile_count.width = 4;\n"
+    "      if (state->tiling->tile_count.height < 4)\n"
+    "         state->tiling->tile_count.height = 4;\n"
+    "   } /* A750_GMEM_TILE_FIX */\n"
+)
+for fn in [r'(tu_cmd_update_tiling[^{]*\{)',
+           r'(tu_cmd_begin_render_pass[^{]*\{)']:
+    m = re.search(fn, c)
+    if m and "A750_GMEM_TILE_FIX" not in c:
+        ins = c.find('{', m.start()) + 1
+        eol = c.find('\n', ins)
+        c = c[:eol+1] + patch + c[eol+1:]
+        n += 1
+        break
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 GMEM tile fix: {n} changes")
+PYEOF
+    log_success "A750 GMEM tile fix applied"
+}
+
+
+apply_a750_timestamp_fix() {
+    log_info "A750: Timestamp period correction (19.2MHz RBBM)"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "A750_TIMESTAMP_FIX" "$tu_device_cc"; then
+        log_info "A750 timestamp fix already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+for pat in [
+    r'(timestampPeriod\s*=\s*)[0-9.f]+',
+    r'(props->timestampPeriod\s*=\s*)[0-9.f]+',
+    r'(props2\.properties\.limits\.timestampPeriod\s*=\s*)[0-9.f]+',
+]:
+    c, k = re.subn(pat, r'\g<1>52.083f /* A750_TIMESTAMP_FIX */', c, count=1)
+    n += k
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 timestamp period: {n} sites set to 52.083f (1e9/19.2MHz)")
+PYEOF
+    log_success "A750 timestamp correction applied"
+}
+
+
+apply_a750_cp_stall_fix() {
+    log_info "A750: CP idle stall before present"
+    local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
+    [[ ! -f "$tu_cmd" ]] && { log_warn "tu_cmd_buffer.cc not found"; return 0; }
+    if grep -q "A750_CP_STALL_FIX" "$tu_cmd"; then
+        log_info "A750 CP stall fix already applied"
+        return 0
+    fi
+    python3 - "$tu_cmd" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+stall = (
+    "\n   if (cmd->device->physical_device->dev_id.gpu_id == 0x750) {\n"
+    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_IDLE, 0); /* A750_CP_STALL_FIX */\n"
+    "      tu_cs_emit_pkt7(&cmd->cs, CP_WAIT_FOR_ME, 0);\n"
+    "   }\n"
+)
+for fn in [r'(tu_cmd_buffer_end_render_pass[^{]*\{)',
+           r'(tu_CmdEndRenderPass2?\s*\([^{]*\{)']:
+    m = re.search(fn, c)
+    if m and "A750_CP_STALL_FIX" not in c:
+        ins = c.find('{', m.start()) + 1
+        eol = c.find('\n', ins)
+        c = c[:eol+1] + stall + c[eol+1:]
+        n += 1
+        break
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 CP stall fix: {n} changes")
+PYEOF
+    log_success "A750 CP stall fix applied"
+}
+
+
+apply_a750_vrs_enable() {
+    log_info "A750: Fragment shading rate enable"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "A750_VRS_ENABLE" "$tu_device_cc"; then
+        log_info "A750 VRS already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+for pat, repl in [
+    (r'(has_shading_rate\s*=\s*)false', r'\1true /* A750_VRS_ENABLE */'),
+    (r'(fragmentShadingRate\s*=\s*)false', r'\1true /* A750_VRS_ENABLE */'),
+    (r'(pipelineFragmentShadingRate\s*=\s*)false', r'\1true /* A750_VRS_ENABLE */'),
+    (r'(primitiveFragmentShadingRate\s*=\s*)false', r'\1true /* A750_VRS_ENABLE */'),
+    (r'(\.KHR_fragment_shading_rate\s*=\s*)false', r'\1true /* A750_VRS_ENABLE */'),
+]:
+    c, k = re.subn(pat, repl, c)
+    n += k
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 VRS: {n} flags enabled")
+PYEOF
+    log_success "A750 fragment shading rate enabled"
+}
+
+
+apply_a750_uche_fix() {
+    log_info "A750: UCHE cache prefetch tuning"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "A750_UCHE_FIX" "$tu_device_cc"; then
+        log_info "A750 UCHE fix already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+uche_inject = (
+    "\n   if (pdevice->dev_id.gpu_id == 0x750) {\n"
+    "      pdevice->info->a6xx.magic.UCHE_CACHE_WAYS = 0x00084000; /* A750_UCHE_FIX */\n"
+    "   }\n"
+)
+for fn in [r'(tu_physical_device_init[^{]*\{)',
+           r'(tu_enumerate_physical_devices[^{]*\{)']:
+    m = re.search(fn, c)
+    if m and "A750_UCHE_FIX" not in c:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        c = c[:ins] + uche_inject + c[ins:]
+        n += 1
+        break
+for pat, repl in [
+    (r'(UCHE_CACHE_WAYS\s*=\s*)0x[0-9a-fA-F]+', r'\g<1>0x00084000 /* A750_UCHE_FIX */'),
+]:
+    if "A750_UCHE_FIX" not in c:
+        c, k = re.subn(pat, repl, c, count=1)
+        n += k
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 UCHE tuning: {n} changes")
+PYEOF
+    log_success "A750 UCHE cache tuning applied"
+}
+
+
+apply_a750_fake_frames() {
+    log_info "A750: Frame pacing hint for emulator"
+    local tu_wsi="${MESA_DIR}/src/freedreno/vulkan/tu_wsi.cc"
+    [[ ! -f "$tu_wsi" ]] && { log_warn "tu_wsi.cc not found"; return 0; }
+    if grep -q "A750_FAKE_FRAMES" "$tu_wsi"; then
+        log_info "A750 fake frames already applied"
+        return 0
+    fi
+    python3 - "$tu_wsi" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+for pat, repl in [
+    (r'(\.minImageCount\s*=\s*)(\d+)', r'\g<1>3 /* A750_FAKE_FRAMES */'),
+    (r'(minImageCount\s*=\s*MAX2\s*\()[^)]+\)',
+     r'\g<1>3, caps.minImageCount) /* A750_FAKE_FRAMES */'),
+    (r'(\.presentMode\s*=\s*)VK_PRESENT_MODE_FIFO_KHR',
+     r'\g<1>VK_PRESENT_MODE_MAILBOX_KHR /* A750_FAKE_FRAMES */'),
+]:
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
+c += "\n/* A750_FAKE_FRAMES */\n"
+with open(fp, 'w') as f: f.write(c)
+print(f"[OK] A750 fake frames pacing: {n} changes")
+PYEOF
+    log_success "A750 frame pacing hint applied"
+}
+
+
 apply_patches() {
     log_info "Applying patches"
     cd "$MESA_DIR"
@@ -2737,6 +3011,14 @@ apply_patches() {
     if [[ "$ENABLE_A750_FORCE_BINDLESS" == "true" ]]; then apply_a750_force_bindless; fi
     if [[ "$ENABLE_A750_BARRIER_NOOP" == "true" ]]; then apply_a750_barrier_noop; fi
     if [[ "$ENABLE_A750_ENGINE_SPOOF" == "true" ]]; then apply_a750_engine_spoof; fi
+    apply_a750_lrz_alpha_fix
+    apply_a750_vsc_fix
+    apply_a750_gmem_tile_fix
+    apply_a750_timestamp_fix
+    apply_a750_cp_stall_fix
+    apply_a750_vrs_enable
+    apply_a750_uche_fix
+    apply_a750_fake_frames
 
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do

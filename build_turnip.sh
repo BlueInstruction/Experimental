@@ -2836,6 +2836,12 @@ configure_build() {
         log_error "Meson configuration failed"
         exit 1
     fi
+    find "${MESA_DIR}/build" -name "vk_enum_to_str.c" | while read -r f; do
+        sed -i \
+            -e 's/VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT/VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_KHR/g' \
+            -e 's/VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_EXT/VK_DEVICE_FAULT_VENDOR_BINARY_HEADER_VERSION_MAX_ENUM_KHR/g' \
+            "$f"
+    done
     log_success "Build configured"
 }
 

@@ -47,8 +47,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ubuntu-latest    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -98,7 +97,6 @@ jobs:
         run: |
           arm64ec-w64-mingw32-clang --version || echo "arm64ec toolchain check"
           i686-w64-mingw32-clang --version
-
       - name: Fetch Version
         run: |
           if [[ -n "${{ inputs.VERSION }}" ]]; then
@@ -147,8 +145,7 @@ jobs:
               cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
               echo "SPIRV Headers updated to $SPIRV_TAG"
             fi
-            rm -rf spirv-h
-          fi
+            rm -rf spirv-h          fi
 
       - name: Apply Patches
         env:
@@ -197,8 +194,7 @@ jobs:
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
               (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
               (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>619;'),
           ]
@@ -247,8 +243,7 @@ jobs:
               (r'(options11\.AtomicInt64OnTypedResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options11\.DerivativesInMeshAndAmplificationShadersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options12\.MSPrimitivesPipelineStatisticIncludesCulledPrimitives\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.UnrestrictedBufferTextureCopyPitchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.UnrestrictedVertexElementAlignmentSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -297,8 +292,7 @@ jobs:
               "minimal": dev_minimal,
               "standard": dev_standard,
               "aggressive": dev_aggressive,
-              "ultra": dev_ultra,
-          }
+              "ultra": dev_ultra,          }
           dev = preset_map.get(preset, dev_ultra)
 
           patch_file("libs/vkd3d/device.c", gpu + dev)
@@ -347,7 +341,6 @@ jobs:
                       if not f.endswith((".c", ".h")): continue
                       path = os.path.join(root, f)
                       patch_file(path, submission_patches)
-
           if preset in ("aggressive", "ultra"):
               for root, dirs, files in os.walk("libs/vkd3d"):
                   for f in files:
@@ -389,12 +382,15 @@ jobs:
           cpu_family = 'aarch64'
           cpu = 'arm64ec'
           endian = 'little'
+          [c_args]
+          c_args = ['-D_ARM64EC_', '-D__arm64ec__']
+          [cpp_args]
+          cpp_args = ['-D_ARM64EC_', '-D__arm64ec__']
           EOF
 
           cat > crossfile-x86.txt << 'EOF'
           [binaries]
-          ar = 'i686-w64-mingw32-ar'
-          c = 'i686-w64-mingw32-clang'
+          ar = 'i686-w64-mingw32-ar'          c = 'i686-w64-mingw32-clang'
           cpp = 'i686-w64-mingw32-clang++'
           ld = 'i686-w64-mingw32-ld'
           windres = 'i686-w64-mingw32-windres'
@@ -412,8 +408,17 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
-          LINK_FLAGS="-flto=thin -Wl,--icf=safe"
+          # ARM64EC: disable LTO due to EC symbol resolution issues in llvm-mingw
+          # Keep LTO for x86 builds for size optimization
+          if [[ "${{ github.workflow }}" == *"ARM64EC"* ]]; then
+            BUILD_FLAGS="-O3 -DNDEBUG"
+            LINK_FLAGS=""
+            MESON_DXIL="-Ddxil-spirv=disabled"
+          else
+            BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
+            LINK_FLAGS="-flto=thin -Wl,--icf=safe"
+            MESON_DXIL=""
+          fi
           [[ "${{ inputs.BUILD_TYPE }}" == "debug" ]] && BUILD_FLAGS="-O0 -g -DDEBUG" && LINK_FLAGS=""
 
           meson setup build-arm64ec \
@@ -422,7 +427,8 @@ jobs:
             -Dc_args="$BUILD_FLAGS" \
             -Dcpp_args="$BUILD_FLAGS" \
             -Dc_link_args="$LINK_FLAGS" \
-            -Dcpp_link_args="$LINK_FLAGS"
+            -Dcpp_link_args="$LINK_FLAGS" \
+            $MESON_DXIL
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             tail -n 50 build-arm64ec.log
@@ -433,8 +439,7 @@ jobs:
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
             -Dc_args="$BUILD_FLAGS" \
-            -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$LINK_FLAGS" \
+            -Dcpp_args="$BUILD_FLAGS" \            -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
@@ -483,7 +488,6 @@ jobs:
           PKG="vkd3d-proton-arm64ec-${{ env.VER }}-${{ env.COMMIT }}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -518,7 +522,7 @@ jobs:
           - UMA + CacheCoherentUMA + IsolatedMMU enabled
           - Shader Model 6.8 / Feature Level 12_2 / SDK 619
           - Batch submission disabled (reduce latency)
-          - LTO thin link optimization
+          - LTO thin link optimization (x86 only)
           - D3D12 Options 1-21 feature flags maximized
           - Descriptor indexing limits raised (1M+ descriptors)
           - Enhanced barriers + relaxed format casting
@@ -533,5 +537,4 @@ jobs:
             "${{ env.PKG }}.wcp"
 
       - name: Cleanup
-        if: always()
-        run: rm -rf src out pkg vk-headers spirv-h
+        if: always()        run: rm -rf src out pkg vk-headers spirv-h

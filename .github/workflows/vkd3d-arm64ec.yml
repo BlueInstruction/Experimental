@@ -47,7 +47,8 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest    timeout-minutes: 120
+    runs-on: ubuntu-latest    
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -537,4 +538,5 @@ jobs:
             "${{ env.PKG }}.wcp"
 
       - name: Cleanup
-        if: always()        run: rm -rf src out pkg vk-headers spirv-h
+        if: always()        
+        run: rm -rf src out pkg vk-headers spirv-h

@@ -515,9 +515,9 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}-fsync",
+            "versionName": "${VER}-${COMMIT}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton Ultra+Fsync (Adreno UMA + all features + fsync perf)",
+            "description": "VKD3D-Proton (UMA + all features + fsync perf)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -527,7 +527,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-${VER}-${COMMIT}-fsync"
+          PKG="vkd3d-proton-${VER}-${COMMIT}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 
@@ -546,8 +546,8 @@ jobs:
         run: |
           gh release create "${{ env.RELEASE_TAG }}" \
             --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ${{ env.VER }} Ultra+Fsync — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ${{ env.VER }} (Ultra + Fsync + Performance)
+            --title "VKD3D-Proton ${{ env.VER }} — ${{ env.BUILD_DATE }}" \
+            --notes "## VKD3D-Proton ${{ env.VER }}
 
           | Property | Value |
           |----------|-------|
@@ -572,7 +572,7 @@ jobs:
           - Immediate present (skip VSync wait)
           - Memory residency persistence (skip eviction)
 
-          ### D3D12 Ultra Features
+          ### D3D12 Features
           - AMD Van Gogh GPU spoof (0x1002:0x163f)
           - UMA + CacheCoherentUMA + IsolatedMMU
           - Shader Model 6.8 / Feature Level 12_2 / SDK 619
@@ -584,11 +584,7 @@ jobs:
           - LTO thin optimization
           - Latest Vulkan + SPIRV headers
 
-          ### Compatible With
-          - Box64 v0.4.0+ / WowBox64
-          - FEX-Emu v2603+
-          - Proton / Wine (esync/fsync/ntsync)
-
+  
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
 

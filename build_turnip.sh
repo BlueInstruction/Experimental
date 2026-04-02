@@ -938,27 +938,28 @@ apply_deck_emu_support() {
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
+NL = "\n"
 pat = r'(TU_DEBUG_FORCE_CONCURRENT_BINNING\s*=\s*BITFIELD64_BIT\(\d+\),?)'
 m = re.search(pat, c)
 if m:
-    eol = c.find('
-', m.end())
-    c = c[:eol+1] + '   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(37),
-' + c[eol+1:]
+    eol = c.find(NL, m.end())
+    c = c[:eol+1] + "   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(37)," + NL + c[eol+1:]
     with open(fp, 'w') as f: f.write(c)
-    print('[OK] TU_DEBUG_DECK_EMU added to tu_util.h')
+    print('[OK] TU_DEBUG_DECK_EMU added to tu_util.h at bit 37')
 else:
     bits = list(map(int, re.findall(r'BITFIELD64_BIT\((\d+)\)', c)))
     if bits:
         nb = max(bits) + 1
         all_m = list(re.finditer(r'   TU_DEBUG_\w+\s*=\s*BITFIELD64_BIT\(\d+\),?', c))
         if all_m:
-            eol = c.find('
-', all_m[-1].end())
-            c = c[:eol+1] + f'   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT({nb}),
-' + c[eol+1:]
+            eol = c.find(NL, all_m[-1].end())
+            c = c[:eol+1] + f"   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT({nb})," + NL + c[eol+1:]
             with open(fp, 'w') as f: f.write(c)
             print(f'[OK] TU_DEBUG_DECK_EMU added at bit {nb}')
+        else:
+            print('[WARN] TU_DEBUG enum not found in tu_util.h')
+    else:
+        print('[WARN] No BITFIELD64_BIT found in tu_util.h')
 PYEOF
     fi
     if [[ -f "$tu_util_cc" ]] && ! grep -q "deck_emu" "$tu_util_cc"; then
@@ -966,20 +967,20 @@ PYEOF
 import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
+NL = "\n"
 pat = r'(\{\s*"forcecb"\s*,\s*TU_DEBUG_FORCE_CONCURRENT_BINNING\s*\})'
 m = re.search(pat, c)
 if m:
-    eol = c.find('
-', m.end())
-    c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },
-' + c[eol+1:]
+    eol = c.find(NL, m.end())
+    c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },' + NL + c[eol+1:]
 else:
     all_m = list(re.finditer(r'\{[^}]+TU_DEBUG_\w+[^}]+\}', c))
     if all_m:
-        eol = c.find('
-', all_m[-1].end())
-        c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },
-' + c[eol+1:]
+        eol = c.find(NL, all_m[-1].end())
+        c = c[:eol+1] + '   { "deck_emu", TU_DEBUG_DECK_EMU },' + NL + c[eol+1:]
+    else:
+        print('[WARN] tu_debug_options table not found')
+        sys.exit(0)
 with open(fp, 'w') as f: f.write(c)
 print('[OK] deck_emu added to tu_debug_options in tu_util.cc')
 PYEOF
@@ -990,54 +991,46 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 if 'TU_DEBUG(DECK_EMU)' in c:
     print('[OK] DECK_EMU already in tu_device.cc'); sys.exit(0)
-
-deck_props = """
-   if (TU_DEBUG(DECK_EMU)) {
-      props->vendorID = 0x1002;
-      props->deviceID = 0x163F;
-   }
-"""
-deck_name = """
-   if (TU_DEBUG(DECK_EMU)) {
-      strcpy(props->deviceName, "AMD Custom GPU 0405 (RADV VANGOGH)");
-   }
-"""
-deck_driver = """
-   if (TU_DEBUG(DECK_EMU)) {
-      p->driverID = VK_DRIVER_ID_MESA_RADV;
-      memset(p->driverName, 0, sizeof(p->driverName));
-      snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "radv");
-   }
-"""
-
+NL = "\n"
+deck_props = (
+    NL + "   if (TU_DEBUG(DECK_EMU)) {" + NL +
+    "      props->vendorID = 0x1002;" + NL +
+    "      props->deviceID = 0x163F;" + NL +
+    "   }" + NL
+)
+deck_name = (
+    NL + "   if (TU_DEBUG(DECK_EMU)) {" + NL +
+    '      strcpy(props->deviceName, "AMD Custom GPU 0405 (RADV VANGOGH)");' + NL +
+    "   }" + NL
+)
+deck_driver = (
+    NL + "   if (TU_DEBUG(DECK_EMU)) {" + NL +
+    "      p->driverID = VK_DRIVER_ID_MESA_RADV;" + NL +
+    "      memset(p->driverName, 0, sizeof(p->driverName));" + NL +
+    '      snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "radv");' + NL +
+    "   }" + NL
+)
 n = 0
-pat_vendor = re.compile(r'(props->deviceID\s*=\s*pdevice->dev_id\.chip_id\s*;)')
-m = pat_vendor.search(c)
+m = re.search(r'props->deviceID\s*=\s*pdevice->dev_id\.chip_id\s*;', c)
 if m:
-    eol = c.find('
-', m.end())
+    eol = c.find(NL, m.end())
     c = c[:eol+1] + deck_props + c[eol+1:]
     n += 1
-
-pat_name = re.compile(r'(strcpy\s*\(\s*props->deviceName\s*,\s*pdevice->name\s*\)\s*;)')
-m = pat_name.search(c)
+m = re.search(r'strcpy\s*\(\s*props->deviceName\s*,\s*pdevice->name\s*\)\s*;', c)
 if m:
-    eol = c.find('
-', m.end())
+    eol = c.find(NL, m.end())
     c = c[:eol+1] + deck_name + c[eol+1:]
     n += 1
-
-pat_driver = re.compile(r'(p->denormBehaviorIndependence\s*=)')
-m = pat_driver.search(c)
+m = re.search(r'p->denormBehaviorIndependence\s*=', c)
 if m:
     c = c[:m.start()] + deck_driver + c[m.start():]
     n += 1
-
 with open(fp, 'w') as f: f.write(c)
 print(f'[OK] TU_DEBUG(DECK_EMU) injected: {n} sites in tu_device.cc')
 PYEOF
     log_success "Deck emulation (TU_DEBUG=deck_emu) applied"
 }
+
 
 apply_custom_debug_flags() {
     log_info "Adding custom TU_DEBUG flags"

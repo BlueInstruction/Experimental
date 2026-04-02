@@ -464,54 +464,31 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
-          LINK_FLAGS="-flto=thin -Wl,--icf=safe"
+          BUILD_FLAGS="-O3 -DNDEBUG"
 
-          # Remove -static from link_args assignments ONLY (not from has_link_argument checks)
-          python3 -c "
-          with open('meson.build', 'r') as f: lines = f.readlines()
-          out = []
-          for line in lines:
-              # Only skip lines that ADD -static to link_args
-              if 'link_args' in line and '+=' in line and '-static' in line:
-                  out.append('# ' + line.rstrip() + '  # DISABLED_ARM64EC\n')
-              else:
-                  out.append(line)
-          with open('meson.build', 'w') as f: f.writelines(out)
-          print('[OK] Removed -static link_args from meson.build')
-          "
-
-          # ARM64EC build
+          # ARM64EC build - no custom link args, let meson handle it
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
             -Dc_args="$BUILD_FLAGS" \
-            -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt" \
-            -Dcpp_link_args="$LINK_FLAGS -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
+            -Dcpp_args="$BUILD_FLAGS"
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             tail -n 50 build-arm64ec.log
             exit 1
           fi
 
-          # Restore meson.build for x86 build
-          git checkout -- meson.build 2>/dev/null || true
-
-          # x86 build - static works fine
+          # x86 build
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
             -Dc_args="$BUILD_FLAGS" \
-            -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$LINK_FLAGS" \
-            -Dcpp_link_args="$LINK_FLAGS"
+            -Dcpp_args="$BUILD_FLAGS"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             tail -n 50 build-x86.log
             exit 1
           fi
-
       - name: Verify Build
         if: steps.check.outputs.SKIP == 'false'
         run: |

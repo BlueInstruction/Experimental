@@ -2511,7 +2511,7 @@ tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
    (void)dt;
    /* limits already patched at source level — this is a belt-and-suspenders
     * runtime override in case Mesa's reported limits still cap us */
-   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.limits;
+   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.properties.limits;
    lim->maxBoundDescriptorSets                        = 8;
    lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
    lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
@@ -2655,13 +2655,13 @@ tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
    if (!getenv("TU_SPOOF_VKD3D")) return;
 
    /* Spoof as AMD Radeon RX 6600M (VanGogh class — same as Steam Deck) */
-   pdev->vk.properties.vendorID      = 0x1002u;   /* AMD */
-   pdev->vk.properties.deviceID      = 0x163Fu;   /* Radeon RX 6600M / VanGogh */
-   pdev->vk.properties.driverVersion = 0x8000000u;
-   strncpy(pdev->vk.properties.deviceName,
+   pdev->vk.properties.properties.vendorID      = 0x1002u;   /* AMD */
+   pdev->vk.properties.properties.deviceID      = 0x163Fu;   /* Radeon RX 6600M / VanGogh */
+   pdev->vk.properties.properties.driverVersion = 0x8000000u;
+   strncpy(pdev->vk.properties.properties.deviceName,
            "AMD Radeon Graphics (RADV VANGOGH)",
            VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
-   pdev->vk.properties.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\\0';
+   pdev->vk.properties.properties.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\\0';
 
 }
 """

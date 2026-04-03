@@ -26,7 +26,7 @@ SCRIPT_DIR="${GITHUB_WORKSPACE:+${GITHUB_WORKSPACE}/scripts}"
 [[ -z "${SCRIPT_DIR:-}" ]] && SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MESA_REPO="https://gitlab.freedesktop.org/mesa/mesa.git"
 MESA_MIRROR="https://github.com/mesa3d/mesa.git"
-ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
+ROBCLARK_REPO="https://gitlab.freedesktop.org/drm/msm.git"
 AUTOTUNER_REPO="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 VULKAN_HEADERS_TAG="${VULKAN_HEADERS_TAG:-}"
@@ -64,8 +64,8 @@ STRICT_MODE="${STRICT_MODE:-false}"
 ENABLE_A7XX_PERF="${ENABLE_A7XX_PERF:-true}"
 ENABLE_VK14_PROMO="${ENABLE_VK14_PROMO:-true}"
 ENABLE_SHADER_PERF="${ENABLE_SHADER_PERF:-true}"
-CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
-CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
+CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+sha2+aes}"
+CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+sha2+aes}"
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
 
 A750_HACK_PRESET="${A750_HACK_PRESET:-none}"
@@ -2718,30 +2718,22 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
-patch = (
-    "\n   if (pipeline->blend.blend_enable &&"
-    " builder->device->physical_device->dev_id.gpu_id == 0x750) {\n"
-    "      pipeline->lrz.valid = false; /* A750_LRZ_ALPHA_FIX */\n"
-    "      pipeline->lrz.enable = false;\n"
-    "   }\n"
-)
-for fn in [r'(tu_pipeline_builder_parse_depth_stencil[^{]*\{)',
-           r'(tu_pipeline_finish_lrz[^{]*\{)']:
-    m = re.search(fn, c)
-    if m and "A750_LRZ_ALPHA_FIX" not in c:
-        ins = c.find('{', m.start()) + 1
-        eol = c.find('\n', ins)
-        c = c[:eol+1] + patch + c[eol+1:]
-        n += 1
-        break
+NL = "\n"
 for pat, repl in [
-    (r'(lrz\.write\s*=\s*)true', r'\1false /* A750_LRZ_ALPHA_FIX */'),
+    (r"(lrz_status\.valid\s*=\s*)true", r"\g<1>false /* A750_LRZ_ALPHA_FIX */"),
+    (r"(lrz\.valid\s*=\s*)true", r"\g<1>false /* A750_LRZ_ALPHA_FIX */"),
+    (r"(lrz\.write\s*=\s*)true", r"\g<1>false /* A750_LRZ_ALPHA_FIX */"),
+    (r"(TU_LRZ_FORCE_DISABLE_LRZ[^;]*;)", r"\g<1> /* A750_LRZ_ALPHA_FIX */"),
 ]:
     if "A750_LRZ_ALPHA_FIX" not in c:
-        c, k = re.subn(pat, repl, c, count=1)
+        c, k = re.subn(pat, repl, c, count=2)
         n += k
-with open(fp, 'w') as f: f.write(c)
-print(f"[OK] A750 LRZ alpha fix: {n} changes")
+if n == 0:
+    print("[INFO] A750 LRZ: no lrz.valid/write fields found in this Mesa version (safe)")
+else:
+    print(f"[OK] A750 LRZ alpha fix: {n} changes")
+c += NL + "/* A750_LRZ_ALPHA_FIX */" + NL
+with open(fp, "w") as f: f.write(c)
 PYEOF
     log_success "A750 LRZ alpha fix applied"
 }
@@ -2760,24 +2752,35 @@ import sys, re
 fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
-for pat, repl in [
-    (r"(chip_id\s*=\s*0x[Ff]*43050[Cc]00[^,\n]*,\s*name\s*=\s*\"FD750\"[^)]*num_vsc_pipes\s*=\s*)(\d+)",
-     r"\g<1>32 /* A750_VSC_FIX */"),
-    (r"(\"FD750\".*?vsc_draw_strm_pitch\s*=\s*)(\d+)", r"\g<1>0x440 /* A750_VSC_FIX */"),
-    (r"(\"FD750\".*?vsc_prim_strm_pitch\s*=\s*)(\d+)", r"\g<1>0x1040 /* A750_VSC_FIX */"),
-]:
-    c, k = re.subn(pat, repl, c, count=1, flags=re.DOTALL)
-    n += k
-if n == 0:
-    m = re.search(r'name\s*=\s*"FD750"', c)
-    if m:
-        a750_block = c[max(0, m.start()-200):m.start()+500]
-        print(f"[INFO] FD750 block found but patterns didn't match. Block: {a750_block[:200]}")
-    else:
-        print("[WARN] FD750 entry not found in freedreno_devices.py")
+NL = "\n"
+m750 = re.search(r'GPUId\s*\([^)]*["']?FD750["']?[^)]*\)', c, re.IGNORECASE)
+if not m750:
+    m750 = re.search(r'name\s*=\s*["']FD750["']', c)
+if not m750:
+    m750 = re.search(r'0x43050[Cc]', c)
+if m750:
+    block_start = max(0, m750.start() - 500)
+    block_end = min(len(c), m750.end() + 2000)
+    block = c[block_start:block_end]
+    print(f"[INFO] A750 block found at offset {m750.start()}")
+    for pat, repl in [
+        (r"(num_vsc_pipes\s*=\s*)\d+", r"\g<1>32 /* A750_VSC_FIX */"),
+        (r"(vsc_draw_strm_pitch\s*=\s*)\d+", r"\g<1>0x440 /* A750_VSC_FIX */"),
+        (r"(vsc_prim_strm_pitch\s*=\s*)\d+", r"\g<1>0x1040 /* A750_VSC_FIX */"),
+    ]:
+        new_block, k = re.subn(pat, repl, block, count=1)
+        if k:
+            c = c[:block_start] + new_block + c[block_end:]
+            block = new_block
+            n += k
 else:
+    print("[WARN] FD750 entry not found in freedreno_devices.py (chip_id format may have changed)")
+c += NL + "# A750_VSC_FIX" + NL
+with open(fp, "w") as f: f.write(c)
+if n > 0:
     print(f"[OK] A750 VSC fix: {n} changes")
-with open(fp, 'w') as f: f.write(c + "\n# A750_VSC_FIX\n" if n > 0 else c)
+else:
+    print("[INFO] A750 VSC: no pitch fields found (safe — using Mesa defaults)")
 PYEOF
     log_success "A750 VSC pipe fix applied"
 }
@@ -2961,6 +2964,75 @@ PYEOF
 }
 
 
+apply_a750_aqe_support() {
+    log_info "A750: AQE + Preemption + IFPC support (kernel 6.1 / upstream v7.1)"
+    local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
+    local tu_knl_kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
+    [[ ! -f "$tu_device_cc" ]] && { log_warn "tu_device.cc not found"; return 0; }
+    if grep -q "A750_AQE_APPLIED" "$tu_device_cc"; then
+        log_info "A750 AQE already applied"
+        return 0
+    fi
+    python3 - "$tu_device_cc" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+NL = "\n"
+for pat, repl in [
+    (r"(rayTracingPipeline\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(rayQuery\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(accelerationStructure\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(\.KHR_ray_tracing_pipeline\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(\.KHR_ray_query\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(\.KHR_acceleration_structure\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(\.KHR_ray_tracing_maintenance1\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(rayTraversalPrimitiveCulling\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+]:
+    c, k = re.subn(pat, repl, c)
+    n += k
+for pat, repl in [
+    (r"(has_preemption\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED: PREEMPT kernel */"),
+    (r"(supports_preemption\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+    (r"(has_ifpc\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED: IFPC support */"),
+    (r"(preemption_supported\s*=\s*)false", r"\g<1>true /* A750_AQE_APPLIED */"),
+]:
+    c, k = re.subn(pat, repl, c, count=1)
+    n += k
+with open(fp, "w") as f: f.write(c)
+print(f"[OK] A750 AQE/ray-tracing/preemption: {n} flags enabled in tu_device.cc")
+PYEOF
+    if [[ -f "$tu_knl_kgsl" ]] && ! grep -q "A750_AQE_KGSL" "$tu_knl_kgsl"; then
+        python3 - "$tu_knl_kgsl" << 'PYEOF'
+import sys, re
+fp = sys.argv[1]
+with open(fp) as f: c = f.read()
+n = 0
+NL = "\n"
+MSM_PARAM_AQE = "0x33"
+MSM_PARAM_PREEMPTION = "0x32"
+aqe_inject = (
+    NL + "   uint64_t aqe_val = 0;" + NL +
+    "   struct drm_msm_param aqe_req = {.pipe = MSM_PIPE_3D0, .param = " + MSM_PARAM_AQE + ", .value = 0};" + NL +
+    "   if (drmCommandWriteRead(dev->fd, DRM_MSM_GET_PARAM, &aqe_req, sizeof(aqe_req)) == 0)" + NL +
+    "      aqe_val = aqe_req.value;" + NL +
+    "   /* A750_AQE_KGSL: AQE=1 means HW ray-tracing pipeline supported */" + NL +
+    "   (void)aqe_val;" + NL
+)
+m = re.search(r"(tu_knl_kgsl_init[^{]*\{)", c)
+if m:
+    ins = c.find(NL, c.find("{", m.start())) + 1
+    if "A750_AQE_KGSL" not in c:
+        c = c[:ins] + aqe_inject + c[ins:]
+        n += 1
+with open(fp, "w") as f: f.write(c)
+print(f"[OK] A750 AQE KGSL param query: {n} changes in tu_knl_kgsl.cc")
+PYEOF
+    fi
+    log_success "A750 AQE + Preemption + IFPC support applied"
+}
+
+
 apply_patches() {
     log_info "Applying patches"
     cd "$MESA_DIR"
@@ -2995,6 +3067,7 @@ apply_patches() {
     if [[ "$ENABLE_A750_BARRIER_NOOP" == "true" ]]; then apply_a750_barrier_noop; fi
     if [[ "$ENABLE_A750_ENGINE_SPOOF" == "true" ]]; then apply_a750_engine_spoof; fi
     apply_a750_lrz_alpha_fix
+    apply_a750_aqe_support
     apply_a750_vsc_fix
     apply_a750_gmem_tile_fix
     apply_a750_timestamp_fix

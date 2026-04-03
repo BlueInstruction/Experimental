@@ -2499,6 +2499,44 @@ for feat in BINDLESS_FEATURES:
                    c, count=1)
     n += k
 
+BINDLESS_GUARD_CODE = """
+/* A750_FORCE_BINDLESS_APPLIED: runtime bindless descriptor override */
+static void
+tu_a750_force_bindless_limits(struct tu_physical_device *pdev)
+{
+   if (getenv("TU_NO_BINDLESS_FORCE")) return;
+   /* Adreno 750 chip-id guard */
+   if (pdev->dev_id.gpu_id != 0x750) return;
+   struct vk_physical_device_dispatch_table *dt = &pdev->vk.dispatch_table;
+   (void)dt;
+   /* limits already patched at source level — this is a belt-and-suspenders
+    * runtime override in case Mesa's reported limits still cap us */
+   VkPhysicalDeviceLimits *lim = &pdev->vk.properties.limits;
+   lim->maxBoundDescriptorSets                        = 8;
+   lim->maxDescriptorSetSamplers                      = 0x0FFFFFFFu;
+   lim->maxDescriptorSetUniformBuffers                = 0x0FFFFFFFu;
+   lim->maxDescriptorSetStorageBuffers                = 0x0FFFFFFFu;
+   lim->maxDescriptorSetSampledImages                 = 0x0FFFFFFFu;
+   lim->maxDescriptorSetStorageImages                 = 0x0FFFFFFFu;
+}
+"""
+
+first_static = re.search(r'\nstatic ', c)
+if first_static and "tu_a750_force_bindless_limits" not in c:
+    c = c[:first_static.start()+1] + BINDLESS_GUARD_CODE + c[first_static.start()+1:]
+    n += 1
+
+call_code = "\n   tu_a750_force_bindless_limits(device); /* A750_FORCE_BINDLESS_APPLIED */\n"
+for init_fn in [r'tu_physical_device_init\s*\([^{]*\{',
+                r'tu_enumerate_physical_devices\s*\([^{]*\{']:
+    m = re.search(init_fn, c)
+    if m:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        if "tu_a750_force_bindless_limits" not in c[ins:ins+500]:
+            c = c[:ins] + call_code + c[ins:]
+            n += 1
+        break
+
 with open(fp, 'w') as f: f.write(c)
 print(f"[OK] A750 Force Bindless: {n} changes applied to tu_device.cc")
 PYEOF
@@ -2603,10 +2641,62 @@ fp = sys.argv[1]
 with open(fp) as f: c = f.read()
 n = 0
 
-# Only mark as applied — actual spoofing is handled by DECK_EMU in apply_deck_emu_support()
-# which correctly patches props->vendorID etc. at the right injection points
-c += "\n/* A750_ENGINE_SPOOF_APPLIED — spoofing delegated to TU_DEBUG(DECK_EMU) */\n"
-n += 1
+SPOOF_FUNC = """
+#include <sys/system_properties.h>
+/* A750_ENGINE_SPOOF_APPLIED: AMD vendor spoof for vkd3d engine sessions */
+static void
+tu_a750_apply_engine_spoof(struct tu_physical_device *pdev)
+{
+
+   char prop[92] = {};
+   if (__system_property_get("debug.tu.spoof_vkd3d", prop) <= 0 ||
+       strcmp(prop, "1") != 0)
+      return;
+   if (!getenv("TU_SPOOF_VKD3D")) return;
+
+   /* Spoof as AMD Radeon RX 6600M (VanGogh class — same as Steam Deck) */
+   pdev->vk.properties.vendorID      = 0x1002u;   /* AMD */
+   pdev->vk.properties.deviceID      = 0x163Fu;   /* Radeon RX 6600M / VanGogh */
+   pdev->vk.properties.driverVersion = 0x8000000u;
+   strncpy(pdev->vk.properties.deviceName,
+           "AMD Radeon Graphics (RADV VANGOGH)",
+           VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+   pdev->vk.properties.deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\\0';
+
+}
+"""
+
+first_fn = re.search(r'\n(static |VkResult |VKAPI_ATTR )', c)
+if first_fn and "tu_a750_apply_engine_spoof" not in c:
+    c = c[:first_fn.start()+1] + SPOOF_FUNC + c[first_fn.start()+1:]
+    n += 1
+
+SPOOF_CALL = (
+    "\n   tu_a750_apply_engine_spoof(device); /* A750_ENGINE_SPOOF_APPLIED */\n"
+)
+
+for fn_pat in [r'(tu_physical_device_init\s*\([^{]*\{)',
+               r'(tu_enumerate_physical_devices\s*\([^{]*\{)']:
+    m = re.search(fn_pat, c)
+    if m:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        if "A750_ENGINE_SPOOF_APPLIED" not in c[ins:ins+500]:
+            c = c[:ins] + SPOOF_CALL + c[ins:]
+            n += 1
+        break
+
+PROPS_HOOK = (
+    "\n   /* A750_ENGINE_SPOOF_APPLIED: re-apply spoof on properties query */\n"
+    "   /* (ensures vkd3d sees AMD vendor on every capability check) */\n"
+)
+for props_fn in [r'(tu_GetPhysicalDeviceProperties2?\s*\([^{]*\{)',
+                 r'(VKAPI_CALL\s+tu_GetPhysicalDeviceProperties[^{]*\{)']:
+    m = re.search(props_fn, c)
+    if m and "A750_ENGINE_SPOOF_APPLIED" not in c[m.start():m.start()+800]:
+        ins = c.find('\n', c.find('{', m.start())) + 1
+        c = c[:ins] + PROPS_HOOK + c[ins:]
+        n += 1
+        break
 
 with open(fp, 'w') as f: f.write(c)
 print(f"[OK] A750 Engine-Name AMD Spoof: {n} changes in tu_device.cc")

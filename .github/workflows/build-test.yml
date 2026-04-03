@@ -133,12 +133,10 @@ jobs:
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
           if [[ -d vk-headers/include/vulkan ]]; then
             cp -r vk-headers/include/vulkan src/include/
-            echo "Vulkan Headers updated to $VK_TAG"
           fi
           if [[ -d vk-headers/registry ]]; then
             mkdir -p src/registry
             cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true
-            echo "Vulkan registry updated"
           fi
           rm -rf vk-headers
 
@@ -148,7 +146,6 @@ jobs:
             git clone --depth 1 --branch "$SPIRV_TAG" https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
             if [[ -d spirv-h/include/spirv ]]; then
               cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
-              echo "SPIRV Headers updated to $SPIRV_TAG"
             fi
             rm -rf spirv-h
           fi
@@ -176,7 +173,7 @@ jobs:
                   return
               orig = c
               for p, r in patches:
-                  if len(re.findall(p, c)) > 0:
+                  if re.search(p, c):
                       c = re.sub(p, r, c)
                       applied += 1
               if c != orig:
@@ -194,7 +191,7 @@ jobs:
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
           ]
 
-          # === ALL D3D12 FEATURE FLAGS (ULTRA) ===
+          # === D3D12 FEATURE FLAGS ===
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -252,10 +249,24 @@ jobs:
               (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.IndependentFrontAndBackStencilSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options14\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options15\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options15\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options19\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options19\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options20\.ComputeOnlyWriteWatchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
+              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
+              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -270,40 +281,20 @@ jobs:
               (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
-              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
-              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.IndependentFrontAndBackStencilSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.ComputeOnlyWriteWatchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
-          # === FSYNC + SYNC PERFORMANCE ===
+          # === FSYNC + TIMELINE SEMAPHORE ===
           fsync_patches = [
-              (r'(->use_timeline_semaphore\s*=\s*)false',
-               r'\1true'),
-              (r'(->use_win32_fence\s*=\s*)true',
-               r'\1false'),
-              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+',
-               r'\g<1>128'),
-              (r'(->shared_timeline_semaphore\s*=\s*)false',
-               r'\1true'),
+              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
+              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>128'),
+              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
           ]
 
-          # === SUBMISSION + QUEUE PERFORMANCE ===
+          # === SUBMISSION PERFORMANCE ===
           submission_patches = [
-              (r'(->use_batch_submission\s*=\s*)true',
-               r'\1false'),
-              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;',
-               r'\g<1>4;'),
+              (r'(->use_batch_submission\s*=\s*)true', r'\1false'),
+              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
           ]
 
           # === DESCRIPTOR LIMITS ===
@@ -320,52 +311,81 @@ jobs:
 
           # === MFG X6: SWAPCHAIN DEPTH ===
           swapchain_patches = [
-              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+',
-               r'\g<1>8'),
-              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+',
-               r'\g<1>16'),
-              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))',
-               r'\g<1>8\2'),
+              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
+              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
+              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>8\2'),
               (r'(minImageCount\s*(?<!=)=(?!=)\s*max\s*\(\s*desc\.BufferCount\s*,\s*)(\w+\.minImageCount\s*\))',
                r'\g<1>max(8u, \2)'),
-              (r'(swapchain->frame_latency\s*=\s*)\d+',
-               r'\g<1>8'),
+              (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>8'),
           ]
 
           # === MFG X6: COMMAND QUEUE DEPTH ===
           cmdqueue_patches = [
-              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+',
-               r'\g<1>32'),
-              (r'(pending_submit_count\s*>\s*)\d+',
-               r'\g<1>32'),
+              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
+              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
           ]
 
-          # === APPLY ALL PATCHES ===
-          patch_file("libs/vkd3d/device.c", gpu + dev)
+          # === RENDER PASS (Tiled GPU - confirmed via upstream PR #2856) ===
+          renderpass_patches = [
+              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
+              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
+          ]
+
+          # === UMA HOST CACHED (equiv. VKD3D_CONFIG=force_host_cached) ===
+          uma_patches = [
+              (r'(->force_host_cached\s*=\s*)false', r'\1true'),
+              (r'(->host_cached\s*=\s*)false', r'\1true'),
+          ]
+
+          # === SHADER WORKER THREADS ===
+          worker_patches = [
+              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
+          ]
+
+          # === PIPELINE CACHE ===
+          cache_patches = [
+              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>65536'),
+              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
+          ]
+
+          # === FENCE RECYCLING ===
+          fence_patches = [
+              (r'(->recycle_fences\s*=\s*)false', r'\1true'),
+              (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+          ]
+
+          # === APPLY PATCHES ===
+          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches)
 
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
                   if not f.endswith((".c", ".h")):
                       continue
                   path = os.path.join(root, f)
-
                   if f != "device.c" and any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
                       patch_file(path, gpu)
-
                   patch_file(path, fsync_patches)
                   patch_file(path, submission_patches)
                   patch_file(path, descriptor_patches)
+                  patch_file(path, worker_patches)
+                  patch_file(path, cache_patches)
+                  patch_file(path, fence_patches)
+                  patch_file(path, uma_patches)
+                  patch_file(path, renderpass_patches)
 
           patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
           patch_file("libs/vkd3d/command.c", cmdqueue_patches)
 
-          # === FSYNC HEADER DEFINES ===
+          # === HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):
               with open(vkd3d_private, "r") as f:
                   content = f.read()
               if "VKD3D_FSYNC_ENABLED" not in content:
-                  fsync_header = """
+                  header = """
           #ifndef VKD3D_FSYNC_ENABLED
           #define VKD3D_FSYNC_ENABLED 1
           #endif
@@ -384,18 +404,21 @@ jobs:
           #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
           #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 8
           #endif
+          #ifndef VKD3D_RENDER_PASS_FORCE
+          #define VKD3D_RENDER_PASS_FORCE 1
+          #endif
           """
                   m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
                   if m:
                       pos = content.find('\n', m.end()) + 1
-                      content = content[:pos] + fsync_header + content[pos:]
+                      content = content[:pos] + header + content[pos:]
                   else:
-                      content = fsync_header + content
+                      content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
                   applied += 1
 
-          # === QUEUE TIMELINE OPTIMIZATION ===
+          # === QUEUE TIMELINE FAST PATH ===
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
               with open(queue_timeline, "r") as f:
@@ -414,7 +437,7 @@ jobs:
                       f.write(content)
                   applied += 1
 
-          print(f"Ultra+Fsync+MFG-X6 | Applied {applied} patches")
+          print(f"Ultra+Fsync+MFG-X6+RenderPass+UMA | Applied {applied} patches")
           if errors:
               print(f"Errors: {len(errors)}")
               for e in errors:
@@ -464,8 +487,8 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin"
-          LINK_FLAGS="-flto=thin -Wl,--icf=safe"
+          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
+          LINK_FLAGS="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
 
           meson setup build-x64 \
             --cross-file ../crossfile-x64.txt \
@@ -522,7 +545,7 @@ jobs:
             "type": "VKD3D",
             "versionName": "${VER}-${COMMIT}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton x64/x86 — MFG-X6 + UMA + Fsync",
+            "description": "VKD3D-Proton x64/x86 — MFG-X6 + RenderPass + UMA + Fsync",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},

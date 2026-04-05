@@ -24,52 +24,20 @@ This repository provides builds tuned for:
 
 ---
 
-### Render Pass (Tiled GPU)
-Forces render pass path for clear and resolve operations, improving tile memory efficiency on Adreno (upstream PR #2856).
-
-### UMA Host Cached Memory
-Forces `host_cached` memory for all allocations, equivalent to `VKD3D_CONFIG=force_host_cached`. Reduces redundant cache flushes on Adreno UMA.
-
-### Fsync / Timeline Semaphore
-- Timeline semaphore forced for all fence operations
-- Win32 fence disabled
-- Fence spin count reduced to 128
-- Shared timeline for cross-queue sync
-
-### D3D12 Capability Spoofing
-- GPU spoof: AMD Van Gogh (0x1002:0x163f) for compatibility
-- Shader Model 6.8 / Feature Level 12_2 / SDK 619
-- D3D12 Options 1-21 all maximized
-- Descriptor limits: 1M+ update-after-bind
-
----
-
-## Releases
-
-Latest builds: https://github.com/BlueInstruction/vkd3d-proton-wcp/releases
-
-Each release includes:
-- `vkd3d-proton-{ver}-{commit}.wcp` — Proton x64 + x86 build
-- `vkd3d-proton-arm64ec-{ver}-{commit}.wcp` — Proton Arm64ec + x86 build
-
----
-
 ## Installation (Winlator)
 
-### Via Winlator Components (recommended)
+### Via Winlator Contents Manager (recommended)
 
 1. Download the `.wcp` file from Releases
-2. Open Winlator → **Components** tab
+2. Open Winlator → **ContentsManager** tab
 3. Tap **+** → **Import from file** → select the `.wcp`
 4. Open your container settings → **VKD3D** → select the imported version
 
    The spinner displays entries as `{versionName}-{versionCode}`, for example:
    ```
-   3.0b-21a49c9-20260405
+   3.0b-20260405
    ```
 5. Tap **Apply**
-
-Winlator extracts the archive, validates `profile.json`, then copies the DLLs to the correct paths inside the container's Wine prefix automatically.
 
 ---
 
@@ -78,7 +46,7 @@ Winlator extracts the archive, validates `profile.json`, then copies the DLLs to
 A `.wcp` file is a zstd-compressed tar archive with this structure:
 
 ```
-my-build.wcp
+build.wcp
 ├── profile.json
 ├── system32/
 │   ├── d3d12.dll
@@ -87,56 +55,6 @@ my-build.wcp
     ├── d3d12.dll
     └── d3d12core.dll
 ```
-
-### profile.json
-
-Winlator reads `profile.json` to validate and install the package. Required fields for `VKD3D` type:
-
-```json
-{
-  "type": "VKD3D",
-  "versionName": "3.0b-21a49c9",
-  "versionCode": 20260405,
-  "description": "VKD3D-Proton ARM64EC — MFG-X6 + RenderPass + UMA + Fsync",
-  "files": [
-    { "source": "system32/d3d12.dll",     "target": "${system32}/d3d12.dll" },
-    { "source": "system32/d3d12core.dll", "target": "${system32}/d3d12core.dll" },
-    { "source": "syswow64/d3d12.dll",     "target": "${syswow64}/d3d12.dll" },
-    { "source": "syswow64/d3d12core.dll", "target": "${syswow64}/d3d12core.dll" }
-  ]
-}
-```
-
-Supported `type` values: `Wine`, `Proton`, `DXVK`, `VKD3D`, `Box64`, `WOWBox64`, `FEXCore`
-
-### Path Templates
-
-Winlator resolves these templates at install time:
-
-| Template      | Resolved path                                        |
-|---------------|------------------------------------------------------|
-| `${system32}` | `imagefs/home/xuser/.wine/drive_c/windows/system32` |
-| `${syswow64}` | `imagefs/home/xuser/.wine/drive_c/windows/syswow64` |
-| `${libdir}`   | `imagefs/usr/lib`                                    |
-| `${bindir}`   | `imagefs/usr/bin`                                    |
-| `${sharedir}` | `imagefs/usr/share`                                  |
-
-### Security
-
-Winlator enforces a trusted file list per content type. For `VKD3D`, only these four targets are accepted:
-
-```
-${system32}/d3d12.dll
-${system32}/d3d12core.dll
-${syswow64}/d3d12.dll
-${syswow64}/d3d12core.dll
-```
-
-Any other `target` path causes `ERROR_UNTRUSTPROFILE` and the install is rejected.
-
-Install directory inside Winlator: `contents/VKD3D/{versionName}-{versionCode}/`
-
----
 
 ## Driver Requirements
 
@@ -162,7 +80,8 @@ Recommended (add manually):
 ```
 VKD3D_CONFIG=dxr,dxr11
 VKD3D_DEBUG=none
-DXVK_LOG_LEVEL=none
+DXVK_LOG_LEVEL=none.
+DXVK_CONFIG_FILE=/dxvk.conf
 ```
 
 Optional:
@@ -199,21 +118,6 @@ Build reference: [FEX-Emu ARM64EC wiki](https://wiki.fex-emu.com/index.php/Devel
 
 ---
 
-## Known Issues
-
-**Adreno 750:**
-- Z-fighting / depth instability in some DX12 titles
-- Missing distant geometry in open-world games
-
-**ARM64EC:**
-- Frame pacing inconsistency in some titles (timing desync between ARM and emulated threads)
-
-**General:**
-- Memory aliasing instability in descriptor-heavy scenes
-- RE Engine GPU hang fixed by the integer blend patch (see above)
-
----
-
 ## Debugging
 
 Enable verbose logging:
@@ -243,11 +147,11 @@ VKD3D_SHADER_CACHE_PATH=0
 
 | Component | Version          |
 |-----------|------------------|
-| Wine      | ARM64EC build    |
+| WineProton      | Latest Arm64ec + x86_64 build    |
 | FEXCore   | Latest stable    |
 | Turnip    | Latest (Gen8+)   |
 | DXVK      | Latest           |
-| Winlator  | Vanilla / Bionic |
+| Winlator Bionic  | Vanilla / Ludashi |
 
 ---
 
@@ -256,5 +160,5 @@ VKD3D_SHADER_CACHE_PATH=0
 - [HansKristian-Work/vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) — upstream
 - [Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa) — Vulkan driver
 - [FEX-Emu](https://github.com/FEX-Emu/FEX) — ARM64EC runtime
-- [Winlator](https://github.com/brunodev85/winlator) — Android container
-- AndroEmu community — testing and validation
+- [WinlatorCMOD](https://github.com/StevenMXZ/Winlator-Ludashi) — Android container
+  

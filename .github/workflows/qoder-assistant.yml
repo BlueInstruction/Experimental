@@ -1,0 +1,15 @@
+name: Qoder Assistant
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  assistant:
+    if: contains(github.event.comment.body, '@qoder')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: QoderAI/qoder-action@v0
+        with:
+          qoder_personal_access_token: ${{ secrets.QODER_PERSONAL_ACCESS_TOKEN }}
+          prompt: |
+            ${{ github.event.comment.body }}
+            REPO:${{ github.repository }} PR_NUMBER:${{ github.event.issue.number }}

@@ -62,7 +62,7 @@ VKD3D-Proton does not ship DXGI. Inside Winlator, VKD3D and DXVK share a DXGI im
 | **WineProton** | Windows API → POSIX | Winlator Contents Manager |
 | **Box64** | x86_64 → ARM64 (standard containers) | [ptitSeb/box64](https://github.com/ptitSeb/box64) |
 | **FEXCore + WowBox64** | x86_64 + x86 → ARM64 (ARM64EC containers) | [FEX-Emu/FEX](https://github.com/FEX-Emu/FEX) |
-| **Mesa Turnip** | Vulkan driver (Adreno) | Winlator Contents Manager |
+| **Mesa Turnip** | Vulkan driver (Adreno) | Winlator Adrenotools Manager |
 
 ---
 
@@ -91,7 +91,7 @@ Variables already present in Winlator's UI (e.g. `WINEESYNC`, `mesa_glthread`) s
 
 ```
 VKD3D_CONFIG=dxr,dxr11
-VKD3D_SHADER_MODEL=6_5
+VKD3D_SHADER_MODEL=6_6
 VKD3D_DEBUG=none
 VKD3D_SWAPCHAIN_PRESENT_MODE=MAILBOX
 VKD3D_FRAME_RATE=0
@@ -104,7 +104,7 @@ VKD3D_FRAME_RATE=0
 ```
 DXVK_LOG_LEVEL=none
 DXVK_ASYNC=1
-DXVK_CONFIG_FILE=/dxvk.conf
+DXVK_CONFIG_FILE=./dxvk.conf
 ```
 
 ### Wine / System
@@ -112,8 +112,9 @@ DXVK_CONFIG_FILE=/dxvk.conf
 ```
 WINE_LARGE_ADDRESS_AWARE=1
 WINEESYNC=1
+WINEFSYNC=0
 vblank_mode=0
-WRAPPER_MAX_IMAGE_COUNT=3
+WRAPPER_MAX_IMAGE_COUNT=0
 ```
 
 ### Mesa / Shader Cache
@@ -168,7 +169,7 @@ Reference: [FEX-Emu ARM64EC wiki](https://wiki.fex-emu.com/index.php/Development
 Enable verbose VKD3D logging:
 ```
 VKD3D_DEBUG=warn
-VKD3D_LOG_FILE=/vkd3d.log.txt
+VKD3D_LOG_FILE=./vkd3d.log.txt
 ```
 
 Dump compiled shaders:

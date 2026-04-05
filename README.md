@@ -160,6 +160,7 @@ VKD3D_SHADER_CACHE_PATH=0
 
 - [HansKristian-Work/vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) — upstream
 - [Mesa / Turnip](https://gitlab.freedesktop.org/mesa/mesa) — Vulkan driver
+- [Box64](https://github.com/ptitSeb/box64) — x86_64 runtime
 - [FEX-Emu](https://github.com/FEX-Emu/FEX) — ARM64EC runtime
-- [WinlatorCMOD](https://github.com/StevenMXZ/Winlator-Ludashi) — Android container
+- [WinlatorVersion](https://github.com/StevenMXZ/Winlator-Ludashi)
   

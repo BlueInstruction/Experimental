@@ -574,7 +574,7 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${BUILD_DATE}",
+            "versionName": "${VER}",
             "versionCode": ${BUILD_DATE},
             "description": "VKD3D-Proton (Box64) — (FEX/WowBox64)",
             "files": [

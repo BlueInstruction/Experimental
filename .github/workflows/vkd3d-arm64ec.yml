@@ -582,7 +582,7 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${BUILD_DATE}-arm64ec",
+            "versionName": "${VER}-arm64ec",
             "versionCode": ${BUILD_DATE}-arm64ec,
             "description": "VKD3D-Proton Arm64ec — (FEX/WowBox64)",
             "files": [

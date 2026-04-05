@@ -574,9 +574,9 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}",
+            "versionName": "${VER}-${BUILD_DATE}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton x64/x86 — MFG-X6 + RenderPass + UMA + Fsync",
+            "description": "VKD3D-Proton (Box64) — (FEX/WowBox64),
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -586,7 +586,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-${VER}-${COMMIT}"
+          PKG="vkd3d-proton-${VER}-${BUILD_DATE}"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 

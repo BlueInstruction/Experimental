@@ -448,6 +448,37 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
+      - name: Apply State Blend Fix
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, sys
+          path = "libs/vkd3d/state.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          old = (
+              'ERR("Enabling blending on RT %u with format %s, '
+              'but using integer format is not supported.\\n", i,\n'
+              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
+              '                    return E_INVALIDARG;'
+          )
+          new = (
+              'WARN("Force-disabling blending on RT %u (integer format %s), '
+              'preventing GPU hang.\\n", i,\n'
+              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
+              '                    state->graphics.blend_attachments[i].blendEnable = VK_FALSE;\n'
+              '                    break;'
+          )
+          if old not in c:
+              print("ERROR: blend state target not found in state.c", file=sys.stderr)
+              sys.exit(1)
+          c = c.replace(old, new, 1)
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(c)
+          print("State blend fix: applied")
+          PYEOF
+
       - name: Create Cross Files
         if: steps.check.outputs.SKIP == 'false'
         run: |
@@ -466,8 +497,8 @@ jobs:
           cpu = 'arm64ec'
           endian = 'little'
           [built-in options]
-          c_link_args = ['-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2', '-lmingwex', '-lmsvcrt', '-lucrt']
-          cpp_link_args = ['-Wl,--icf=safe', '-Wl,--gc-sections', '-Wl,-O2', '-lmingwex', '-lmsvcrt', '-lucrt', '-lc++', '-lc++abi', '-lunwind']
+          c_link_args = ['-lmingwex', '-lmsvcrt', '-lucrt']
+          cpp_link_args = ['-lmingwex', '-lmsvcrt', '-lucrt', '-lc++', '-lc++abi', '-lunwind']
           EOF
 
           cat > crossfile-x86.txt << 'EOF'
@@ -492,15 +523,19 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
-          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -mavx -mavx2 -mfma"
+          ARM64EC_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
+          ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
+          ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
+          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
           X86_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
 
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
             -Dc_args="$ARM64EC_FLAGS" \
-            -Dcpp_args="$ARM64EC_FLAGS"
+            -Dcpp_args="$ARM64EC_FLAGS" \
+            -Dc_link_args="$ARM64EC_C_LINK" \
+            -Dcpp_link_args="$ARM64EC_CPP_LINK"
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
           if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
             tail -n 50 build-arm64ec.log
@@ -547,10 +582,9 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}",
-            "versionCode": ${BUILD_DATE},
-            "buildId": "${VER}-${BUILD_DATE}-arm64ec",
-            "description": "VKD3D-Proton ARM64EC — MFG-X6 + Fsync + AVX2/FMA + RenderPass + UMA",
+            "versionName": "${VER}-${BUILD_DATE}-arm64ec",
+            "versionCode": ${BUILD_DATE}-arm64ec,
+            "description": "VKD3D-Proton Arm64ec — (FEX/WowBox64)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -560,7 +594,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-arm64ec-${VER}-${COMMIT}"
+          PKG="vkd3d-proton-${VER}-${BUILD_DATE}-arm64ec"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 
@@ -571,7 +605,7 @@ jobs:
           name: ${{ env.PKG }}
           path: ${{ env.PKG }}.wcp
           retention-days: 30
-
+      
       - name: Create GitHub Release
         if: steps.check.outputs.SKIP == 'false'
         env:
@@ -585,60 +619,12 @@ jobs:
           | Property | Value |
           |----------|-------|
           | Version | \`${{ env.VER }}\` |
-          | Commit | \`${{ env.COMMIT }}\` |
           | Build Date | \`${{ env.BUILD_DATE }}\` |
           | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
           | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
-          | Architectures | ARM64EC + x86 |
-
-          ### MFG X6 Swapchain
-          - VKD3D_SWAPCHAIN_LATENCY_FRAMES raised to 8
-          - SetMaximumFrameLatency cap raised to 16
-          - minImageCount forced to max(8, surface_caps)
-          - frame_latency init raised to 8
-          - Command queue depth raised to 32
-
-          ### Render Pass — Tiled GPU (upstream PR #2856)
-          - force render pass path for clear/resolve ops
-          - render_passes_only enabled
-
-          ### UMA Host Cached Memory
-          - force_host_cached enabled (equiv. VKD3D_CONFIG=force_host_cached)
-          - UMA + CacheCoherentUMA + IsolatedMMU
-
-          ### Fsync + Sync Performance
-          - Timeline semaphore forced for all fence ops
-          - Fence spin count reduced to 128
-          - Shared timeline for cross-queue sync
-          - Win32 fence disabled
-          - Timeline fast-path helper injected
-
-          ### Submission + Queue Performance
-          - Batch submission disabled (lower latency)
-          - Multi-thread submission (4 threads)
-          - Shader worker threads set to 4
-          - Pipeline cache enabled (65536 entries)
-          - Fence + command allocator recycling
-
-          ### ARM64EC Compiler Optimizations
-          - -march=armv8.4-a+dotprod+fp16+rcpc (Snapdragon 8 Gen 2/3)
-          - -O3 -flto=thin -ffast-math -fno-finite-math-only
-          - -ffunction-sections -fdata-sections
-          - --gc-sections --icf=safe -Wl,-O2
-          - x86 companion: -mavx -mavx2 -mfma (Box64 x86 path)
-          - link args via crossfile built-in options (EC symbol safe)
-
-          ### D3D12 Features
-          - AMD Van Gogh GPU spoof (0x1002:0x163f)
-          - Shader Model 6.8 / Feature Level 12_2 / SDK 619
-          - D3D12 Options 1-21 all maximized
-          - Descriptor limits raised (1M+)
-          - Ray tracing 1.2 + mesh shaders + VRS tier 2
-          - Work graphs 1.0 + execute indirect 1.1
-
+  
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
-
       - name: Cleanup
         if: always()
         run: rm -rf src out pkg vk-headers spirv-h

@@ -1,4 +1,4 @@
-name: Vkd3d Test
+name: Vkd3d Proton Test
 
 on:
   schedule:
@@ -357,16 +357,6 @@ jobs:
               (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
           ]
 
-          # === RE ENGINE: INTEGER BLEND SANITIZE ===
-          state_patches = [
-              (
-                  r'(?s)ERR\("Enabling blending on RT[^;]+;\s*return\s+E_INVALIDARG\s*;',
-                  'WARN("Force-disabling blending on integer format RT, preventing GPU hang.\\\\n");\n'
-                  '            rt->BlendEnable = FALSE;\n'
-                  '            rt->RenderTargetWriteMask = 0xf;'
-              ),
-          ]
-
           # === APPLY PATCHES ===
           patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches)
 
@@ -388,7 +378,6 @@ jobs:
 
           patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
           patch_file("libs/vkd3d/command.c", cmdqueue_patches)
-          patch_file("libs/vkd3d/state.c", state_patches)
 
           # === HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
@@ -456,6 +445,37 @@ jobs:
               sys.exit(1)
           PYSCRIPT
           python3 patch.py
+
+      - name: Apply State Blend Fix
+        if: steps.check.outputs.SKIP == 'false'
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, sys
+          path = "libs/vkd3d/state.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          old = (
+              'ERR("Enabling blending on RT %u with format %s, '
+              'but using integer format is not supported.\\n", i,\n'
+              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
+              '                    return E_INVALIDARG;'
+          )
+          new = (
+              'WARN("Force-disabling blending on RT %u (integer format %s), '
+              'preventing GPU hang.\\n", i,\n'
+              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
+              '                    state->graphics.blend_attachments[i].blendEnable = VK_FALSE;\n'
+              '                    break;'
+          )
+          if old not in c:
+              print("ERROR: blend state target not found in state.c", file=sys.stderr)
+              sys.exit(1)
+          c = c.replace(old, new, 1)
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(c)
+          print("State blend fix: applied")
+          PYEOF
 
       - name: Create Cross Files
         if: steps.check.outputs.SKIP == 'false'

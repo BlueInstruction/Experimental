@@ -2,6 +2,10 @@ name: Qoder Code Review
 on:
   pull_request:
     branches: [main]
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
 jobs:
   code-review:
     runs-on: ubuntu-latest

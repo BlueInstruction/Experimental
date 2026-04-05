@@ -33,9 +33,10 @@ This repository provides builds tuned for:
 3. Tap **+** → **Import from file** → select the `.wcp`
 4. Open your container settings → **VKD3D** → select the imported version
 
-   The spinner displays entries as `{versionName}-{versionCode}`, for example:
+   The spinner displays entries as `{versionCode}`, for example:
    ```
    3.0b-20260405
+   3.0b-20260405-arm64ec
    ```
 5. Tap **Apply**
 

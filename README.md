@@ -10,7 +10,7 @@ VKD3D-Proton is a Direct3D 12 to Vulkan translation layer used in Proton.
 This repository provides builds tuned for:
 
 - Android emulation environments (Winlator Vanilla/Bionic)
-- ARM64EC hybrid execution via FEXCore
+- Arm64ec hybrid execution via FEXCore
 - Mobile GPU constraints (Adreno 7xx / 8xx, Mesa Turnip)
 
 ---
@@ -19,31 +19,10 @@ This repository provides builds tuned for:
 
 | Architecture | Runtime  | Status      |
 |--------------|----------|-------------|
-| ARM64EC      | FEXCore  | Recommended |
-| x86 (32-bit) | WowBox64 | Stable      |
-| x86_64       | Box64    | Stable      |
+| Proton Arm64ec + 86 (32-bit)   | FEXCore + WowBox64 |Stable | 
+| Proton x86_64       | Box64    | Stable      |
 
 ---
-
-## Key Patches
-
-### RE Engine Integer Blend Fix
-Prevents a GPU hang (`VK_ERROR_DEVICE_LOST`, `vr -4`) in RE Engine titles (Resident Evil Requiem, Dragon's Dogma 2) on Adreno / Turnip drivers.
-
-The engine incorrectly requests blending on integer-format render targets (`DXGI_FORMAT_R32G32B32A32_UINT`). Desktop drivers silently discard this invalid state; strict mobile drivers crash after ~100 seconds of accumulated corrupt pipeline state.
-
-**Fix:** Force-disable blend on integer-format RTs and break the inner loop instead of returning `E_INVALIDARG`.
-
-```diff
--    ERR("Enabling blending on RT %u with format %s, but using integer format is not supported.\n", i, ...);
--    return E_INVALIDARG;
-+    WARN("Force-disabling blending on RT %u (integer format %s), preventing GPU hang.\n", i, ...);
-+    state->graphics.blend_attachments[i].blendEnable = VK_FALSE;
-+    break;
-```
-
-### MFG X6 Swapchain Depth
-Raises swapchain latency frames to 8 and command queue depth to 32, enabling multi-frame generation headroom for DLSS Enabler MFG X6.
 
 ### Render Pass (Tiled GPU)
 Forces render pass path for clear and resolve operations, improving tile memory efficiency on Adreno (upstream PR #2856).
@@ -70,8 +49,8 @@ Forces `host_cached` memory for all allocations, equivalent to `VKD3D_CONFIG=for
 Latest builds: https://github.com/BlueInstruction/vkd3d-proton-wcp/releases
 
 Each release includes:
-- `vkd3d-proton-{ver}-{commit}.wcp` — x64 + x86 build
-- `vkd3d-proton-arm64ec-{ver}-{commit}.wcp` — ARM64EC + x86 build
+- `vkd3d-proton-{ver}-{commit}.wcp` — Proton x64 + x86 build
+- `vkd3d-proton-arm64ec-{ver}-{commit}.wcp` — Proton Arm64ec + x86 build
 
 ---
 

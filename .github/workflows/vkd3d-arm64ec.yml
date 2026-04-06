@@ -585,7 +585,7 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "${VER}-arm64ec",
-            "versionCode": ${BUILD_DATE}-arm64ec,
+            "versionCode": ${BUILD_DATE},
             "description": "VKD3D-Proton Arm64ec — (FEX/WowBox64)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},

@@ -1,4 +1,4 @@
-name: Vkd3d Proton Arm64ec Test
+name: Vkd3d Proton Arm64ec
 
 on:
   schedule:

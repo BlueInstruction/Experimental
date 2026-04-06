@@ -84,7 +84,7 @@ jobs:
 
       - name: Verify Toolchain
         run: |
-          arm64ec-w64-mingw32-clang --version || echo "arm64ec toolchain check"
+          arm64ec-w64-mingw32-clang --version
           i686-w64-mingw32-clang --version
 
       - name: Fetch Version
@@ -311,7 +311,7 @@ jobs:
               (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
           ]
 
-          # === MFG X6: SWAPCHAIN DEPTH ===
+          # === MFG: SWAPCHAIN DEPTH ===
           swapchain_patches = [
               (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
               (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
@@ -321,7 +321,7 @@ jobs:
               (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>8'),
           ]
 
-          # === MFG X6: COMMAND QUEUE DEPTH ===
+          # === MFG: COMMAND QUEUE DEPTH ===
           cmdqueue_patches = [
               (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
               (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
@@ -426,9 +426,11 @@ jobs:
               with open(queue_timeline, "r") as f:
                   content = f.read()
               if "FSYNC_TIMELINE_OPT" not in content:
-                  opt = """
+              opt = """
+              /* FSYNC_TIMELINE_OPT */
           #include <stdbool.h>
           #include <stdint.h>
+
           static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
           {
               return current >= target;
@@ -448,7 +450,7 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
-      - name: Apply State Blend Fix
+      - name: Apply State Blend  
         if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
@@ -523,7 +525,7 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
+          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
           ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
           ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
           X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"

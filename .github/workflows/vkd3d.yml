@@ -576,7 +576,7 @@ jobs:
             "type": "VKD3D",
             "versionName": "${VER}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton (Box64) — (FEX/WowBox64)",
+            "description": "VKD3D-Proton x64 — Box64",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},

@@ -264,14 +264,14 @@ jobs:
               (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;'),
               (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
               (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
               (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -540,7 +540,7 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x64.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x64.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
@@ -550,7 +550,7 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x86.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
         run: |

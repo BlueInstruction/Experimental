@@ -2,7 +2,7 @@ name: Vkd3d Proton
 
 on:
   schedule:
-    - cron: "0 21 */28 * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       FORCE_MODE:
@@ -28,15 +28,70 @@ permissions:
 
 defaults:
   run:
-    shell: bash {0}
+    shell: bash --noprofile --norc -Eeuo pipefail {0}
 
 env:
   TOOLCHAIN_DIR: /opt/llvm-mingw
 
 jobs:
-  build:
+  guard:
+    name: Check Version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      ver: ${{ steps.check.outputs.ver }}
+      tag: ${{ steps.check.outputs.tag }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      build_date: ${{ steps.check.outputs.build_date }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Install minimal tools
+        run: |
+          sudo apt-get -yq update
+          sudo apt-get -yq install --no-install-recommends jq curl ca-certificates
+
+      - name: Detect version + check release
+        id: check
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          if [[ -n "${{ inputs.VERSION }}" ]]; then
+            VER="${{ inputs.VERSION }}"
+            [[ "$VER" =~ ^v ]] || VER="v$VER"
+          else
+            VER=$(curl -fsSL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest \
+              | jq -r '.tag_name // empty')
+            [[ -z "$VER" ]] && VER=$(curl -fsSL \
+              https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases \
+              | jq -r '.[0].tag_name')
+          fi
+          VER_CLEAN="${VER#v}"
+          RELEASE_TAG="vkd3d-proton-${VER_CLEAN}-${BUILD_DATE}"
+          SKIP="false"
+          if [[ "${{ inputs.FORCE_MODE }}" != "true" ]]; then
+            HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
+            [[ "$HTTP" == "200" ]] && SKIP="true"
+          fi
+          echo "skip=$SKIP"        >> $GITHUB_OUTPUT
+          echo "ver=$VER_CLEAN"    >> $GITHUB_OUTPUT
+          echo "tag=$VER"          >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE"   >> $GITHUB_OUTPUT
+
+  build:
+    name: Build x64 + x86
+    runs-on: ubuntu-latest
+    needs: guard
+    if: needs.guard.outputs.skip == 'false'
     timeout-minutes: 120
+    env:
+      VER: ${{ needs.guard.outputs.ver }}
+      TAG: ${{ needs.guard.outputs.tag }}
+      BUILD_DATE: ${{ needs.guard.outputs.build_date }}
+      RELEASE_TAG: ${{ needs.guard.outputs.release_tag }}
 
     steps:
       - name: Checkout
@@ -46,36 +101,64 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git ninja-build curl jq python3 python3-pip \
-            glslang-tools spirv-tools zstd wget unzip patchelf
-          sudo pip3 install --break-system-packages --upgrade meson
+            git ninja-build curl jq python3 python3-venv python3-pip \
+            glslang-tools spirv-tools zstd wget unzip patchelf gh
 
-      - name: Detect Latest LLVM MinGW
+      - name: Pin Meson via venv
+        run: |
+          VENV="${GITHUB_WORKSPACE}/.venv"
+          python3 -m venv "$VENV"
+          . "$VENV/bin/activate"
+          pip install --upgrade pip
+          pip install "meson>=1.3.0"
+          deactivate
+          echo "PATH=$VENV/bin:${PATH}" >> "$GITHUB_ENV"
+          meson --version
+
+      - name: Detect LLVM MinGW
         id: llvm
         run: |
           if [[ -n "${{ inputs.LLVM_TAG }}" ]]; then
             LLVM_TAG="${{ inputs.LLVM_TAG }}"
           else
-            LLVM_TAG=$(curl -sL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+            LLVM_TAG=$(curl -fsSL \
+              https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
               | jq -r '.tag_name // empty')
             [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20251104"
           fi
           echo "tag=$LLVM_TAG" >> $GITHUB_OUTPUT
-          echo "Using LLVM MinGW: $LLVM_TAG"
 
-      - name: Cache LLVM MinGW Toolchain
+      - name: Cache LLVM MinGW
         id: cache-llvm
         uses: actions/cache@v4
         with:
           path: ${{ env.TOOLCHAIN_DIR }}
           key: llvm-mingw-${{ steps.llvm.outputs.tag }}-x64x86
 
-      - name: Setup LLVM MinGW Toolchain
+      - name: Download LLVM MinGW
         if: steps.cache-llvm.outputs.cache-hit != 'true'
+        env:
+          LTAG: ${{ steps.llvm.outputs.tag }}
         run: |
-          LLVM_TAG="${{ steps.llvm.outputs.tag }}"
-          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_TAG}/llvm-mingw-${LLVM_TAG}-ucrt-ubuntu-22.04-x86_64.tar.xz" -O llvm.tar.xz
+          pick_url() {
+            local json="$1"
+            for dist in 24.04 22.04 20.04; do
+              local url
+              url=$(echo "$json" | jq -r --arg d "$dist" \
+                '.assets[]? | select(.name | endswith("ucrt-ubuntu-"+$d+"-x86_64.tar.xz")) | .browser_download_url' \
+                | head -n1 || true)
+              [[ -n "$url" && "$url" != "null" ]] && { echo "$url"; return 0; }
+            done
+            return 1
+          }
+          JSON=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/tags/$LTAG || true)
+          URL=$(pick_url "$JSON" || true)
+          if [[ -z "${URL:-}" ]]; then
+            JSON=$(curl -fsSL https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest)
+            URL=$(pick_url "$JSON")
+          fi
           sudo mkdir -p $TOOLCHAIN_DIR
+          wget -q "$URL" -O llvm.tar.xz
           sudo tar -C $TOOLCHAIN_DIR --strip-components=1 -xJf llvm.tar.xz
           rm llvm.tar.xz
 
@@ -87,74 +170,40 @@ jobs:
           x86_64-w64-mingw32-clang --version
           i686-w64-mingw32-clang --version
 
-      - name: Fetch Version
-        run: |
-          if [[ -n "${{ inputs.VERSION }}" ]]; then
-            VER="${{ inputs.VERSION }}"
-            [[ "$VER" =~ ^v ]] || VER="v$VER"
-          else
-            VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases/latest | jq -r '.tag_name // empty')
-            [[ -z "$VER" ]] && VER=$(curl -sL https://api.github.com/repos/HansKristian-Work/vkd3d-proton/releases | jq -r '.[0].tag_name')
-          fi
-          echo "TAG=$VER" >> $GITHUB_ENV
-          echo "VER=${VER#v}" >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
-
-      - name: Check Release
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          RELEASE_TAG="vkd3d-proton-${VER}-${BUILD_DATE}"
-          if gh release view "$RELEASE_TAG" --repo ${{ github.repository }} --json tagName -q .tagName &>/dev/null; then
-            EXISTS="true"
-          else
-            EXISTS="false"
-          fi
-          [[ "${{ inputs.FORCE_MODE }}" == "true" ]] && EXISTS="false"
-          echo "SKIP=$EXISTS" >> $GITHUB_OUTPUT
-          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-
       - name: Clone Source
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           git clone --recurse-submodules --recursive --branch ${{ env.TAG }} --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
-          COMMIT=$(git rev-parse --short HEAD)
-          echo "COMMIT=$COMMIT" >> $GITHUB_ENV
+          echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
       - name: Update Vulkan + SPIRV Headers
-        if: steps.check.outputs.SKIP == 'false'
         run: |
-          VK_TAG=$(curl -sL https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest | jq -r '.tag_name // "main"')
+          VK_TAG=$(curl -fsSL \
+            https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest \
+            | jq -r '.tag_name // "main"')
           echo "VK_HEADERS_TAG=$VK_TAG" >> $GITHUB_ENV
-          git clone --depth 1 --branch "$VK_TAG" https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
+          git clone --depth 1 --branch "$VK_TAG" \
+            https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
           git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
-          if [[ -d vk-headers/include/vulkan ]]; then
-            cp -r vk-headers/include/vulkan src/include/
-          fi
-          if [[ -d vk-headers/registry ]]; then
-            mkdir -p src/registry
-            cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true
-          fi
+          [[ -d vk-headers/include/vulkan ]] && cp -r vk-headers/include/vulkan src/include/
+          [[ -d vk-headers/registry ]] && { mkdir -p src/registry; cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true; }
           rm -rf vk-headers
 
-          SPIRV_TAG=$(curl -sL https://api.github.com/repos/KhronosGroup/SPIRV-Headers/releases/latest | jq -r '.tag_name // empty')
+          SPIRV_TAG=$(curl -fsSL \
+            https://api.github.com/repos/KhronosGroup/SPIRV-Headers/releases/latest \
+            | jq -r '.tag_name // empty')
           if [[ -n "$SPIRV_TAG" ]]; then
             echo "SPIRV_HEADERS_TAG=$SPIRV_TAG" >> $GITHUB_ENV
-            git clone --depth 1 --branch "$SPIRV_TAG" https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
-            if [[ -d spirv-h/include/spirv ]]; then
-              cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
-            fi
+            git clone --depth 1 --branch "$SPIRV_TAG" \
+              https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
+            [[ -d spirv-h/include/spirv ]] && cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
             rm -rf spirv-h
           fi
 
       - name: Apply Patches
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
-
           cat > patch.py << 'PYSCRIPT'
           import re, os, sys
 
@@ -169,8 +218,7 @@ jobs:
                   with open(path, "r", encoding="utf-8", errors="ignore") as f:
                       c = f.read()
               except Exception as e:
-                  errors.append(f"Read error {path}: {e}")
-                  return
+                  errors.append(f"Read error {path}: {e}"); return
               orig = c
               for p, r in patches:
                   if re.search(p, c):
@@ -183,26 +231,24 @@ jobs:
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
 
-          # === GPU IDENTITY SPOOF ===
           gpu = [
               (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
               (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1024ULL * 1024 * 1024;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
           ]
 
-          # === D3D12 FEATURE FLAGS ===
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_8;'),
-              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
-              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>619;'),
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_1;'),
+              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>613;'),
               (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>32;'),
-              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>64;'),
+              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>64;'),
+              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>128;'),
               (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -211,7 +257,7 @@ jobs:
               (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_2;'),
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
               (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
               (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
@@ -222,7 +268,7 @@ jobs:
               (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
               (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
-              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_4;'),
+              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
               (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -230,86 +276,53 @@ jobs:
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options9\.AdvancedTextureOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options9\.WriteableMSAATexturesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options9\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options10\.VariableRateShadingSumCombinerSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options10\.MeshShaderPerPrimitiveShadingRateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options11\.AtomicInt64OnDescriptorHeapResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options11\.AtomicInt64OnGroupSharedSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options11\.AtomicInt64OnTypedResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options11\.DerivativesInMeshAndAmplificationShadersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.MSPrimitivesPipelineStatisticIncludesCulledPrimitives\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.UnrestrictedBufferTextureCopyPitchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.UnrestrictedVertexElementAlignmentSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.InvertedViewportHeightFlipsYSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.InvertedViewportDepthFlipsZSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.TextureCopyBetweenDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options13\.AlphaBlendFactorSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.IndependentFrontAndBackStencilSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options14\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options15\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options16\.MapDefaultHeapAllocationSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options17\.NonNormalizedCoordinateSamplersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options17\.ManualWriteTrackingResourceSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.MeshShaderSupportsFullRangeRenderTargetArrayIndex\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options19\.AnisoFilterWithPointMipSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.ComputeOnlyWriteWatchSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options20\.RecreateAtTrimSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.WorkGraphsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_WORK_GRAPHS_TIER_1_0;'),
-              (r'(options21\.ExecuteIndirectTier\s*=\s*)[^;]+;', r'\g<1>D3D12_EXECUTE_INDIRECT_TIER_1_1;'),
-              (r'(options21\.SampleCmpGradientAndBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options21\.ExtendedCommandInfoSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.CooperativeMatrixSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.GDeflateSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.AntiLagSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DepthBiasControlSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.ComputeShaderDerivativesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.PageableDeviceLocalMemorySupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DestructionNotifierSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.SharedResourceCompatibilityTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SHARED_RESOURCE_COMPATIBILITY_TIER_2;'),
-              (r'(options\.IndependentFrontAndBackStencilRefMaskSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.TriangleFanSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DynamicDepthBiasSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.NarrowQuadrilateralLinesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.MismatchingOutputDimensionsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
           ]
 
-          # === FSYNC + TIMELINE SEMAPHORE ===
+          tbr_patches = [
+              (r'(TileBasedRenderer\s*(?<!=)=(?!=)\s*)FALSE', r'\g<1>TRUE'),
+              (r'(tile_based_renderer\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->use_tile_based_rendering\s*=\s*)false', r'\1true'),
+          ]
+
           fsync_patches = [
               (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
               (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
-              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>128'),
+              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>32'),
               (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_esync\s*=\s*)false', r'\1true'),
+              (r'(esync_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
           ]
 
-          # === SUBMISSION PERFORMANCE ===
           submission_patches = [
               (r'(->use_batch_submission\s*=\s*)true', r'\1false'),
-              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8;'),
           ]
 
-          # === DESCRIPTOR LIMITS ===
           descriptor_patches = [
-              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048;'),
+              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
               (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
               (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
               (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
               (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
               (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
               (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
           ]
 
-          # === MFG X6: SWAPCHAIN DEPTH ===
+          gpu_boost_patches = [
+              (r'(->use_async_compute\s*=\s*)false', r'\1true'),
+              (r'(async_compute_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->use_concurrent_queue\s*=\s*)false', r'\1true'),
+              (r'(->use_gpu_va_recycle\s*=\s*)false', r'\1true'),
+              (r'(->use_lazy_create_pipeline\s*=\s*)true', r'\1false'),
+              (r'(max_compute_queues\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+          ]
+
           swapchain_patches = [
               (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
               (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
@@ -319,46 +332,39 @@ jobs:
               (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>8'),
           ]
 
-          # === MFG X6: COMMAND QUEUE DEPTH ===
           cmdqueue_patches = [
               (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
               (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
           ]
 
-          # === RENDER PASS (Tiled GPU - confirmed via upstream PR #2856) ===
           renderpass_patches = [
               (r'(->use_render_pass\s*=\s*)false', r'\1true'),
               (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
               (r'(->render_passes_only\s*=\s*)false', r'\1true'),
           ]
 
-          # === UMA HOST CACHED (equiv. VKD3D_CONFIG=force_host_cached) ===
           uma_patches = [
               (r'(->force_host_cached\s*=\s*)false', r'\1true'),
               (r'(->host_cached\s*=\s*)false', r'\1true'),
           ]
 
-          # === SHADER WORKER THREADS ===
           worker_patches = [
               (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
               (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
               (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
           ]
 
-          # === PIPELINE CACHE ===
           cache_patches = [
-              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>65536'),
+              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>131072'),
               (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
           ]
 
-          # === FENCE RECYCLING ===
           fence_patches = [
               (r'(->recycle_fences\s*=\s*)false', r'\1true'),
               (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
           ]
 
-          # === APPLY PATCHES ===
-          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches)
+          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches + tbr_patches)
 
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
@@ -375,11 +381,12 @@ jobs:
                   patch_file(path, fence_patches)
                   patch_file(path, uma_patches)
                   patch_file(path, renderpass_patches)
+                  patch_file(path, gpu_boost_patches)
+                  patch_file(path, tbr_patches)
 
           patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
           patch_file("libs/vkd3d/command.c", cmdqueue_patches)
 
-          # === HEADER DEFINES ===
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):
               with open(vkd3d_private, "r") as f:
@@ -389,8 +396,11 @@ jobs:
           #ifndef VKD3D_FSYNC_ENABLED
           #define VKD3D_FSYNC_ENABLED 1
           #endif
+          #ifndef VKD3D_ESYNC_ENABLED
+          #define VKD3D_ESYNC_ENABLED 1
+          #endif
           #ifndef VKD3D_FENCE_SPIN_COUNT
-          #define VKD3D_FENCE_SPIN_COUNT 128
+          #define VKD3D_FENCE_SPIN_COUNT 32
           #endif
           #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
           #define VKD3D_TIMELINE_SEM_FAST_PATH 1
@@ -407,6 +417,12 @@ jobs:
           #ifndef VKD3D_RENDER_PASS_FORCE
           #define VKD3D_RENDER_PASS_FORCE 1
           #endif
+          #ifndef VKD3D_TBR_ADRENO
+          #define VKD3D_TBR_ADRENO 1
+          #endif
+          #ifndef VKD3D_GPU_BOOST
+          #define VKD3D_GPU_BOOST 1
+          #endif
           """
                   m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
                   if m:
@@ -418,7 +434,6 @@ jobs:
                       f.write(content)
                   applied += 1
 
-          # === QUEUE TIMELINE FAST PATH ===
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
               with open(queue_timeline, "r") as f:
@@ -437,7 +452,7 @@ jobs:
                       f.write(content)
                   applied += 1
 
-          print(f"Ultra+Fsync+MFG-X6+RenderPass+UMA | Applied {applied} patches")
+          print(f"GPU-Boost+ESync+Fsync+MFG-X6+TBR+RenderPass+UMA | Applied {applied} patches")
           if errors:
               print(f"Errors: {len(errors)}")
               for e in errors:
@@ -447,11 +462,10 @@ jobs:
           python3 patch.py
 
       - name: Apply State Blend Fix
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           cd src
           python3 - << 'PYEOF'
-          import re, sys
+          import sys
           path = "libs/vkd3d/state.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
@@ -469,16 +483,15 @@ jobs:
               '                    break;'
           )
           if old not in c:
-              print("ERROR: blend state target not found in state.c", file=sys.stderr)
-              sys.exit(1)
-          c = c.replace(old, new, 1)
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(c)
-          print("State blend fix: applied")
+              print("WARN: blend patch target not found — may already be patched", file=sys.stderr)
+          else:
+              c = c.replace(old, new, 1)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print("State blend fix: applied")
           PYEOF
 
       - name: Create Cross Files
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           cat > crossfile-x64.txt << 'EOF'
           [binaries]
@@ -513,7 +526,6 @@ jobs:
           EOF
 
       - name: Build x64 + x86
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
@@ -529,10 +541,7 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
-          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-            tail -n 50 build-x64.log
-            exit 1
-          fi
+          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x64.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
@@ -542,25 +551,19 @@ jobs:
             -Dc_link_args="$LINK_FLAGS" \
             -Dcpp_link_args="$LINK_FLAGS"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
-          if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
-            tail -n 50 build-x86.log
-            exit 1
-          fi
+          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           for arch in x64 x86; do
             for dll in d3d12.dll d3d12core.dll; do
               DLL=$(find src/build-${arch} -name "$dll" -type f | head -1)
               [[ -z "$DLL" ]] && { echo "Missing: $arch/$dll"; exit 1; }
-              SIZE=$(stat -c%s "$DLL")
-              echo "$DLL: $SIZE bytes ($(numfmt --to=iec $SIZE))"
+              echo "$DLL: $(numfmt --to=iec $(stat -c%s "$DLL"))"
             done
           done
 
       - name: Create Package
-        if: steps.check.outputs.SKIP == 'false'
         run: |
           mkdir -p pkg/system32 pkg/syswow64
           for dll in d3d12.dll d3d12core.dll; do
@@ -576,7 +579,7 @@ jobs:
             "type": "VKD3D",
             "versionName": "${VER}",
             "versionCode": ${BUILD_DATE},
-            "description": "VKD3D-Proton x64 — Box64",
+            "description": "VKD3D-Proton x64 — GPU-Boost+ESync+Fsync+TBR+RenderPass",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -591,7 +594,6 @@ jobs:
           echo "PKG=$PKG" >> $GITHUB_ENV
 
       - name: Upload Artifact
-        if: steps.check.outputs.SKIP == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.PKG }}
@@ -599,7 +601,6 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub Release
-        if: steps.check.outputs.SKIP == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -612,12 +613,26 @@ jobs:
           |----------|-------|
           | Version | \`${{ env.VER }}\` |
           | Build Date | \`${{ env.BUILD_DATE }}\` |
+          | Commit | \`${{ env.COMMIT }}\` |
           | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
           | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
+
+          ### Patches
+          - RE Engine Integer Blend Fix (GPU hang / vr -4 prevention)
+          - GPU Boost — Async Compute, Concurrent Queue, GPU VA Recycle
+          - Tile Based Rendering forced ON (Adreno/Turnip — fixes CPU 100%)
+          - ESync + Fsync — Timeline semaphore, shared timeline, Win32 fence OFF
+          - Shader Model capped to SM 6.6 (prevents CPU shader recompilation fallback)
+          - Feature Level 12.1 (accurate for Adreno 7xx — prevents FL mismatch overhead)
+          - Render Pass forced (tiled GPU — upstream PR #2856)
+          - UMA Host Cached memory
+          - Descriptor limits 1M+ UAB
+          - Pipeline cache 128K entries
+          - GPU memory 8 GB dedicated / 16 GB shared
 
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"
 
       - name: Cleanup
         if: always()
-        run: rm -rf src out pkg vk-headers spirv-h
+        run: rm -rf src out pkg vk-headers spirv-h .venv

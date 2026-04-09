@@ -128,7 +128,7 @@ jobs:
           export APPLY_PATCH_SERIES="${{ inputs.apply_patch_series || 'true' }}"
           export ENABLE_PERF="${{ inputs.enable_perf || 'false' }}"
 
-          bash t-d.sh
+          bash turnip-driver.sh
 
           echo "version=$(cat build/version.txt)"               >> $GITHUB_OUTPUT
           echo "filename=$(cat build/filename.txt)"             >> $GITHUB_OUTPUT

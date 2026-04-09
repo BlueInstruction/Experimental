@@ -265,14 +265,14 @@ jobs:
               (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_1;'),
+              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;'),
               (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
               (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
               (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
+              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -533,28 +533,31 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          BUILD_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
-          LINK_FLAGS="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
+          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
+          ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
+          ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
+          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
+          X86_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
 
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
-            -Dc_args="$BUILD_FLAGS" \
-            -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$LINK_FLAGS" \
-            -Dcpp_link_args="$LINK_FLAGS"
+            -Dc_args="$ARM64EC_FLAGS" \
+            -Dcpp_args="$ARM64EC_FLAGS" \
+            -Dc_link_args="$ARM64EC_C_LINK" \
+            -Dcpp_link_args="$ARM64EC_CPP_LINK"
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-arm64ec.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-arm64ec.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
-            -Dc_args="$BUILD_FLAGS" \
-            -Dcpp_args="$BUILD_FLAGS" \
-            -Dc_link_args="$LINK_FLAGS" \
-            -Dcpp_link_args="$LINK_FLAGS"
+            -Dc_args="$X86_FLAGS" \
+            -Dcpp_args="$X86_FLAGS" \
+            -Dc_link_args="$X86_LINK" \
+            -Dcpp_link_args="$X86_LINK"
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
-          [[ ${PIPESTATUS[0]} -ne 0 ]] && { tail -n 50 build-x86.log; exit 1; }
+          [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
         run: |

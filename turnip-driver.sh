@@ -773,6 +773,7 @@ inj = "\n".join(lines)
 content = content[:ins] + inj + content[ins:]
 with open(tu_path, 'w') as f: f.write(content)
 print(f"[OK] {len(dev_exts)} extension assignments written")
+PYEOF
 
     log_success "Vulkan extensions support applied"
 }

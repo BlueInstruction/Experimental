@@ -231,19 +231,19 @@ jobs:
                       errors.append(f"Write error {path}: {e}")
 
           gpu = [
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>20479ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
           ]
 
           dev = [
               (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_1;'),
+              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_7;'),
+              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_2;'),
               (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>613;'),
               (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>64;'),
@@ -621,13 +621,13 @@ jobs:
           - GPU Boost — Async Compute, Concurrent Queue, GPU VA Recycle
           - Tile Based Rendering forced ON (Adreno/Turnip — fixes CPU 100%)
           - ESync + Fsync — Timeline semaphore, shared timeline, Win32 fence OFF
-          - Shader Model capped to SM 6.6 (prevents CPU shader recompilation fallback)
-          - Feature Level 12.1 (accurate for Adreno 7xx — prevents FL mismatch overhead)
+          - Shader Model SM 6.7 (matches Adreno 750 Windows driver 512.819.2)
+          - Feature Level 12.2 / DX12 Ultimate (matches Windows A750 profile)
           - Render Pass forced (tiled GPU — upstream PR #2856)
           - UMA Host Cached memory
           - Descriptor limits 1M+ UAB
           - Pipeline cache 128K entries
-          - GPU memory 8 GB dedicated / 16 GB shared
+          - GPU memory 20479 MB dedicated / 4096 MB shared (matches Windows A750 heap)
 
           [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
             "${{ env.PKG }}.wcp"

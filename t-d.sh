@@ -317,7 +317,9 @@ apply_ubwc_support() {
     local kgsl_file="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
     [[ ! -f "$kgsl_file" ]] && { log_warn "KGSL file not found"; return 0; }
 
-    if ! grep -q "case 5:" "$kgsl_file"; then
+    if grep -q "KGSL_UBWC_5_0" "$kgsl_file" 2>/dev/null; then
+        log_warn "UBWC 5/6 already defined as enum macros — skipping raw case injection"
+    elif ! grep -q "case 5:" "$kgsl_file"; then
         sed -i '/case KGSL_UBWC_4_0:/a\         case 5:\n         case 6:' "$kgsl_file" 2>/dev/null || true
         log_success "UBWC 5/6 support added"
     else
@@ -395,6 +397,15 @@ apply_deck_emu_support() {
                 device_id="0x2684"   # RTX 4090 PCI device ID
                 log_info "Spoofing as NVIDIA GeForce RTX 4090"
                 ;;
+            nvidia_rtx3070)
+                # RTX 3070 Laptop GPU — GA104 — NVK/NVIDIA proprietary
+                driver_id="VK_DRIVER_ID_NVIDIA_PROPRIETARY"
+                driver_name="NVIDIA"
+                device_name="NVIDIA GeForce RTX 3070 Laptop GPU"
+                vendor_id="0x10de"   # NVIDIA PCI vendor ID
+                device_id="0x249c"   # RTX 3070 Laptop GA104 PCI device ID
+                log_info "Spoofing as NVIDIA GeForce RTX 3070 Laptop GPU"
+                ;;
             amd|*)
                 # Steam Deck GPU — Mesa RADV
                 driver_id="VK_DRIVER_ID_MESA_RADV"
@@ -429,6 +440,11 @@ injection = f"""
       snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "{driver_name}");
       memset(p->driverInfo, 0, sizeof(p->driverInfo));
       snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE, "Mesa (spoofed)");
+      /* Identity properties */
+      p->vendorID = {vendor_id};
+      p->deviceID = {device_id};
+      memset(p->deviceName, 0, sizeof(p->deviceName));
+      snprintf(p->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "{device_name}");
    }}
 """
 
@@ -502,7 +518,7 @@ n = 0
 def lo(m):
     global n; n += 1
     return m.group(1)+'1'+m.group(3)
-c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,)', lo, c)
+c = re.sub(r'("VK_\w+"\s*:\s*)(\d+)(,?)', lo, c)
 print(f"[OK] Lowered {n} entries to API 1")
 
 ALL=[
@@ -675,6 +691,14 @@ ALL=[
 "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
 "VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_commands","VK_QCOM_tile_memory_heap",
 "VK_QCOM_tile_properties","VK_QCOM_tile_shading","VK_QCOM_ycbcr_degamma",
+"VK_KHR_device_fault",
+"VK_KHR_shader_abort",
+"VK_KHR_shader_constant_data",
+"VK_ARM_shader_instrumentation",
+"VK_KHR_device_address_commands",
+"VK_ARM_data_graph_instruction_set_tosa",
+"VK_EXT_primitive_restart_index",
+"VK_QCOM_queue_perf_hint",
 "VK_QNX_external_memory_screen_buffer","VK_QNX_screen_surface",
 "VK_SEC_amigo_profiling","VK_SEC_pipeline_cache_incremental_mode","VK_SEC_ubm_surface",
 "VK_VALVE_descriptor_set_host_mapping","VK_VALVE_fragment_density_map_layered",
@@ -686,17 +710,28 @@ ALL=[
 known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in ALL if e not in known]
 if adds:
-    for probe in ['"VK_KHR_swapchain": 1,','"VK_KHR_swapchain": 26,','"VK_ANDROID_native_buffer": 26,','"VK_ANDROID_native_buffer": 1,']:
+    injected_ext = False
+    for probe in ['"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain": 26,',
+                  '"VK_ANDROID_native_buffer": 26,', '"VK_ANDROID_native_buffer": 1,',
+                  '"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
         if probe in c:
-            c = c.replace(probe, probe+'\n'+'\n'.join(adds), 1); break
-    else:
-        c = re.sub(r'(\n\})\s*$','\n'+'\n'.join(adds)+r'\n}',c,count=1)
+            c = c.replace(probe, probe+'\n'+'\n'.join(adds), 1)
+            injected_ext = True
+            break
+    if not injected_ext:
+        # Fallback: append before last closing brace
+        m2 = list(re.finditer(r'\n(\s*\}\s*)$', c))
+        if m2:
+            ins = m2[-1].start()
+            c = c[:ins] + '\n' + '\n'.join(adds) + c[ins:]
+        else:
+            c += '\n' + '\n'.join(adds)
     print(f"[OK] Added {len(adds)} extensions")
 else:
     print("[INFO] All extensions already present")
 with open(fp,'w') as f: f.write(c)
-total=len(re.findall(r'"VK_[A-Z0-9_]+"\s*:\s*\d+',c))
-print(f"[OK] Total entries: {total}")
+total=len(re.findall(r'"VK_[A-Z0-9_]+"',c))
+print(f"[OK] Total VK entries in file: {total}")
 PYEOF
         log_success "vk_extensions.py patched"
     fi

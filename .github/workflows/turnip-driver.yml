@@ -122,11 +122,11 @@ jobs:
           export BUILD_VARIANT="${{ inputs.build_variant || 'optimized' }}"
           export NDK_PATH="${{ github.workspace }}/android-ndk"
           export API_LEVEL="${{ env.API_LEVEL }}"
-          export ENABLE_DECK_EMU="${{ inputs.enable_deck_emu || 'true' }}"
-          export ENABLE_TIMELINE_HACK="${{ inputs.enable_timeline_hack || 'true' }}"
-          export ENABLE_UBWC_HACK="${{ inputs.enable_ubwc_hack || 'true' }}"
-          export APPLY_PATCH_SERIES="${{ inputs.apply_patch_series || 'true' }}"
-          export ENABLE_PERF="${{ inputs.enable_perf || 'false' }}"
+          export ENABLE_DECK_EMU="${{ github.event.inputs.enable_deck_emu != '' && github.event.inputs.enable_deck_emu || 'true' }}"
+          export ENABLE_TIMELINE_HACK="${{ github.event.inputs.enable_timeline_hack != '' && github.event.inputs.enable_timeline_hack || 'true' }}"
+          export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
+          export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
+          export ENABLE_PERF="${{ github.event.inputs.enable_perf != '' && github.event.inputs.enable_perf || 'false' }}"
 
           bash turnip-driver.sh
 

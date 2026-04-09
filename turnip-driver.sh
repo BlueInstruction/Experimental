@@ -600,11 +600,22 @@ known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in A750_WIN if e not in known]
 if adds:
     injected = False
-    for probe in ['"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+    # Exact full-entry probe (safe to split after)
+    for probe in ['"VK_KHR_swapchain": 1,']:
         if probe in c:
             c = c.replace(probe, probe + '\n' + '\n'.join(adds), 1)
             injected = True
             break
+    # Broader probes: insert after the full line to avoid splitting dict entries
+    if not injected:
+        for probe in ['"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+            idx = c.find(probe)
+            if idx != -1:
+                eol = c.find('\n', idx)
+                if eol == -1: eol = len(c)
+                c = c[:eol] + '\n' + '\n'.join(adds) + c[eol:]
+                injected = True
+                break
     if not injected:
         m2 = list(re.finditer(r'\n(\s*\}\s*)$', c))
         if m2:
@@ -781,7 +792,6 @@ apply_patches() {
         apply_gralloc_ubwc_fix
         if [[ "$ENABLE_DECK_EMU" == "true" ]]; then
             apply_a750_win_identity
-            apply_a750_win_profile
         fi
         apply_vulkan_extensions_support
     fi

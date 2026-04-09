@@ -711,13 +711,23 @@ known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
 adds = [f'    "{e}": 1,' for e in ALL if e not in known]
 if adds:
     injected_ext = False
+    # Exact full-entry probes (safe to split after)
     for probe in ['"VK_KHR_swapchain": 1,', '"VK_KHR_swapchain": 26,',
-                  '"VK_ANDROID_native_buffer": 26,', '"VK_ANDROID_native_buffer": 1,',
-                  '"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+                  '"VK_ANDROID_native_buffer": 26,', '"VK_ANDROID_native_buffer": 1,']:
         if probe in c:
             c = c.replace(probe, probe+'\n'+'\n'.join(adds), 1)
             injected_ext = True
             break
+    # Broader probes: insert after the full line to avoid splitting dict entries
+    if not injected_ext:
+        for probe in ['"VK_KHR_swapchain":', '"VK_ANDROID_native_buffer":']:
+            idx = c.find(probe)
+            if idx != -1:
+                eol = c.find('\n', idx)
+                if eol == -1: eol = len(c)
+                c = c[:eol] + '\n' + '\n'.join(adds) + c[eol:]
+                injected_ext = True
+                break
     if not injected_ext:
         # Fallback: append before last closing brace
         m2 = list(re.finditer(r'\n(\s*\}\s*)$', c))

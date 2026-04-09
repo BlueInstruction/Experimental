@@ -422,6 +422,8 @@ with open(path, 'w') as f:
 print(f'[OK] A750 Windows profile: {applied} injections applied')
 PYEOF
 
+    fi
+
     log_success "Adreno 750 Windows profile applied"
 }
 

@@ -68,10 +68,11 @@ on:
 
       deck_emu_target:
         type: choice
-        description: "GPU to spoof (nvidia = RTX 4090, amd = Steam Deck)"
+        description: "GPU to spoof (nvidia=RTX4090, nvidia_rtx3070=RTX3070 Laptop, amd=Steam Deck)"
         default: "nvidia"
         options:
           - nvidia
+          - nvidia_rtx3070
           - amd
 
       enable_timeline_hack:

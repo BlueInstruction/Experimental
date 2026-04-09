@@ -114,7 +114,7 @@ jobs:
       - name: Build Turnip driver
         id: build
         run: |
-          chmod +x turnio-driver.sh
+          chmod +x turnip-driver.sh
           export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"

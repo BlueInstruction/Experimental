@@ -1,8 +1,7 @@
 name: Vkd3d Proton
 
 on:
-  schedule:
-    - cron: "0 18 * * *"
+
   workflow_dispatch:
     inputs:
       FORCE_MODE:
@@ -598,39 +597,6 @@ jobs:
           name: ${{ env.PKG }}
           path: ${{ env.PKG }}.wcp
           retention-days: 30
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ${{ env.VER }} — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ${{ env.VER }}
-
-          | Property | Value |
-          |----------|-------|
-          | Version | \`${{ env.VER }}\` |
-          | Build Date | \`${{ env.BUILD_DATE }}\` |
-          | Commit | \`${{ env.COMMIT }}\` |
-          | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
-          | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
-
-          ### Patches
-          - RE Engine Integer Blend Fix (GPU hang / vr -4 prevention)
-          - GPU Boost — Async Compute, Concurrent Queue, GPU VA Recycle
-          - Tile Based Rendering forced ON (Adreno/Turnip — fixes CPU 100%)
-          - ESync + Fsync — Timeline semaphore, shared timeline, Win32 fence OFF
-          - Shader Model SM 6.7 (matches Adreno 750 Windows driver 512.819.2)
-          - Feature Level 12.2 / DX12 Ultimate (matches Windows A750 profile)
-          - Render Pass forced (tiled GPU — upstream PR #2856)
-          - UMA Host Cached memory
-          - Descriptor limits 1M+ UAB
-          - Pipeline cache 128K entries
-          - GPU memory 20479 MB dedicated / 4096 MB shared (matches Windows A750 heap)
-
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
-            "${{ env.PKG }}.wcp"
 
       - name: Cleanup
         if: always()

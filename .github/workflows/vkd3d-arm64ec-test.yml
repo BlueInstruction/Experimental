@@ -585,7 +585,7 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "v${VER}-arm64ec",
-            "versionCode": "${COMMIT}",
+            "versionCode": "${COMMIT}"
             "description": "VKD3D-Proton v${VER} ARM64EC (${COMMIT}) — GPU-Boost+ESync+Fsync+TBR+RenderPass",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},

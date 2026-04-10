@@ -1,8 +1,7 @@
 name: Vkd3d Proton Arm64ec Test
 
 on:
-  schedule:
-    - cron: "0 21 */28 * *"
+
   workflow_dispatch:
     inputs:
       FORCE_MODE:

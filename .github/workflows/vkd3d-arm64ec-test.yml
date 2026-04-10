@@ -584,9 +584,9 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "v${VER}-arm64ec",
-            "versionCode": "${COMMIT}"
-            "description": "VKD3D-Proton v${VER} ARM64EC (${COMMIT}) — GPU-Boost+ESync+Fsync+TBR+RenderPass",
+            "versionName": "${VER}-arm64ec-${COMMIT}",
+            "versionCode": 0,
+            "description": "vkd3d-proton",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},

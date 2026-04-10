@@ -941,11 +941,11 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name="vulkan.adreno.so"
+    local driver_name="libvulkan.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
-    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "libvulkan.so" "${pkg_dir}/${driver_name}"
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
 
@@ -966,10 +966,10 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "Turnip A750 Windows Profile",
-    "description": "Adreno 750 — Windows x86_64 identity, apiVersion 1.3.295, 20 GiB heap",
-    "author": "Blue",
+    "description": "Adreno 750 — Windows x86_64 identity",
+    "author": "BlueInstruction",
     "packageVersion": "1",
-    "vendor": "Qualcomm",
+    "vendor": "Mess",
     "driverVersion": "${vulkan_version}",
     "minApi": 28,
     "libraryName": "${driver_name}"

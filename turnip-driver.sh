@@ -1030,7 +1030,7 @@ print_summary() {
 }
 
 main() {
-    log_info "Turnip Driver Builder — Adreno 750 Windows-${build_date}"
+    log_info "Turnip Driver Builder — Adreno 750 Windows"
     log_info "Variant: $BUILD_VARIANT | Source: $MESA_SOURCE"
 
     check_deps

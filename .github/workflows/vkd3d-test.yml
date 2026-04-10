@@ -171,7 +171,7 @@ jobs:
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch master --depth 1 \
-            https://github.com/HansKristian-Work/vkd3d-proton.git src
+            https://github.com/BlueInstruction/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"
@@ -572,7 +572,7 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          llvm-strip --strip-all pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
+          llvm-strip --strip-debug pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
 
           cat > pkg/profile.json << JSONEOF
           {

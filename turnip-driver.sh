@@ -395,7 +395,7 @@ for pat in [
                 '\n   if (TU_DEBUG(DECK_EMU)) {\n'
                 '      /* A750_WIN_PROFILE: 20 GiB heap */\n'
                 f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
-                f'         {param}->memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n'
                 '   }\n'
             )
             content = content[:insert_at] + '\n' + heap_code + content[insert_at:]
@@ -410,7 +410,7 @@ if not heap_injected:
     if m_hs:
         ln_end = content.find('\n', m_hs.end())
         if ln_end == -1: ln_end = len(content)
-        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 0x4FF000000ULL;\n   }\n'
+        heap_code = '\n   if (TU_DEBUG(DECK_EMU)) {\n      /* A750_WIN_PROFILE: 20 GiB heap fallback */\n      pdevice->memory.memoryProperties.memoryHeaps[0].size = 20479ULL * 1024ULL * 1024ULL;\n   }\n'
         content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
         print('[OK] 20 GiB heap injected (fallback after memoryHeaps assignment)')
         applied += 1

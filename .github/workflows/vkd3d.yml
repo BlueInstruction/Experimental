@@ -1,8 +1,7 @@
 name: Vkd3d Proton
 
 on:
-  schedule:
-    - cron: "0 18 * * *"
+
   workflow_dispatch:
     inputs:
       FORCE_MODE:

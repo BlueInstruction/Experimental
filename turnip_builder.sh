@@ -307,7 +307,7 @@ EOF
         -Dfreedreno-kmds=kgsl \
         -Degl=disabled \
         -Dglx=disabled \
-        -Db_lto=true \
+        -Db_lto=false \
         -Dvulkan-beta=true \
         -Ddefault_library=shared \
         -Dzstd=disabled \

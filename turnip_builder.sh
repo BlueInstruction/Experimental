@@ -70,9 +70,14 @@ apply_patch_disable_workgroup_memory(){
 
 apply_patch_fix_a725_a730(){
     echo "Applying patch: fix a725/a730 compute_constlen_quirk..."
-    sed -i '/reading_shading_rate_requires_smask_quirk = True,/a\        compute_constlen_quirk = True,' \
-        src/freedreno/common/freedreno_devices.py
-    echo -e "${green}OK: fix a725/a730${nocolor}"
+    # Only apply if the C struct actually has the field
+    if grep -q 'compute_constlen_quirk' src/freedreno/common/freedreno_dev_info.h 2>/dev/null; then
+        sed -i '/reading_shading_rate_requires_smask_quirk = True,/a\        compute_constlen_quirk = True,' \
+            src/freedreno/common/freedreno_devices.py
+        echo -e "${green}OK: fix a725/a730${nocolor}"
+    else
+        echo -e "${green}SKIP: compute_constlen_quirk not in struct (branch does not need it)${nocolor}"
+    fi
 }
 
 apply_patch_force_sysmem(){

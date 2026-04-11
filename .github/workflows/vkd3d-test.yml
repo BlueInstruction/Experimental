@@ -331,6 +331,16 @@ jobs:
               (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>8'),
           ]
 
+          # Swapchain blit safety: force render-pass path on tiled GPUs
+          # The upstream blit path (c8c8ab5) requires TRANSFER_DST_BIT on swapchain
+          # images which tiled GPU drivers may not support, causing present crashes.
+          # Force blit_command = false so the render-pass path is always used.
+          swapchain_blit_safety = [
+              (r'(blit_command\s*=\s*)!blank_present\s*&&[^;]+;', r'\g<1>false;'),
+              (r'(imageUsage\s*=\s*)VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT\s*\|\s*VK_IMAGE_USAGE_TRANSFER_DST_BIT',
+               r'\g<1>VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT'),
+          ]
+
           cmdqueue_patches = [
               (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
               (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
@@ -383,7 +393,7 @@ jobs:
                   patch_file(path, gpu_boost_patches)
                   patch_file(path, tbr_patches)
 
-          patch_file("libs/vkd3d/swapchain.c", swapchain_patches)
+          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
           patch_file("libs/vkd3d/command.c", cmdqueue_patches)
 
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"

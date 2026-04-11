@@ -437,7 +437,10 @@ jobs:
                       content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
-                  applied += 1
+                  if "header_defines" not in group_stats:
+                      group_stats["header_defines"] = {"applied": 0, "files": []}
+                  group_stats["header_defines"]["applied"] += 1
+                  group_stats["header_defines"]["files"].append("vkd3d_private.h:1")
 
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
@@ -635,7 +638,7 @@ jobs:
           - Descriptor limits 1M+ UAB
           - Pipeline cache 128K entries
 
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton/tree/${{ env.COMMIT }})" \
+          [Source](https://github.com/BlueInstruction/vkd3d-proton/tree/${{ env.COMMIT }})" \
             "${{ env.PKG }}.wcp"
 
       - name: Cleanup

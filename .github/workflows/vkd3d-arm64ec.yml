@@ -643,7 +643,7 @@ jobs:
           - Pipeline cache 128K entries
           - ARM64EC native for Box64/FEX/WoWBox64
 
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton/tree/${{ env.COMMIT }})" \
+          [Source](https://github.com/BlueInstruction/vkd3d-proton/tree/${{ env.COMMIT }})" \
             "${{ env.PKG }}.wcp"
 
       - name: Cleanup

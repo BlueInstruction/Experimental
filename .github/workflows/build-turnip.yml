@@ -17,8 +17,10 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools
-          pip3 install --upgrade meson mako
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip python3-venv glslang-tools
+          python3 -m venv /tmp/meson-venv
+          /tmp/meson-venv/bin/pip install meson mako
+          echo "PATH=/tmp/meson-venv/bin:${PATH}" >> "$GITHUB_ENV"
 
       - name: Build Driver
         run: |

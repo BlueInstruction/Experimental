@@ -86,8 +86,8 @@ apply_patch_force_sysmem(){
         n
         /^{/a\   return true;\n
     }' src/freedreno/vulkan/tu_cmd_buffer.cc
-    # Fallback: insert after the opening brace of the function
-    if ! grep -q 'return true;' src/freedreno/vulkan/tu_cmd_buffer.cc 2>/dev/null; then
+    # Fallback: check if return true was inserted inside the target function specifically
+    if ! sed -n '/use_sysmem_rendering/,/^}/p' src/freedreno/vulkan/tu_cmd_buffer.cc 2>/dev/null | grep -q 'return true;'; then
         sed -i '/use_sysmem_rendering.*autotune_result)/{n;s/^{$/{\n   return true;\n/}' \
             src/freedreno/vulkan/tu_cmd_buffer.cc
     fi

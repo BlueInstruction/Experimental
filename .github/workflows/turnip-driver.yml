@@ -9,6 +9,7 @@ on:
         default: "adreno_main"
         options:
           - adreno_main
+          - clean_main
           - latest_release
           - staging_branch
           - main_branch

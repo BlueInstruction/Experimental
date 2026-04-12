@@ -18,6 +18,7 @@ PATCHES_DIR="$(pwd)/patches"
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
+TURNIP_CI_REPO="https://github.com/whitebelyash/freedreno_turnip-CI.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 
 MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
@@ -105,8 +106,8 @@ update_vulkan_headers() {
     # Skip header update for adreno_main — the fork ships compatible headers.
     # Overwriting with latest upstream headers causes _EXT→_KHR rename mismatches
     # (e.g. VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT removed in newer headers).
-    if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
-        log_info "Skipping Vulkan headers update (adreno_main ships compatible headers)"
+    if [[ "$MESA_SOURCE" == "adreno_main" || "$MESA_SOURCE" == "clean_main" ]]; then
+        log_info "Skipping Vulkan headers update ($MESA_SOURCE uses its own compatible headers)"
         return 0
     fi
 
@@ -135,6 +136,12 @@ clone_mesa() {
             target_ref="$MESA_BRANCH_DEFAULT"
             clone_args=("--depth" "200" "--branch" "$target_ref")
             ;;
+        clean_main)
+            # Upstream Mesa main + freedreno_turnip-CI patches
+            # Clean vanilla build with community patches applied
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+            ;;
         latest_release)
             target_ref=$(fetch_latest_release)
             clone_args=("--depth" "1" "--branch" "$target_ref")
@@ -159,8 +166,14 @@ clone_mesa() {
     esac
     log_info "Target: $target_ref from $MESA_SOURCE"
 
-    if ! git clone "${clone_args[@]}" "$MESA_REPO" "$MESA_DIR" 2>/dev/null; then
-        log_warn "Primary source ($MESA_REPO) failed, trying mirror"
+    # For clean_main, clone from upstream gitlab directly
+    local primary_repo="$MESA_REPO"
+    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
+        primary_repo="$MESA_MIRROR"
+    fi
+
+    if ! git clone "${clone_args[@]}" "$primary_repo" "$MESA_DIR" 2>/dev/null; then
+        log_warn "Primary source ($primary_repo) failed, trying mirror"
         # For adreno_main fallback, use upstream main
         if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
             target_ref="main"
@@ -177,6 +190,40 @@ clone_mesa() {
     git config user.name "Turnip CI Builder"
 
     [[ "$MESA_SOURCE" == "latest_main" ]] && git pull origin main
+
+    # For clean_main, fetch and apply freedreno_turnip-CI patches
+    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
+        log_info "Fetching freedreno_turnip-CI patches..."
+        local ci_dir="${WORKDIR}/turnip-ci"
+        if git clone --depth=1 "$TURNIP_CI_REPO" "$ci_dir" 2>/dev/null; then
+            # Apply .patch files from the CI repo's patches directory
+            local patch_dir=""
+            for try_dir in "$ci_dir/patches" "$ci_dir/patch" "$ci_dir"; do
+                if compgen -G "${try_dir}/*.patch" >/dev/null 2>&1; then
+                    patch_dir="$try_dir"
+                    break
+                fi
+            done
+            if [[ -n "$patch_dir" ]]; then
+                log_info "Applying freedreno_turnip-CI patches from $patch_dir"
+                for p in $(find "$patch_dir" -maxdepth 1 -name '*.patch' | sort); do
+                    local pname
+                    pname=$(basename "$p")
+                    if git apply --check "$p" 2>/dev/null; then
+                        git apply "$p"
+                        log_success "Applied: $pname"
+                    else
+                        log_warn "Skipped (doesn't apply cleanly): $pname"
+                    fi
+                done
+            else
+                log_warn "No .patch files found in freedreno_turnip-CI"
+            fi
+            rm -rf "$ci_dir"
+        else
+            log_warn "Failed to clone freedreno_turnip-CI, continuing without patches"
+        fi
+    fi
 
     local version commit
     version=$(get_mesa_version)
@@ -985,11 +1032,11 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name="libvulkan.so"
+    local driver_name="vulkan.freedreno.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
-    patchelf --set-soname "libvulkan.so" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || true
 

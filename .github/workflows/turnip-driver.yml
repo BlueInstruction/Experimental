@@ -1,4 +1,4 @@
-name: T-D
+name: Turnip-Driver
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ on:
           - staging/25.3
 
       custom_tag:
-        description: "Custom tag"
+        description: "Custom tag (used when mesa_source = custom_tag)"
         required: false
         default: ""
 
@@ -42,56 +42,33 @@ on:
         default: "optimized"
         options:
           - optimized
-          - autotuner
-          - vanilla
           - debug
           - profile
-
-      target_gpu:
-        type: choice
-        description: "Target GPU generation"
-        default: "a7xx"
-        options:
-          - a6xx
-          - a7xx
-          - a8xx
-
-      enable_ext_spoof:
-        type: boolean
-        description: "Enable Vulkan extension spoofing (improves Winlator compatibility)"
-        default: true
+          - vanilla
 
       enable_deck_emu:
         type: boolean
-        description: "Enable deck_emu (GPU identity spoof)"
+        description: "Enable Adreno 750 Windows identity (vendorID 0x5143, apiVersion 1.3.295, 20 GiB heap)"
         default: true
-
-      deck_emu_target:
-        type: choice
-        description: "GPU to spoof (nvidia = RTX 4090, amd = Steam Deck)"
-        default: "nvidia"
-        options:
-          - nvidia
-          - amd
 
       enable_timeline_hack:
         type: boolean
-        description: "Enable timeline semaphore hack (improves DXVK performance)"
+        description: "Enable timeline semaphore optimization (improves DXVK performance)"
         default: true
 
       enable_ubwc_hack:
         type: boolean
-        description: "Enable UBWC 5/6 blind enabling (may cause corruption, but improves performance)"
+        description: "Enable UBWC 5/6 support"
         default: true
 
       apply_patch_series:
         type: boolean
-        description: "Apply full patch series from patches/series/ if present"
+        description: "Apply patch series from patches/series/ if present"
         default: true
 
       enable_perf:
         type: boolean
-        description: "Enable performance options (freedreno-enable-perf)"
+        description: "Enable freedreno performance options"
         default: false
 
 permissions:
@@ -134,10 +111,10 @@ jobs:
           unzip -q ndk.zip
           mv ${{ env.NDK_VERSION }} android-ndk
 
-      - name: Build turnip driver
+      - name: Build Turnip driver
         id: build
         run: |
-          chmod +x t-d.sh
+          chmod +x turnip-driver.sh
           export MESA_SOURCE="${{ inputs.mesa_source || 'main_branch' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
@@ -145,21 +122,18 @@ jobs:
           export BUILD_VARIANT="${{ inputs.build_variant || 'optimized' }}"
           export NDK_PATH="${{ github.workspace }}/android-ndk"
           export API_LEVEL="${{ env.API_LEVEL }}"
-          export TARGET_GPU="${{ inputs.target_gpu || 'a7xx' }}"
-          export ENABLE_EXT_SPOOF="${{ inputs.enable_ext_spoof || 'true' }}"
-          export ENABLE_DECK_EMU="${{ inputs.enable_deck_emu || 'true' }}"
-          export DECK_EMU_TARGET="${{ inputs.deck_emu_target || 'nvidia' }}"
-          export ENABLE_TIMELINE_HACK="${{ inputs.enable_timeline_hack || 'true' }}"
-          export ENABLE_UBWC_HACK="${{ inputs.enable_ubwc_hack || 'true' }}"
-          export APPLY_PATCH_SERIES="${{ inputs.apply_patch_series || 'true' }}"
-          export ENABLE_PERF="${{ inputs.enable_perf || 'false' }}"
+          export ENABLE_DECK_EMU="${{ github.event.inputs.enable_deck_emu != '' && github.event.inputs.enable_deck_emu || 'true' }}"
+          export ENABLE_TIMELINE_HACK="${{ github.event.inputs.enable_timeline_hack != '' && github.event.inputs.enable_timeline_hack || 'true' }}"
+          export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
+          export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
+          export ENABLE_PERF="${{ github.event.inputs.enable_perf != '' && github.event.inputs.enable_perf || 'false' }}"
 
-          bash t-d.sh
+          bash turnip-driver.sh
 
-          echo "version=$(cat build/version.txt)"             >> $GITHUB_OUTPUT
-          echo "filename=$(cat build/filename.txt)"           >> $GITHUB_OUTPUT
+          echo "version=$(cat build/version.txt)"               >> $GITHUB_OUTPUT
+          echo "filename=$(cat build/filename.txt)"             >> $GITHUB_OUTPUT
           echo "vulkan_version=$(cat build/vulkan_version.txt)" >> $GITHUB_OUTPUT
-          echo "build_date=$(cat build/build_date.txt)"       >> $GITHUB_OUTPUT
+          echo "build_date=$(cat build/build_date.txt)"         >> $GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

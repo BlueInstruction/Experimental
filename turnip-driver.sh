@@ -27,16 +27,27 @@ BUILD_TYPE="${BUILD_TYPE:-release}"
 BUILD_VARIANT="${BUILD_VARIANT:-optimized}"
 NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-35}"
-ENABLE_PERF="${ENABLE_PERF:-false}"
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
-CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
-CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod}"
-LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections}"
+# Performance compiler flags for Adreno 750 (Cortex-X4 / ARMv8.2-a)
+# -O3                     Maximum optimization
+# -march=armv8.2-a+...    Target Snapdragon 8 Gen 3 ISA features
+# -ffast-math              Fast floating-point (significant GPU driver speedup)
+# -fno-finite-math-only    Keep NaN/Inf handling (prevents rendering bugs)
+# -fno-math-errno          Don't set errno on math ops (reduces overhead)
+# -fno-trapping-math       Assume no FP traps (enables more optimizations)
+# -DNDEBUG                 Strip all assert() calls from release build
+CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
+CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
+# Linker flags:
+# --gc-sections            Strip dead code
+# --icf=safe               Merge identical functions (smaller + faster)
+# -O2                      Linker optimization level 2
+LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections -Wl,--icf=safe -Wl,-O2}"
 
 check_deps() {
     local deps="git meson ninja patchelf zip ccache curl python3"
@@ -735,7 +746,7 @@ A750_CORE = [
     "VK_QCOM_multiview_per_view_render_areas","VK_QCOM_multiview_per_view_viewports",
     "VK_QCOM_render_pass_shader_resolve","VK_QCOM_render_pass_store_ops",
     "VK_QCOM_render_pass_transform","VK_QCOM_rotated_copy_commands",
-    "VK_QCOM_tile_properties","VK_QCOM_queue_perf_hint",
+    "VK_QCOM_tile_properties",
 ]
 
 try:
@@ -919,12 +930,11 @@ configure_build() {
     [[ "$BUILD_VARIANT" == "debug" ]]   && buildtype="debug"
     [[ "$BUILD_VARIANT" == "profile" ]] && buildtype="debugoptimized"
 
-    local perf_args=""
-    [[ "$ENABLE_PERF" == "true" ]] && perf_args="-Dfreedreno-enable-perf=true"
-
     meson setup build                                   \
         --cross-file "${WORKDIR}/cross-aarch64.txt"    \
         -Dbuildtype="$buildtype"                        \
+        -Db_lto=true                                    \
+        -Db_ndebug=true                                 \
         -Dplatforms=android                             \
         -Dplatform-sdk-version="$API_LEVEL"             \
         -Dandroid-stub=true                             \
@@ -946,7 +956,6 @@ configure_build() {
         -Dbuild-tests=false                             \
         -Dwerror=false                                  \
         -Ddefault_library=shared                        \
-        $perf_args                                      \
         --force-fallback-for=spirv-tools,spirv-headers  \
         2>&1 | tee "${WORKDIR}/meson.log"
 

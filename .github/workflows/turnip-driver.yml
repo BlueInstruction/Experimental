@@ -72,11 +72,6 @@ on:
         required: false
         default: "1"
 
-      enable_perf:
-        type: boolean
-        description: "Enable freedreno performance options"
-        default: false
-
 permissions:
   contents: write
 
@@ -132,7 +127,6 @@ jobs:
           export ENABLE_TIMELINE_HACK="${{ github.event.inputs.enable_timeline_hack != '' && github.event.inputs.enable_timeline_hack || 'true' }}"
           export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
           export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
-          export ENABLE_PERF="${{ github.event.inputs.enable_perf != '' && github.event.inputs.enable_perf || 'false' }}"
           export BUILD_NUMBER="${{ inputs.build_number || '1' }}"
 
           bash turnip-driver.sh

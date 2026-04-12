@@ -36,15 +36,3 @@ jobs:
         with:
           name: driver-turnip-backup
           path: ${{ env.ZIP_PATH }}
-
-      - name: Publish Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: ${{ env.RELEASE_NAME }}
-          body_path: turnip_workdir/description
-          files: ${{ env.ZIP_PATH }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

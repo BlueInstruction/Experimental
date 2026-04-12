@@ -605,42 +605,6 @@ jobs:
           path: ${{ env.PKG }}.wcp
           retention-days: 30
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ env.RELEASE_TAG }}" \
-            --repo "${{ github.repository }}" \
-            --title "VKD3D-Proton ${{ env.VER }} — ${{ env.BUILD_DATE }}" \
-            --notes "## VKD3D-Proton ${{ env.VER }}
-
-          | Property | Value |
-          |----------|-------|
-          | Version | \`${{ env.VER }}\` |
-          | Build Date | \`${{ env.BUILD_DATE }}\` |
-          | Commit | \`${{ env.COMMIT }}\` |
-          | LLVM MinGW | \`${{ steps.llvm.outputs.tag }}\` |
-          | Vulkan Headers | \`${{ env.VK_HEADERS_TAG }}\` |
-
-          ### Patches
-          - GPU identity: Qualcomm Adreno 750 (0x5143:0x43a)
-          - RE Engine Integer Blend Fix (GPU hang / vr -4 prevention)
-          - GPU Boost — Async Compute, Concurrent Queue, GPU VA Recycle
-          - Tile Based Rendering forced ON (Adreno/Turnip — fixes CPU 100%)
-          - ESync + Fsync — Timeline semaphore, shared timeline, Win32 fence OFF
-          - Shader Model capped to SM 6.6 (prevents CPU shader recompilation fallback)
-          - Feature Level 12.1 (accurate for Adreno 7xx — prevents FL mismatch overhead)
-          - DoublePrecisionFloatShaderOps = FALSE (Adreno hardware limitation)
-          - MeshShader = NOT_SUPPORTED (Turnip mesh shader unreliable for DX12)
-          - Render Pass forced (tiled GPU — upstream PR #2856)
-          - UMA Host Cached memory
-          - Descriptor limits 1M+ UAB
-          - Pipeline cache 128K entries
-          - GPU memory 2 GB dedicated / 4 GB shared (realistic for KGSL)
-
-          [Source](https://github.com/HansKristian-Work/vkd3d-proton)" \
-            "${{ env.PKG }}.wcp"
-
       - name: Cleanup
         if: always()
         run: rm -rf src out pkg vk-headers spirv-h .venv

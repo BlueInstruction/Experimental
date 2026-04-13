@@ -93,11 +93,11 @@ void decode_bc4(uint block_idx, out uint vals[16]) {
     uint alpha[8];
     alpha[0] = a0; alpha[1] = a1;
     if (a0 > a1) {
-        for (int i = 1; i < 6; i++)
-            alpha[i+1] = ((6u - uint(i))*a0 + uint(i)*a1 + 3u) / 7u;
+        for (int i = 1; i <= 6; i++)
+            alpha[i+1] = ((7u - uint(i))*a0 + uint(i)*a1 + 3u) / 7u;
     } else {
-        for (int i = 1; i < 4; i++)
-            alpha[i+1] = ((4u - uint(i))*a0 + uint(i)*a1 + 2u) / 5u;
+        for (int i = 1; i <= 4; i++)
+            alpha[i+1] = ((5u - uint(i))*a0 + uint(i)*a1 + 2u) / 5u;
         alpha[6] = 0u;
         alpha[7] = 255u;
     }
@@ -105,10 +105,10 @@ void decode_bc4(uint block_idx, out uint vals[16]) {
     for (int i = 0; i < 16; i++) {
         uint bit_offset = uint(i) * 3u;
         uint idx;
-        if (bit_offset < 16u)
+        if (bit_offset < 32u)
             idx = (bits_lo >> bit_offset) & 7u;
         else
-            idx = (bits_hi >> (bit_offset - 16u)) & 7u;
+            idx = (bits_hi >> (bit_offset - 32u)) & 7u;
         vals[i] = alpha[idx];
     }
 }

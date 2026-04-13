@@ -28,8 +28,8 @@ VkResult wrapper_create_swapchain(
 {
     VkSwapchainCreateInfoKHR patched = *ci;
 
-    LOGI("Swapchain request: min=%u max=%u mode=%s format=%d",
-         patched.minImageCount, patched.maxImageCount,
+    LOGI("Swapchain request: min=%u mode=%s format=%d",
+         patched.minImageCount,
          present_mode_str(patched.presentMode),
          (int)patched.imageFormat);
 
@@ -39,17 +39,13 @@ VkResult wrapper_create_swapchain(
     }
 
     if (patched.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-        LOGI("IMMEDIATE mode: forcing max_image_count=1");
+        LOGI("IMMEDIATE mode: forcing minImageCount=1");
         patched.minImageCount = 1;
-        patched.maxImageCount = 1;
     } else {
         uint32_t cap = g_cfg.max_image_count;
         if (cap > 0 && patched.minImageCount > cap) {
             LOGI("Clamping minImageCount %u -> %u", patched.minImageCount, cap);
             patched.minImageCount = cap;
-        }
-        if (cap > 0 && patched.maxImageCount > cap) {
-            patched.maxImageCount = cap;
         }
     }
 

@@ -18,8 +18,9 @@
 
 #define SPIRV_CAP_CLIP_DISTANCE     32u
 #define SPIRV_CAP_CULL_DISTANCE     33u
-#define SPIRV_DECO_CLIP_DISTANCE    3u
-#define SPIRV_DECO_CULL_DISTANCE    4u
+#define SPIRV_DECO_BUILT_IN         11u
+#define SPIRV_BUILTIN_CLIP_DISTANCE 3u
+#define SPIRV_BUILTIN_CULL_DISTANCE 4u
 #define SPIRV_DECO_RELAXED_PRECISION 0u
 
 struct WrapperPatchedSPIRV {
@@ -46,10 +47,17 @@ static bool spirv_uses_clip_cull(const uint32_t *w, size_t cnt) {
             uint32_t cap = w[i+1];
             if (cap == SPIRV_CAP_CLIP_DISTANCE || cap == SPIRV_CAP_CULL_DISTANCE) return true;
         }
-        if ((o == SPIRV_OP_DECORATE && l >= 3) ||
-            (o == SPIRV_OP_MEMBER_DECORATE && l >= 4)) {
-            uint32_t deco = (o == SPIRV_OP_DECORATE) ? w[i+2] : w[i+3];
-            if (deco == SPIRV_DECO_CLIP_DISTANCE || deco == SPIRV_DECO_CULL_DISTANCE)
+        /* OpDecorate: word layout is [op|len] [target] [decoration] [extra...]
+           OpMemberDecorate: [op|len] [struct] [member] [decoration] [extra...]
+           BuiltIn decoration (11) has one extra operand: the BuiltIn value */
+        if (o == SPIRV_OP_DECORATE && l >= 4 && w[i+2] == SPIRV_DECO_BUILT_IN) {
+            uint32_t builtin = w[i+3];
+            if (builtin == SPIRV_BUILTIN_CLIP_DISTANCE || builtin == SPIRV_BUILTIN_CULL_DISTANCE)
+                return true;
+        }
+        if (o == SPIRV_OP_MEMBER_DECORATE && l >= 5 && w[i+3] == SPIRV_DECO_BUILT_IN) {
+            uint32_t builtin = w[i+4];
+            if (builtin == SPIRV_BUILTIN_CLIP_DISTANCE || builtin == SPIRV_BUILTIN_CULL_DISTANCE)
                 return true;
         }
         i += l;
@@ -75,13 +83,13 @@ static bool spirv_strip_clip_cull(std::vector<uint32_t> &words) {
             uint32_t cap = words[i+1];
             strip = (cap == SPIRV_CAP_CLIP_DISTANCE || cap == SPIRV_CAP_CULL_DISTANCE);
         }
-        if (o == SPIRV_OP_DECORATE && l >= 3) {
-            uint32_t d = words[i+2];
-            strip = (d == SPIRV_DECO_CLIP_DISTANCE || d == SPIRV_DECO_CULL_DISTANCE);
+        if (o == SPIRV_OP_DECORATE && l >= 4 && words[i+2] == SPIRV_DECO_BUILT_IN) {
+            uint32_t builtin = words[i+3];
+            strip = (builtin == SPIRV_BUILTIN_CLIP_DISTANCE || builtin == SPIRV_BUILTIN_CULL_DISTANCE);
         }
-        if (o == SPIRV_OP_MEMBER_DECORATE && l >= 4) {
-            uint32_t d = words[i+3];
-            strip = (d == SPIRV_DECO_CLIP_DISTANCE || d == SPIRV_DECO_CULL_DISTANCE);
+        if (o == SPIRV_OP_MEMBER_DECORATE && l >= 5 && words[i+3] == SPIRV_DECO_BUILT_IN) {
+            uint32_t builtin = words[i+4];
+            strip = (builtin == SPIRV_BUILTIN_CLIP_DISTANCE || builtin == SPIRV_BUILTIN_CULL_DISTANCE);
         }
         if (strip) {
             LOGD("NOP word[%zu] op=%u len=%u", i, o, l);

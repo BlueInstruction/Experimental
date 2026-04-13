@@ -35,9 +35,9 @@ VkFormat wrapper_bcn_to_uncompressed(VkFormat f) {
     case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
     case VK_FORMAT_BC2_UNORM_BLOCK:
     case VK_FORMAT_BC3_UNORM_BLOCK:
-    case VK_FORMAT_BC4_UNORM_BLOCK:
     case VK_FORMAT_BC7_UNORM_BLOCK:
     case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:  return VK_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_BC4_UNORM_BLOCK:        return VK_FORMAT_R8_UNORM;
     case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
     case VK_FORMAT_BC2_SRGB_BLOCK:
     case VK_FORMAT_BC3_SRGB_BLOCK:
@@ -91,9 +91,9 @@ static void decode_bc4_block(const uint8_t *src, uint8_t *out, uint32_t stride, 
     uint8_t a[8];
     a[0]=a0; a[1]=a1;
     if (a0 > a1) {
-        for (int i=1;i<6;i++) a[i+1]=(uint8_t)(((6-i)*a0+(i)*a1+3)/7);
+        for (int i=1;i<=6;i++) a[i+1]=(uint8_t)(((7-i)*a0+(i)*a1+3)/7);
     } else {
-        for (int i=1;i<4;i++) a[i+1]=(uint8_t)(((4-i)*a0+(i)*a1+2)/5);
+        for (int i=1;i<=4;i++) a[i+1]=(uint8_t)(((5-i)*a0+(i)*a1+2)/5);
         a[6]=0; a[7]=255;
     }
     for (uint32_t py = 0; py < bh; py++) {
@@ -117,7 +117,17 @@ bool detect_bc1_striping(const uint8_t *data, size_t size) {
 
 static void decode_bc6h_block(const uint8_t *src, uint16_t *out_rgba4,
                                 uint32_t stride_half) {
-    (void)src; (void)out_rgba4; (void)stride_half;
+    /* BC6H decode not yet implemented — fill with magenta to make it obvious */
+    (void)src;
+    for (uint32_t py = 0; py < 4; py++) {
+        for (uint32_t px = 0; px < 4; px++) {
+            uint16_t *p = out_rgba4 + (py * stride_half + px) * 4;
+            p[0] = 0x3C00; /* 1.0 half-float (R) */
+            p[1] = 0;      /* 0.0 (G) */
+            p[2] = 0x3C00; /* 1.0 half-float (B) */
+            p[3] = 0x3C00; /* 1.0 half-float (A) */
+        }
+    }
 }
 
 void wrapper_cpu_decompress_bcn(
@@ -172,7 +182,7 @@ void wrapper_cpu_decompress_bcn(
 
     case VK_FORMAT_BC6H_UFLOAT_BLOCK:
     case VK_FORMAT_BC6H_SFLOAT_BLOCK:
-        LOGI("BC6H host decode: %ux%u", width, height);
+        LOGW("BC6H host decode: %ux%u (STUB — output is magenta fallback)", width, height);
         for (uint32_t by=0; by<bh; by++)
             for (uint32_t bx=0; bx<bw; bx++)
                 decode_bc6h_block(src+(by*bw+bx)*16,

@@ -90,6 +90,11 @@ typedef struct WrapperDispatch {
     PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties;
 } WrapperDispatch;
 
+/* WrapperPatchedSPIRV is defined in spirv_patcher.cpp (C++ only).
+   The C API uses opaque pointers; C++ callers can include spirv_patcher.cpp's
+   definition directly. */
+struct WrapperPatchedSPIRV;
+
 #ifdef __cplusplus
 extern "C" {
 #endif

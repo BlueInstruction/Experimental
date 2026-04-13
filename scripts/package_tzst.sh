@@ -55,8 +55,7 @@ fi
 echo "Done. Output:"
 ls -lh "${OUT_DIR}/"*.tzst 2>/dev/null || true
 
-SHA_FILE="${OUT_DIR}/SHA256SUMS.txt"
 cd "${OUT_DIR}"
-sha256sum *.tzst *.so 2>/dev/null > "${SHA_FILE}" || true
+sha256sum *.tzst *.so 2>/dev/null > SHA256SUMS.txt || true
 echo ""
-cat "${SHA_FILE}"
+cat SHA256SUMS.txt

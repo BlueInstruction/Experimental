@@ -189,8 +189,10 @@ VkResult wrapper_enumerate_extensions_patched(
     const WrapperDeviceInfo            *info,
     PFN_vkEnumerateDeviceExtensionProperties next_fn)
 {
-    if (!pProps) return next_fn(pd, layer, pCount, nullptr);
-
+    /* Always query the real extensions and compute the patched list so that
+       the count returned on the pProps==nullptr call matches the count we
+       write on the pProps!=nullptr call.  This avoids the buffer overflow
+       that occurred when patching ADDS extensions beyond the original count. */
     uint32_t real_count = 0;
     next_fn(pd, layer, &real_count, nullptr);
     std::vector<VkExtensionProperties> real_exts(real_count);
@@ -201,13 +203,29 @@ VkResult wrapper_enumerate_extensions_patched(
 
     wrapper_patch_extensions_for_dxvk(info, names);
 
-    *pCount = (uint32_t)names.size();
-    if (pProps) {
-        for (uint32_t i = 0; i < *pCount; i++) {
-            strncpy(pProps[i].extensionName, names[i],
-                    VK_MAX_EXTENSION_NAME_SIZE - 1);
-            pProps[i].specVersion = 1;
+    uint32_t patched_count = (uint32_t)names.size();
+
+    if (!pProps) {
+        *pCount = patched_count;
+        return VK_SUCCESS;
+    }
+
+    /* Respect the caller-provided buffer size per Vulkan spec */
+    uint32_t to_write = std::min(*pCount, patched_count);
+    for (uint32_t i = 0; i < to_write; i++) {
+        memset(pProps[i].extensionName, 0, VK_MAX_EXTENSION_NAME_SIZE);
+        strncpy(pProps[i].extensionName, names[i],
+                VK_MAX_EXTENSION_NAME_SIZE - 1);
+        /* Preserve the real specVersion for driver-reported extensions,
+           use 1 for synthetically injected extensions */
+        pProps[i].specVersion = 1;
+        for (auto &re : real_exts) {
+            if (strcmp(re.extensionName, names[i]) == 0) {
+                pProps[i].specVersion = re.specVersion;
+                break;
+            }
         }
     }
-    return VK_SUCCESS;
+    *pCount = patched_count;
+    return (to_write < patched_count) ? VK_INCOMPLETE : VK_SUCCESS;
 }

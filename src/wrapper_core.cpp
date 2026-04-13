@@ -15,7 +15,7 @@
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 
 static std::mutex              g_lock;
-static WrapperEnvConfig        g_cfg;
+WrapperEnvConfig               g_cfg;
 static std::unordered_map<VkDevice, WrapperDeviceInfo> g_dev_info;
 static std::unordered_map<VkDevice, WrapperDispatch>   g_dispatch;
 

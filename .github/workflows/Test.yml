@@ -1,0 +1,212 @@
+name: Build DX Wrapper
+
+on:
+  push:
+    branches: [main, dev]
+    tags:     ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: 'Android API Level'
+        required: false
+        default: '29'
+      ndk_version:
+        description: 'NDK version tag (e.g. r28b) — empty = latest'
+        required: false
+        default: ''
+      build_type:
+        description: 'CMake build type'
+        required: false
+        default: 'Release'
+        type: choice
+        options: [Release, Debug, RelWithDebInfo]
+
+env:
+  DEFAULT_API:   '29'
+  DEFAULT_TYPE:  'Release'
+  ZSTD_VERSION:  '1.5.6'
+
+jobs:
+  build:
+    name: Build (arm64-v8a)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Resolve NDK version
+        id: ndk
+        run: |
+          INPUT="${{ inputs.ndk_version }}"
+          if [ -n "${INPUT}" ]; then
+            echo "tag=${INPUT}" >> "$GITHUB_OUTPUT"
+          else
+            TAG=$(curl -sf \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/android/ndk/releases/latest" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "Resolved NDK: ${TAG}"
+          fi
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK ${{ steps.ndk.outputs.tag }}
+        run: |
+          TAG="${{ steps.ndk.outputs.tag }}"
+          # Remove 'r' prefix and convert: r28b -> 28.1.12983940 (approximate)
+          # The sdkmanager uses a different versioning; just grab by tag
+          sdkmanager --list 2>/dev/null | grep "ndk;" | tail -5 || true
+          
+          # Try exact tag first, fallback to latest available
+          sdkmanager "ndk;${TAG}" 2>/dev/null || \
+          sdkmanager "$(sdkmanager --list 2>/dev/null | grep 'ndk;' | \
+                        grep -v 'beta\|alpha\|rc' | sort -V | tail -1 | awk '{print $1}')"
+
+          NDK_PATH="$(ls -d "${ANDROID_SDK_ROOT}/ndk/"*/ 2>/dev/null | sort -V | tail -1)"
+          echo "NDK_HOME=${NDK_PATH}" >> "$GITHUB_ENV"
+          echo "NDK installed at: ${NDK_PATH}"
+
+      - name: Install CMake 3.22
+        run: |
+          sdkmanager "cmake;3.22.1" || true
+          CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/3.22.1/bin/cmake"
+          if [ ! -f "${CMAKE_BIN}" ]; then
+            CMAKE_BIN="${ANDROID_SDK_ROOT}/cmake/$(ls ${ANDROID_SDK_ROOT}/cmake/ | sort -V | tail -1)/bin/cmake"
+          fi
+          echo "CMAKE=${CMAKE_BIN}" >> "$GITHUB_ENV"
+          NINJA_BIN="${CMAKE_BIN%cmake}ninja"
+          echo "NINJA=${NINJA_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install zstd & glslc
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zstd glslang-tools
+
+          GLSLC=$(which glslangValidator 2>/dev/null || true)
+          GLSLC_REAL=$(find "${NDK_HOME}/shader-tools" -name "glslc" 2>/dev/null | head -1)
+          if [ -n "${GLSLC_REAL}" ]; then
+            echo "GLSLC=${GLSLC_REAL}" >> "$GITHUB_ENV"
+          fi
+
+          echo "glslc: $(${GLSLC_REAL:-glslc} --version 2>/dev/null || echo 'not found')"
+          echo "zstd:  $(zstd --version)"
+
+      - name: Configure
+        run: |
+          API="${{ inputs.api_level || env.DEFAULT_API }}"
+          TYPE="${{ inputs.build_type || env.DEFAULT_TYPE }}"
+
+          "${CMAKE}" \
+            -S . \
+            -B build \
+            -G "Ninja" \
+            -DCMAKE_MAKE_PROGRAM="${NINJA}" \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="arm64-v8a" \
+            -DANDROID_PLATFORM="android-${API}" \
+            -DANDROID_NATIVE_API_LEVEL="${API}" \
+            -DANDROID_STL="c++_static" \
+            -DCMAKE_BUILD_TYPE="${TYPE}" \
+            -DANDROID_NDK="${NDK_HOME}" \
+            -DGLSLC="${GLSLC:-}" \
+            -DWRAPPER_VERSION="${GITHUB_REF_NAME:-dev}"
+
+      - name: Build
+        run: |
+          "${CMAKE}" --build build --parallel $(nproc)
+          echo "Build output:"
+          find build -name "*.so" -o -name "*.spv" | sort
+
+      - name: Package wrapper.tzst
+        run: |
+          chmod +x scripts/package_tzst.sh
+          WRAPPER_VERSION="${GITHUB_REF_NAME:-dev}" \
+            bash scripts/package_tzst.sh build dist
+
+      - name: Upload wrapper.tzst
+        uses: actions/upload-artifact@v4
+        with:
+          name: wrapper-tzst
+          path: |
+            dist/wrapper.tzst
+            dist/extra_libs.tzst
+            dist/SHA256SUMS.txt
+          retention-days: 30
+
+      - name: Upload raw .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvulkan_wrapper-arm64
+          path: build/libvulkan_wrapper.so
+          retention-days: 30
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-22.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release_assets
+          TAG="${GITHUB_REF_NAME}"
+          
+          find downloaded -name "wrapper.tzst" \
+            -exec cp {} "release_assets/wrapper_${TAG}.tzst" \;
+          find downloaded -name "extra_libs.tzst" \
+            -exec cp {} "release_assets/extra_libs_${TAG}.tzst" \;
+          find downloaded -name "libvulkan_wrapper.so" \
+            -exec cp {} "release_assets/libvulkan_wrapper_${TAG}_arm64-v8a.so" \;
+
+          cd release_assets
+          sha256sum * > SHA256SUMS.txt
+          echo ""
+          echo "Release assets:"
+          ls -lh
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/wrapper_*.tzst
+            release_assets/extra_libs_*.tzst
+            release_assets/libvulkan_wrapper_*.so
+            release_assets/SHA256SUMS.txt
+          generate_release_notes: true
+          body: |
+            ## DX Wrapper ${{ github.ref_name }}
+
+            ### Compatible with:
+            - Winlator Ludashi Bionic (drop `wrapper.tzst` → `assets/graphics_driver/`)
+            - GameHub Lite / GameHub
+            - GameNative / WinNative
+
+            ### Stack:
+            - DXVK 2.7.1 + VKD3D-Proton v3
+            - Turnip 26.1.0-devel / 26.0.4
+            - FEXCore 2604 + WowBox64 0.4.0 + Box64 0.4.0
+            - Proton 10.4 arm64ec/x86_64 + Wine 10.16 arm64ec
+            - Mesa 26.1
+
+            ### Installation (Winlator Bionic)
+            Replace `assets/graphics_driver/wrapper.tzst` in your APK build,
+            or copy directly to `Z:\usr\lib\libvulkan_wrapper.so` in the container.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

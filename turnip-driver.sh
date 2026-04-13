@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Turnip Vulkan Driver Builder — Adreno 7xx (A750 primary) / KGSL / Android
-# Built: 2026-04-13
-# Key design decisions (derived from the PDF):
-#   - FlexRender (hybrid tile/direct) is handled by the driver/GPU automatically.
-#     force_sysmem is intentionally REMOVED — it defeats tile-based rendering entirely.
-#   - Mesh shading is A8x-only per the PDF. Disabled for A7xx (correct).
-#   - VK_QCOM_tile_memory_heap / VK_QCOM_tile_shading are Adreno 840+ only. Not listed.
-#   - LPAC (Low Priority Async Compute) is an A7xx feature; upstream Mesa handles it.
-#   - Concurrent Binning is an A7x feature; already in upstream Mesa for A7xx gen1/gen2.
-#   - UBWC 5/6: Snapdragon 8 Gen 3 (A750) reports UBWC v5/v6 from KGSL — patched.
+
 set -euo pipefail
 
 GREEN='\033[0;32m'

@@ -236,6 +236,16 @@ apply_patch_disable_branch_and_or() {
 apply_patch_a7xx_compute_constlen() {
     [[ "$ENABLE_A7XX_FIXES" != "true" ]] && return 0
     log_info "Patch: A7xx gen1 compute_constlen_quirk"
+
+    # The C struct must declare the field — older Mesa (e.g. 26.0.x) does not
+    # have compute_constlen_quirk in freedreno_dev_info.h, so injecting it into
+    # the Python generator would produce code that fails to compile.
+    local dev_info_h="${MESA_DIR}/src/freedreno/common/freedreno_dev_info.h"
+    if [[ -f "$dev_info_h" ]] && ! grep -q 'compute_constlen_quirk' "$dev_info_h"; then
+        log_warn "compute_constlen_quirk not in freedreno_dev_info.h — skip (Mesa too old)"
+        return 0
+    fi
+
     cd "$MESA_DIR"
     python3 - << 'PYEOF'
 import re, sys

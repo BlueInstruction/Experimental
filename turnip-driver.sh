@@ -1,4 +1,50 @@
 #!/usr/bin/env bash
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  Turnip Driver Builder — Adreno A7xx (A730 / A740 / A750)                  ║
+# ║                                                                            ║
+# ║  Builds Mesa3D Turnip, the FOSS Vulkan driver for Qualcomm Adreno GPUs.   ║
+# ║  Turnip is developed as part of the Mesa Freedreno project and provides    ║
+# ║  equal or better performance than Qualcomm's proprietary Adreno driver     ║
+# ║  for gaming workloads (DXVK / VKD3D-Proton / Winlator).                   ║
+# ║                                                                            ║
+# ║  References:                                                               ║
+# ║    Qualcomm Adreno GPU Best Practices (Game Developer Guide)               ║
+# ║      Document: 80-78185-2 Rev: AL (Mar 2026)                              ║
+# ║      URL: https://developer.qualcomm.com/software/adreno-gpu-sdk          ║
+# ║      Key sections used:                                                    ║
+# ║        - UBWC: available on all Adreno since A5x                          ║
+# ║        - Mesh Shading: A8x+ only ("A8x supports mesh shading extension")  ║
+# ║        - LPAC (Low Priority Async Compute): A740+ only                    ║
+# ║        - VRS: VK_KHR_fragment_shading_rate confirmed for A7xx             ║
+# ║        - Tile Shading: VK_QCOM_tile_memory_heap / tile_shading = A840+   ║
+# ║        - Ray Queries: VK_KHR_ray_query supported on A7xx                  ║
+# ║        - Ray Pipelines: VK_KHR_ray_tracing_pipeline = A8x+ only          ║
+# ║                                                                            ║
+# ║    Igalia / Valve — Mesa Turnip development                                ║
+# ║      "Helping Valve to power up Steam devices" (Igalia, 2025)             ║
+# ║      URL: https://www.igalia.com/2025/01/15/                              ║
+# ║           Helping-Valve-to-power-up-Steam-devices.html                    ║
+# ║      - Turnip outperforms Qualcomm's proprietary driver for gaming        ║
+# ║      - Vulkan conformant across years of Snapdragon hardware              ║
+# ║      - Groundwork for ARM-based Steam devices (FEX x86→ARM translation)  ║
+# ║      - KGSL backend for Android (no DRM/KMS kernel driver needed)         ║
+# ║                                                                            ║
+# ║    Mesa3D Freedreno / Turnip                                               ║
+# ║      Source: https://gitlab.freedesktop.org/mesa/mesa                     ║
+# ║      Driver: src/freedreno/vulkan/ (tu_device.cc, tu_knl_kgsl.cc, etc.)  ║
+# ║      KMD: KGSL (Kernel Graphics Support Layer — Qualcomm Android kernel)  ║
+# ║                                                                            ║
+# ║  Target hardware:                                                          ║
+# ║    Snapdragon 8 Gen 1   — Adreno 730 (A7xx gen1)                         ║
+# ║    Snapdragon 8 Gen 2   — Adreno 740 (A7xx gen1, LPAC capable)           ║
+# ║    Snapdragon 8 Gen 3   — Adreno 750 (A7xx gen2)                         ║
+# ║    Meta Quest 3          — FD740 variant (chip_id 0x43050b00)             ║
+# ║                                                                            ║
+# ║  Translation layers supported:                                             ║
+# ║    DXVK        — DirectX 9/10/11 → Vulkan (Wine/Proton)                  ║
+# ║    VKD3D-Proton — DirectX 12 → Vulkan (Wine/Proton)                      ║
+# ║    Winlator    — Android x86_64 translation for Windows games             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
 GREEN='\033[0;32m'

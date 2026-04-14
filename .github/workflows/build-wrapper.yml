@@ -1,0 +1,287 @@
+name: Build Vulkan Wrapper (bionic-vulkan-wrapper)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ndk_version:
+        description: 'NDK version (e.g. r27c, r28b)'
+        required: false
+        default: 'r27c'
+      api_level:
+        description: 'Android API level'
+        required: false
+        default: '28'
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'release'
+        type: choice
+        options: [release, debug, debugoptimized]
+
+env:
+  NDK_VERSION: 'android-ndk-r27c'
+  NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r27c-linux.zip'
+  API_LEVEL: '28'
+  WRAPPER_REPO: 'https://github.com/BlueInstruction/bionic-vulkan-wrapper.git'
+  WRAPPER_BRANCH: 'wrapper'
+
+jobs:
+  build:
+    name: Build libvulkan_wrapper.so (arm64-v8a)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            python3 python3-pip python3-setuptools python3-wheel \
+            python3-mako python3-ply python3-yaml python3-jinja2 \
+            meson ninja-build cmake pkg-config \
+            zstd patchelf zip unzip \
+            bison flex gettext \
+            libwayland-dev wayland-protocols \
+            glslang-tools spirv-tools \
+            ccache ca-certificates curl git
+
+          # Ensure meson is recent enough (>= 1.0)
+          pip3 install --user "meson>=1.0" || true
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+          echo "meson: $(meson --version)"
+          echo "ninja: $(ninja --version)"
+          echo "python3: $(python3 --version)"
+
+      - name: Cache NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: ndk-${{ env.NDK_VERSION }}-v1
+
+      - name: Download NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading ${{ env.NDK_VERSION }}..."
+          curl -fsSL "${{ env.NDK_URL }}" -o ndk.zip
+          unzip -q ndk.zip
+          sudo mv ${{ env.NDK_VERSION }} /opt/android-ndk
+          rm -f ndk.zip
+          echo "NDK ready: $(du -sh /opt/android-ndk | cut -f1)"
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-wrapper-${{ github.run_id }}
+          restore-keys: |
+            ccache-wrapper-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=2G
+          ccache --zero-stats
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: Clone bionic-vulkan-wrapper
+        run: |
+          git clone --depth=200 --branch "${{ env.WRAPPER_BRANCH }}" \
+            "${{ env.WRAPPER_REPO }}" wrapper-src
+          cd wrapper-src
+          echo "Wrapper source: $(git log --oneline -1)"
+          echo "WRAPPER_DIR=$(pwd)" >> $GITHUB_ENV
+
+      - name: Create cross-compilation file
+        run: |
+          NDK="/opt/android-ndk"
+          NDK_BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYS="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          API="${{ inputs.api_level || env.API_LEVEL }}"
+
+          # Find the right clang version
+          CVER="$API"
+          [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="28"
+          [[ ! -f "${NDK_BIN}/aarch64-linux-android${CVER}-clang" ]] && CVER="26"
+
+          cat > cross-aarch64-android.txt << EOF
+          [binaries]
+          ar     = '${NDK_BIN}/llvm-ar'
+          c      = ['ccache', '${NDK_BIN}/aarch64-linux-android${CVER}-clang', '--sysroot=${NDK_SYS}']
+          cpp    = ['ccache', '${NDK_BIN}/aarch64-linux-android${CVER}-clang++', '--sysroot=${NDK_SYS}']
+          c_ld   = 'lld'
+          cpp_ld = 'lld'
+          strip  = '${NDK_BIN}/llvm-strip'
+          pkgconfig = '/usr/bin/pkg-config'
+
+          [host_machine]
+          system     = 'android'
+          cpu_family = 'aarch64'
+          cpu        = 'armv8'
+          endian     = 'little'
+
+          [built-in options]
+          c_args        = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+          cpp_args      = ['-D__ANDROID__', '-Wno-error', '-Wno-deprecated-declarations', '-O2', '-DNDEBUG']
+          c_link_args   = ['-static-libstdc++', '-Wl,--gc-sections']
+          cpp_link_args = ['-static-libstdc++', '-Wl,--gc-sections']
+          EOF
+
+          echo "Cross file created"
+          cat cross-aarch64-android.txt
+
+      - name: Configure Meson build
+        run: |
+          cd "$WRAPPER_DIR"
+          TYPE="${{ inputs.build_type || 'release' }}"
+
+          meson setup build \
+            --cross-file "${{ github.workspace }}/cross-aarch64-android.txt" \
+            -Dbuildtype="$TYPE" \
+            -Dplatforms=android \
+            -Dplatform-sdk-version="${{ inputs.api_level || env.API_LEVEL }}" \
+            -Dandroid-stub=true \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers= \
+            -Degl=disabled \
+            -Dglx=disabled \
+            -Dgles1=disabled \
+            -Dgles2=disabled \
+            -Dopengl=false \
+            -Dgbm=disabled \
+            -Dllvm=disabled \
+            -Dlibunwind=disabled \
+            -Dlmsensors=disabled \
+            -Dzstd=disabled \
+            -Dvalgrind=disabled \
+            -Dbuild-tests=false \
+            -Dwerror=false \
+            -Ddefault_library=shared \
+            2>&1 | tee meson-configure.log
+
+          echo ""
+          echo "Meson configuration complete"
+
+      - name: Build wrapper
+        run: |
+          cd "$WRAPPER_DIR"
+          ninja -C build -j$(nproc) 2>&1 | tee build.log
+
+          echo ""
+          echo "Build artifacts:"
+          find build -name "libvulkan_wrapper*" -o -name "*.spv" | sort
+          find build -name "libvulkan_wrapper*" -exec ls -lh {} \;
+
+      - name: Package wrapper.tzst
+        run: |
+          cd "$WRAPPER_DIR"
+
+          SO=$(find build -name "libvulkan_wrapper.so" -type f | head -1)
+          if [ -z "$SO" ]; then
+            echo "ERROR: libvulkan_wrapper.so not found"
+            find build -name "*.so" | sort
+            exit 1
+          fi
+
+          echo "Found: $SO ($(du -h "$SO" | cut -f1))"
+
+          # Strip the binary
+          /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip "$SO" 2>/dev/null || true
+          echo "Stripped: $(du -h "$SO" | cut -f1)"
+
+          # Create wrapper.tzst (matches Winlator-Ludashi layout)
+          STAGE=$(mktemp -d)
+          mkdir -p "${STAGE}/usr/lib"
+          cp "$SO" "${STAGE}/usr/lib/libvulkan_wrapper.so"
+
+          # Copy any .spv shaders
+          find build -name "*.spv" -exec cp {} "${STAGE}/usr/lib/" \;
+
+          DIST="${{ github.workspace }}/dist"
+          mkdir -p "$DIST"
+
+          (cd "$STAGE" && \
+           tar --use-compress-program="zstd -19 -T0" \
+               -cf "${DIST}/wrapper.tzst" \
+               usr/)
+
+          echo "wrapper.tzst: $(du -h "${DIST}/wrapper.tzst" | cut -f1)"
+
+          # Create extra_libs.tzst (shaders + any extra libs)
+          STAGE2=$(mktemp -d)
+          mkdir -p "${STAGE2}/usr/lib"
+          find build -name "*.spv" -exec cp {} "${STAGE2}/usr/lib/" \;
+          cp "$SO" "${STAGE2}/usr/lib/libvulkan_wrapper.so"
+
+          (cd "$STAGE2" && \
+           tar --use-compress-program="zstd -19 -T0" \
+               -cf "${DIST}/extra_libs.tzst" \
+               usr/) 2>/dev/null || true
+
+          # SHA256 checksums
+          cd "$DIST"
+          sha256sum *.tzst *.so 2>/dev/null > SHA256SUMS.txt || \
+          sha256sum *.tzst > SHA256SUMS.txt || true
+
+          echo ""
+          echo "=== Package contents ==="
+          ls -lh "$DIST"/
+          echo ""
+          cat SHA256SUMS.txt
+
+          # Copy raw .so for separate artifact
+          cp "$SO" "${DIST}/libvulkan_wrapper.so"
+
+      - name: Print ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload wrapper.tzst
+        uses: actions/upload-artifact@v4
+        with:
+          name: wrapper-tzst
+          path: |
+            dist/wrapper.tzst
+            dist/extra_libs.tzst
+            dist/SHA256SUMS.txt
+          retention-days: 90
+
+      - name: Upload raw libvulkan_wrapper.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvulkan_wrapper-arm64
+          path: dist/libvulkan_wrapper.so
+          retention-days: 90
+
+      - name: Build summary
+        run: |
+          SO_SIZE=$(du -h dist/libvulkan_wrapper.so | cut -f1)
+          TZST_SIZE=$(du -h dist/wrapper.tzst | cut -f1)
+          cd "$WRAPPER_DIR"
+          COMMIT=$(git rev-parse --short=8 HEAD)
+
+          echo ""
+          echo "  ╔═══════════════════════════════════════════════════════════╗"
+          echo "  ║         Vulkan Wrapper Build Summary                      ║"
+          echo "  ╠═══════════════════════════════════════════════════════════╣"
+          printf "  ║  %-20s : %-35s ║\n" "libvulkan_wrapper" "$SO_SIZE"
+          printf "  ║  %-20s : %-35s ║\n" "wrapper.tzst"      "$TZST_SIZE"
+          printf "  ║  %-20s : %-35s ║\n" "Commit"            "$COMMIT"
+          printf "  ║  %-20s : %-35s ║\n" "NDK"               "${{ env.NDK_VERSION }}"
+          printf "  ║  %-20s : %-35s ║\n" "API Level"         "${{ inputs.api_level || env.API_LEVEL }}"
+          printf "  ║  %-20s : %-35s ║\n" "Build Type"        "${{ inputs.build_type || 'release' }}"
+          echo "  ╠═══════════════════════════════════════════════════════════╣"
+          echo "  ║  Drop wrapper.tzst into:                                 ║"
+          echo "  ║    assets/graphics_driver/wrapper.tzst                   ║"
+          echo "  ║  Or copy libvulkan_wrapper.so to:                        ║"
+          echo "  ║    Z:\\usr\\lib\\libvulkan_wrapper.so                       ║"
+          echo "  ╚═══════════════════════════════════════════════════════════╝"

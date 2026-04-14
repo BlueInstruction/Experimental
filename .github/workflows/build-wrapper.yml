@@ -3,14 +3,6 @@ name: Build Vulkan Wrapper (bionic-vulkan-wrapper)
 on:
   workflow_dispatch:
     inputs:
-      ndk_version:
-        description: 'NDK version (e.g. r27c, r28b)'
-        required: false
-        default: 'r27c'
-      api_level:
-        description: 'Android API level'
-        required: false
-        default: '28'
       build_type:
         description: 'Build type'
         required: false
@@ -19,11 +11,9 @@ on:
         options: [release, debug, debugoptimized]
 
 env:
-  NDK_VERSION: 'android-ndk-r27c'
-  NDK_URL: 'https://dl.google.com/android/repository/android-ndk-r27c-linux.zip'
-  API_LEVEL: '28'
   WRAPPER_REPO: 'https://github.com/BlueInstruction/bionic-vulkan-wrapper.git'
   WRAPPER_BRANCH: 'wrapper'
+  TERMUX_PKG_REPO: 'https://github.com/leegao/vulkan_wrapper_termux-packages.git'
 
 jobs:
   build:

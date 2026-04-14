@@ -2,11 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${1:-${SCRIPT_DIR}/../build}"
+BUILD_DIR="$(cd "${1:-${SCRIPT_DIR}/../build}" && pwd)"
 OUT_DIR="${2:-${SCRIPT_DIR}/../dist}"
-VERSION="${WRAPPER_VERSION:-2.0.0}"
-
+# Resolve OUT_DIR to absolute path so tar subshells can find it
 mkdir -p "${OUT_DIR}"
+OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
+VERSION="${WRAPPER_VERSION:-2.0.0}"
 
 SO="${BUILD_DIR}/libvulkan_wrapper.so"
 SPV="${BUILD_DIR}/bcn_decompress.comp.spv"

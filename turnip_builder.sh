@@ -71,37 +71,12 @@ PATCH
 
 apply_patch_disable_workgroup_memory(){
     echo "Applying patch: disable KHR_workgroup_memory_explicit_layout..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
---- a/src/freedreno/vulkan/tu_device.cc
-+++ b/src/freedreno/vulkan/tu_device.cc
-@@ -222,7 +222,7 @@ get_device_extensions(const struct tu_physical_device *device,
-       .KHR_variable_pointers = true,
-       .KHR_vertex_attribute_divisor = true,
-       .KHR_vulkan_memory_model = true,
--      .KHR_workgroup_memory_explicit_layout = true,
-+      .KHR_workgroup_memory_explicit_layout = false,
-       .KHR_zero_initialize_workgroup_memory = true,
- 
-       .EXT_4444_formats = true,
-@@ -494,11 +494,11 @@ tu_get_features(struct tu_physical_device *pdevice,
-    features->vertexAttributeInstanceRateDivisor = true;
-    features->vertexAttributeInstanceRateZeroDivisor = true;
- 
--   /* VK_KHR_workgroup_memory_explicit_layout */
--   features->workgroupMemoryExplicitLayout = true;
--   features->workgroupMemoryExplicitLayoutScalarBlockLayout = true;
--   features->workgroupMemoryExplicitLayout8BitAccess = true;
--   features->workgroupMemoryExplicitLayout16BitAccess = true;
-+   /* VK_KHR_workgroup_memory_explicit_layout */
-+   features->workgroupMemoryExplicitLayout = false;
-+   features->workgroupMemoryExplicitLayoutScalarBlockLayout = false;
-+   features->workgroupMemoryExplicitLayout8BitAccess = false;
-+   features->workgroupMemoryExplicitLayout16BitAccess = false;
- 
-    /* VK_EXT_4444_formats */
-    features->formatA4R4G4B4 = true;
-PATCH
+    local f="src/freedreno/vulkan/tu_device.cc"
+    sed -i 's/\.KHR_workgroup_memory_explicit_layout = true/.KHR_workgroup_memory_explicit_layout = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout = true/features->workgroupMemoryExplicitLayout = false/g' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayoutScalarBlockLayout = true/features->workgroupMemoryExplicitLayoutScalarBlockLayout = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout8BitAccess = true/features->workgroupMemoryExplicitLayout8BitAccess = false/' "$f"
+    sed -i 's/features->workgroupMemoryExplicitLayout16BitAccess = true/features->workgroupMemoryExplicitLayout16BitAccess = false/' "$f"
     echo -e "${green}OK: disable KHR_workgroup_memory_explicit_layout${nocolor}"
 }
 
@@ -123,20 +98,15 @@ PATCH
 
 apply_patch_force_sysmem(){
     echo "Applying patch: force sysmem rendering..."
-    patch -p1 --no-backup-if-mismatch <<'PATCH'
-diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
---- a/src/freedreno/vulkan/tu_cmd_buffer.cc
-+++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -985,6 +985,8 @@ static bool
- use_sysmem_rendering(struct tu_cmd_buffer *cmd,
-                      struct tu_renderpass_result **autotune_result)
- {
-+   return true;
-+
-    if (TU_DEBUG(SYSMEM)) {
-       cmd->state.rp.gmem_disable_reason = "TU_DEBUG(SYSMEM)";
-       return true;
-PATCH
+    sed -i '/^use_sysmem_rendering(struct tu_cmd_buffer \*cmd,/{
+        n
+        /^{/a\   return true;\n
+    }' src/freedreno/vulkan/tu_cmd_buffer.cc
+    # Fallback: check if return true was inserted inside the target function specifically
+    if ! sed -n '/use_sysmem_rendering/,/^}/p' src/freedreno/vulkan/tu_cmd_buffer.cc 2>/dev/null | grep -q 'return true;'; then
+        sed -i '/use_sysmem_rendering.*autotune_result)/{n;s/^{$/{\n   return true;\n/}' \
+            src/freedreno/vulkan/tu_cmd_buffer.cc
+    fi
     echo -e "${green}OK: force sysmem${nocolor}"
 }
 

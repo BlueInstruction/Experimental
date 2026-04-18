@@ -237,15 +237,6 @@ jobs:
                   group_stats[group]["files"].append(f"{os.path.basename(path)}:{count}")
               return count
 
-          # GPU identity: Qualcomm Adreno 750 (actual hardware)
-          # Ref: vulkan.gpuinfo.org/displayreport.php?id=43216
-          gpu = [
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
-          ]
-
           # D3D12 feature flags — accurate for Adreno 750 / Turnip
           # shaderFloat64=FALSE (Adreno does NOT support float64)
           # MeshShader=NOT_SUPPORTED (Turnip mesh shader is unreliable for DX12 translation)

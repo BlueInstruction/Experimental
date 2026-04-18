@@ -471,7 +471,10 @@ jobs:
                       content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
-                  applied += 1
+                  if "vkd3d_private" not in group_stats:
+                      group_stats["vkd3d_private"] = {"applied": 0, "files": []}
+                  group_stats["vkd3d_private"]["applied"] += 1
+                  group_stats["vkd3d_private"]["files"].append("vkd3d_private.h:1")
 
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):

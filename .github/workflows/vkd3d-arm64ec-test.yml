@@ -122,7 +122,7 @@ jobs:
             LLVM_TAG=$(curl -sSL \
               https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
               | jq -r '.tag_name // empty')
-            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20251104"
+            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20250417"
           fi
           echo "tag=$LLVM_TAG" >> $GITHUB_OUTPUT
 
@@ -363,6 +363,15 @@ jobs:
           fence_patches = [
               (r'(->recycle_fences\s*=\s*)false', r'\1true'),
               (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+          ]
+
+          gpu_boost_patches = [
+              (r'(->use_async_compute\s*=\s*)false', r'\1true'),
+              (r'(async_compute_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->use_concurrent_queue\s*=\s*)false', r'\1true'),
+              (r'(->use_gpu_va_recycle\s*=\s*)false', r'\1true'),
+              (r'(->use_lazy_create_pipeline\s*=\s*)true', r'\1false'),
+              (r'(max_compute_queues\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
           ]
 
           patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches + tbr_patches)

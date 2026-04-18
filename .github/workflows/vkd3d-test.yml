@@ -638,7 +638,7 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "${VER}-${COMMIT}",
-            "versionCode": 0,
+            "versionCode": 1,
             "description": "vkd3d-proton",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},

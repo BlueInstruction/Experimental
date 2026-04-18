@@ -377,6 +377,15 @@ jobs:
               (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
           ]
 
+          # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
+          # Ref: Qualcomm GDG 80-78185-2 AL / PCMag Snapdragon X2 Elite Extreme benchmarks
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
+          ]
+
           # === APPLY PATCHES WITH GROUP ATTRIBUTION ===
           patch_file("libs/vkd3d/device.c", gpu, "gpu_identity")
           patch_file("libs/vkd3d/device.c", dev, "dev_features")

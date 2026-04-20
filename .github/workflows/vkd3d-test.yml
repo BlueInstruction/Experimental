@@ -417,25 +417,22 @@ jobs:
           ]
 
           # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
-          # VKD3D v3.0 reads GPU identity from Vulkan properties, so we patch
-          # the Vulkan property reads and DXGI adapter report functions directly.
+          # VKD3D v3.0 reads from Vulkan props — patch the properties struct and DXGI desc
           gpu = [
-              # Patch vendorID/deviceID in the Vulkan properties copy
-              (r'(p->vendorID\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
-              (r'(p->deviceID\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
-              (r'(vendorID\s*(?<!=)=(?!=)\s*info->properties2\.properties\.vendorID)', r'vendorID = 0x5143; /* patched */'),
-              (r'(deviceID\s*(?<!=)=(?!=)\s*info->properties2\.properties\.deviceID)', r'deviceID = 0x43a; /* patched */'),
-              # DedicatedVideoMemory / SharedSystemMemory in DXGI adapter desc
+              (r'(\.vendorID\s*(?<!=)=(?!=)\s*)[^;,}]+', r'\g<1>0x5143 /* Qualcomm */'),
+              (r'(\.deviceID\s*(?<!=)=(?!=)\s*)[^;,}]+', r'\g<1>0x43a /* Adreno */'),
+              (r'(properties\.vendorID)', r'0x5143 /* patched vendorID */; (void)properties.vendorID'),
+              (r'(properties\.deviceID)', r'0x43a /* patched deviceID */; (void)properties.deviceID'),
               (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
               (r'(dedicated_video_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
               (r'(shared_system_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
           ]
 
-          # Updated fsync patches — match actual VKD3D v3.0 patterns
+          # Fsync — match the config flag table entries in device.c
           fsync_patches = [
-              # Config flag strings in device.c
-              (r'("timeline_semaphore_[^"]*"\s*,\s*VKD3D_CONFIG_FLAG_\w+)', r'\1 /* fsync patched */'),
+              (r'("timeline_semaphore"\s*,)', r'\1 /* fsync patched */'),
+              (r'(timeline_semaphore\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>true; /* fsync patched */'),
           ]
 
           # Updated UMA patches — match config flag pattern in device.c:1253

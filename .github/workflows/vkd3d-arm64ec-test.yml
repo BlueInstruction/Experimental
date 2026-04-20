@@ -836,29 +836,17 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O2 -DNDEBUG -DVKD3D_NO_TRACE_MESSAGES -DVKD3D_SHADER_NO_VALIDATION -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
-          ARM64EC_C_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
-          ARM64EC_CPP_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
-          X86_FLAGS="-O2 -DNDEBUG -ffunction-sections -fdata-sections"
-          X86_LINK="-Wl,--gc-sections -Wl,-O2"
-
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
-            -Dc_args="$ARM64EC_FLAGS" \
-            -Dcpp_args="$ARM64EC_FLAGS" \
-            -Dc_link_args="$ARM64EC_C_LINK" \
-            -Dcpp_link_args="$ARM64EC_CPP_LINK"
+            -Dstrip=true
           ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-arm64ec.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
-            -Dc_args="$X86_FLAGS" \
-            -Dcpp_args="$X86_FLAGS" \
-            -Dc_link_args="$X86_LINK" \
-            -Dcpp_link_args="$X86_LINK"
+            -Dstrip=true
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
@@ -881,7 +869,7 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          llvm-strip --strip-debug pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
+          # Meson -Dstrip=true already strips the DLLs during build
 
           cat > pkg/profile.json << JSONEOF
           {

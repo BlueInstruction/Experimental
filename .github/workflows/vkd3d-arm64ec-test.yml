@@ -122,7 +122,7 @@ jobs:
             LLVM_TAG=$(curl -sSL \
               https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
               | jq -r '.tag_name // empty')
-            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20250417"
+            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20260407"
           fi
           echo "tag=$LLVM_TAG" >> $GITHUB_OUTPUT
 

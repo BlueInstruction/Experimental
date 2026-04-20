@@ -878,15 +878,13 @@ jobs:
 
           meson setup build-x64 \
             --cross-file ../crossfile-x64.txt \
-            --buildtype release \
-            -Dstrip=true
+            --buildtype release
           ninja -C build-x64 -j$(nproc) 2>&1 | tee build-x64.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x64.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
-            --buildtype release \
-            -Dstrip=true
+            --buildtype release
           ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
@@ -909,7 +907,8 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          # Meson -Dstrip=true already strips the DLLs during build
+          x86_64-w64-mingw32-strip --strip-unneeded pkg/system32/*.dll 2>/dev/null || true
+          i686-w64-mingw32-strip --strip-unneeded pkg/syswow64/*.dll 2>/dev/null || true
 
           cat > pkg/profile.json << JSONEOF
           {

@@ -169,11 +169,11 @@ jobs:
 
       - name: Clone Source
         run: |
-          git clone --recurse-submodules --recursive --branch master --depth 1 \
+          git clone --recurse-submodules --recursive --branch proton-20260410 --depth 1 \
             https://github.com/BlueInstruction/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"
+          echo "Source: proton-20260410 @ $(git rev-parse --short HEAD) (version label: v$VER)"
 
       - name: Update Vulkan + SPIRV Headers
         run: |

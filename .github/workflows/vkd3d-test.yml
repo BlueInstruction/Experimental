@@ -167,6 +167,26 @@ jobs:
           x86_64-w64-mingw32-clang --version
           i686-w64-mingw32-clang --version
 
+      - name: Cache GLSLang
+        id: cache-glslang
+        uses: actions/cache@v4
+        with:
+          path: glslang
+          key: glslang-master-tot
+
+      - name: Setup latest GLSLang
+        if: steps.cache-glslang.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/KhronosGroup/glslang/releases/download/master-tot/glslang-master-linux-Release.zip
+          unzip -q glslang-master-linux-Release.zip -d glslang
+          rm glslang-master-linux-Release.zip
+
+      - name: Add GLSLang to PATH
+        run: |
+          echo "$PWD/glslang/bin" >> $GITHUB_PATH
+          echo "GLSLang version:"
+          $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
+
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch master --depth 1 \

@@ -641,7 +641,6 @@ jobs:
           strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
           windres = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-windres'
           widl = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-widl'
-          exe_wrapper = ['wine']
           [host_machine]
           system = 'windows'
           cpu_family = 'x86'

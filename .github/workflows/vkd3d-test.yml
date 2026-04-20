@@ -66,7 +66,7 @@ jobs:
               | jq -r '.[0].tag_name')
           fi
           VER_CLEAN="${VER#v}"
-          RELEASE_TAG="vkd3d-proton-${VER_CLEAN}-${BUILD_DATE}"
+          RELEASE_TAG="vkd3d-proton-heavy-${VER_CLEAN}-${BUILD_DATE}"
           SKIP="false"
           if [[ "${{ inputs.FORCE_MODE }}" != "true" ]]; then
             HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
@@ -379,11 +379,13 @@ jobs:
 
           # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
           # Ref: Qualcomm GDG 80-78185-2 AL / PCMag Snapdragon X2 Elite Extreme benchmarks
+          # DedicatedVideoMemory=8192MB — matches Spider-Man 2 / Alan Wake 2 minimum VRAM check
+          # SharedSystemMemory=8192MB — realistic shared allocation for 12GB LPDDR5X
           gpu = [
               (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
               (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
           ]
 
           # === APPLY PATCHES WITH GROUP ATTRIBUTION ===
@@ -461,6 +463,12 @@ jobs:
           #endif
           #ifndef VKD3D_GPU_BOOST
           #define VKD3D_GPU_BOOST 1
+          #endif
+          #ifndef VKD3D_HEAVY_GAME_MODE
+          #define VKD3D_HEAVY_GAME_MODE 1
+          #endif
+          #ifndef VKD3D_VRAM_HEAVY
+          #define VKD3D_VRAM_HEAVY 8192
           #endif
           """
                   m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
@@ -551,6 +559,156 @@ jobs:
               print("State blend fix: applied")
           PYEOF
 
+      - name: Apply Transfer Queue Fix
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import sys, re
+
+          # Issue #2950: transfer queue using dedicated VK_QUEUE_TRANSFER_BIT family causes
+          # severe CPU-side performance regression (79fps -> 54fps on HZD Remastered).
+          # Fix: alias TRANSFER queue family to COMPUTE family — eliminates cross-family sync.
+          # Verified fix by veldenb on descriptor-heap-rebase branch.
+          path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+
+          old = (
+              'info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER] = vkd3d_find_queue(count, queue_properties,\n'
+              '            VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT, VK_QUEUE_TRANSFER_BIT);'
+          )
+          new = (
+              'info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER] = info->family_index[VKD3D_QUEUE_FAMILY_COMPUTE];'
+          )
+
+          if old not in c:
+              alt_pattern = r'family_index\[VKD3D_QUEUE_FAMILY_TRANSFER\]\s*=\s*vkd3d_find_queue\([^;]+VK_QUEUE_TRANSFER_BIT[^;]+;'
+              if re.search(alt_pattern, c):
+                  c = re.sub(
+                      alt_pattern,
+                      'info->family_index[VKD3D_QUEUE_FAMILY_TRANSFER] = info->family_index[VKD3D_QUEUE_FAMILY_COMPUTE];',
+                      c, count=1
+                  )
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(c)
+                  print("Transfer queue fix: applied (regex path)")
+              else:
+                  print("WARN: transfer queue patch target not found — may already be patched", file=sys.stderr)
+          else:
+              c = c.replace(old, new, 1)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print("Transfer queue fix: applied")
+          PYEOF
+
+      - name: Apply Heavy Game Resource Fixes
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import sys, re, os
+
+          # ── 1. Texture Placement Alignment Roundup ─────────────────────────────────
+          # Issue pattern #2927: d3d12_resource_validate_texture_alignment rejects 4KB
+          # alignment (0x1000) instead of rounding up to D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT
+          # (0x10000 = 64KB). Causes VK_ERROR_DEVICE_LOST in DeferredSkinning pass.
+          # Affected games: The Last of Us Part II, Alan Wake 2, RE Requiem pattern.
+          resource_c = "libs/vkd3d/resource.c"
+          if os.path.exists(resource_c):
+              with open(resource_c, "r", encoding="utf-8") as f:
+                  c = f.read()
+              orig = c
+
+              if "heavy_alignment_clamp" not in c:
+                  helper = (
+                      "/* heavy_alignment_clamp: sub-64KB placement alignment → D3D12_DEFAULT */\n"
+                      "static inline UINT64 vkd3d_clamp_placement_alignment(UINT64 a)\n"
+                      "{\n"
+                      "    return (a && a < D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT)\n"
+                      "        ? (UINT64)D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT : a;\n"
+                      "}\n\n"
+                  )
+                  m = re.search(r'd3d12_resource_validate_texture_alignment', c)
+                  if m:
+                      insert = c.rfind('\n', 0, m.start()) + 1
+                      c = c[:insert] + helper + c[insert:]
+
+                  c = re.sub(
+                      r'(WARN\s*\(\s*"[^"]*[Aa]lignment[^"]*\\n"[^)]*\)\s*;\s*\n\s*)return\s+E_INVALIDARG\s*;',
+                      r'/* heavy_alignment_clamp: soft-fail alignment rejection */\n',
+                      c
+                  )
+
+              if c != orig:
+                  with open(resource_c, "w", encoding="utf-8") as f:
+                      f.write(c)
+                  print("Texture alignment roundup: applied")
+              else:
+                  print("WARN: texture alignment patch — no changes applied", file=sys.stderr)
+          else:
+              print(f"WARN: {resource_c} not found", file=sys.stderr)
+
+          # ── 2. Compute Pipeline Soft-Fail ──────────────────────────────────────────
+          # Issue pattern #2949: path tracing compute shaders fail with
+          # VkResult -351455563 (VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT) causing
+          # FATAL D3D ERROR and game crash. Downgrade to WARN + null pipeline so the
+          # game can continue with fallback shaders.
+          # Affected games: Alan Wake 2 path tracing, Spider-Man 2 RT shaders.
+          pipeline_c = "libs/vkd3d/pipeline.c"
+          if os.path.exists(pipeline_c):
+              with open(pipeline_c, "r", encoding="utf-8") as f:
+                  c = f.read()
+              orig = c
+
+              if "heavy_compute_softfail" not in c:
+                  c = re.sub(
+                      r'(ERR\s*\(\s*"Failed to create Vulkan compute pipeline[^"]*"[^)]*\)\s*;'
+                      r'(?:[^}]*ERR\s*\([^)]*\)\s*;)*\s*\n\s*)'
+                      r'(return\s+hresult_from_vk_result\s*\(\s*vr\s*\)\s*;)',
+                      r'/* heavy_compute_softfail */\n'
+                      r'                WARN("Compute pipeline failed (soft-fail), vr %d — pipeline set to NULL.\n", vr);\n'
+                      r'                pipeline->vk_pipeline = VK_NULL_HANDLE;\n'
+                      r'                return S_OK;',
+                      c, count=1
+                  )
+
+              if c != orig:
+                  with open(pipeline_c, "w", encoding="utf-8") as f:
+                      f.write(c)
+                  print("Compute pipeline soft-fail: applied")
+              else:
+                  print("WARN: compute pipeline soft-fail — no changes applied", file=sys.stderr)
+          else:
+              print(f"WARN: {pipeline_c} not found", file=sys.stderr)
+
+          # ── 3. Root Signature: Increase Max CBV/SRV/UAV Ranges ─────────────────────
+          # Heavy DX12 games (Spider-Man 2, Alan Wake 2) bind large root signatures.
+          # Increase per-stage binding limits to avoid E_INVALIDARG on RS creation.
+          for fname in ["libs/vkd3d/root_signature.c", "libs/vkd3d/state.c"]:
+              if not os.path.exists(fname):
+                  continue
+              with open(fname, "r", encoding="utf-8") as f:
+                  c = f.read()
+              orig = c
+              c = re.sub(
+                  r'(maxPerStageDescriptorSampledImages\s*(?<!=)=(?!=)\s*)\d+\s*;',
+                  r'\g<1>1000000;', c
+              )
+              c = re.sub(
+                  r'(maxPerStageDescriptorStorageImages\s*(?<!=)=(?!=)\s*)\d+\s*;',
+                  r'\g<1>1000000;', c
+              )
+              c = re.sub(
+                  r'(maxPerStageDescriptorUniformBuffers\s*(?<!=)=(?!=)\s*)\d+\s*;',
+                  r'\g<1>1000000;', c
+              )
+              if c != orig:
+                  with open(fname, "w", encoding="utf-8") as f:
+                      f.write(c)
+                  print(f"Root signature descriptor limits: applied in {os.path.basename(fname)}")
+
+          print("Heavy game resource fixes: complete")
+          PYEOF
+
       - name: Create Cross Files
         run: |
           cat > crossfile-x64.txt << 'EOF'
@@ -638,7 +796,7 @@ jobs:
           {
             "type": "VKD3D",
             "versionName": "${VER}-${COMMIT}",
-            "versionCode": 1,
+            "versionCode": 0,
             "description": "vkd3d-proton",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},

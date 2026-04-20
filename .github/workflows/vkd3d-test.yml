@@ -455,8 +455,7 @@ jobs:
               (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 8 /* patched max latency */'),
           ]
 
-          # Descriptor limits — patch TRACE lines to also set values
-          # These are read-only TRACEs in v3.0, so we inject overrides after them
+          # Descriptor limits — patch Vulkan 1.2 and 1.3 properties
           descriptor_patches = [
               (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
                r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
@@ -466,6 +465,24 @@ jobs:
                r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
               (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
                r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
+              # Vulkan 1.3 properties
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
+              # Vulkan 1.4 properties
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
           ]
 
           # Submission thread — patch the thread creation

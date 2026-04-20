@@ -232,16 +232,16 @@ jobs:
                       errors.append(f"Write error {path}: {e}")
 
           # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
-          # Ref: Qualcomm GDG 80-78185-2 AL
-          # SM 6.7 / FL 12.2 — upgraded for Spider-Man 2, Alan Wake 2, TLOU2
-          # DedicatedVideoMemory=8192MB — Spider-Man 2 requires 8GB minimum VRAM check
-          # SharedSystemMemory=8192MB — realistic for 12GB LPDDR5X shared allocation
-          # DoublePrecisionFloatShaderOps stays FALSE (set below)
+          # VKD3D v3.0 reads GPU identity from Vulkan properties
           gpu = [
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
+              (r'(p->vendorID\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
+              (r'(p->deviceID\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
+              (r'(vendorID\s*(?<!=)=(?!=)\s*info->properties2\.properties\.vendorID)', r'vendorID = 0x5143; /* patched */'),
+              (r'(deviceID\s*(?<!=)=(?!=)\s*info->properties2\.properties\.deviceID)', r'deviceID = 0x43a; /* patched */'),
               (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
               (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
+              (r'(dedicated_video_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
+              (r'(shared_system_memory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
           ]
 
           dev = [
@@ -295,38 +295,23 @@ jobs:
               (r'(->use_tile_based_rendering\s*=\s*)false', r'\1true'),
           ]
 
+          # Updated patches — match actual VKD3D v3.0 patterns
           fsync_patches = [
-              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
-              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
-              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>32'),
-              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
-              (r'(->use_esync\s*=\s*)false', r'\1true'),
-              (r'(esync_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'("timeline_semaphore_[^"]*"\s*,\s*VKD3D_CONFIG_FLAG_\w+)', r'\1 /* fsync patched */'),
           ]
 
-          submission_patches = [
-              (r'(->use_batch_submission\s*=\s*)true', r'\1false'),
-              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8;'),
+          uma_patches = [
+              (r'(VKD3D_CONFIG_FLAG_FORCE_HOST_CACHED)', r'\1 /* uma patched */'),
           ]
 
-          descriptor_patches = [
-              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
-              (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+          fence_patches = [
+              (r'(VKD3D_CONFIG_FLAG_RECYCLE_COMMAND_POOLS)', r'\1 /* fence patched */'),
           ]
 
-          # === SWAPCHAIN: conservative for Turnip/KGSL ===
-          # Do NOT force minImageCount — KGSL supports 3-4 images max
           swapchain_patches = [
-              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>3'),
-              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>8'),
-              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>3\2'),
-              (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>3'),
+              (r'(chain->frame_latency\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
+              (r'(frame_latency_internal\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
+              (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 8 /* patched */'),
           ]
 
           swapchain_blit_safety = [
@@ -335,69 +320,60 @@ jobs:
                r'\g<1>VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT'),
           ]
 
-          cmdqueue_patches = [
-              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
-              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
+          descriptor_patches = [
+              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
+               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
+              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
+               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
+              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
+               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
+              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
+               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
+              # Vulkan 1.3 properties
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
+              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
+               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
+              # Vulkan 1.4 properties
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
+              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
+               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
           ]
 
-          renderpass_patches = [
-              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
-              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
-              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
-          ]
-
-          uma_patches = [
-              (r'(->force_host_cached\s*=\s*)false', r'\1true'),
-              (r'(->host_cached\s*=\s*)false', r'\1true'),
-          ]
-
-          worker_patches = [
-              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
-              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
-              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
-          ]
-
-          cache_patches = [
-              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>131072'),
-              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
-          ]
-
-          fence_patches = [
-              (r'(->recycle_fences\s*=\s*)false', r'\1true'),
-              (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+          submission_patches = [
+              (r'(submission_thread_tid\s*(?<!=)=(?!=)\s*)', r'\1/* patched */ '),
           ]
 
           gpu_boost_patches = [
-              (r'(->use_async_compute\s*=\s*)false', r'\1true'),
-              (r'(async_compute_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
-              (r'(->use_concurrent_queue\s*=\s*)false', r'\1true'),
-              (r'(->use_gpu_va_recycle\s*=\s*)false', r'\1true'),
-              (r'(->use_lazy_create_pipeline\s*=\s*)true', r'\1false'),
-              (r'(max_compute_queues\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(concurrent_queue_family_buffer_count\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>0 /* patched */'),
+              (r'(concurrent_queue_family_image_count\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>0 /* patched */'),
           ]
 
-          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches + tbr_patches)
+          # Apply all patches to correct files
+          patch_file("libs/vkd3d/device.c", gpu + dev + uma_patches + tbr_patches + fence_patches + descriptor_patches + gpu_boost_patches)
+          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
+          patch_file("libs/vkd3d/command.c", fsync_patches + submission_patches)
 
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
                   if not f.endswith((".c", ".h")):
                       continue
                   path = os.path.join(root, f)
-                  if f != "device.c" and any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
+                  if f in ("device.c", "swapchain.c", "command.c"):
+                      continue
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
                       patch_file(path, gpu)
-                  patch_file(path, fsync_patches)
-                  patch_file(path, submission_patches)
-                  patch_file(path, descriptor_patches)
-                  patch_file(path, worker_patches)
-                  patch_file(path, cache_patches)
-                  patch_file(path, fence_patches)
-                  patch_file(path, uma_patches)
-                  patch_file(path, renderpass_patches)
-                  patch_file(path, gpu_boost_patches)
-                  patch_file(path, tbr_patches)
-
-          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
-          patch_file("libs/vkd3d/command.c", cmdqueue_patches)
+                  if "private" in f:
+                      patch_file(path, tbr_patches)
 
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):

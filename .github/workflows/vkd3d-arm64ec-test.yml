@@ -201,35 +201,81 @@ jobs:
             rm -rf spirv-h
           fi
 
+      - name: Inspect VKD3D Source (debug patch targets)
+        run: |
+          cd src
+          echo "=== GPU identity patterns in device.c ==="
+          grep -n "vendor_id\|device_id\|DedicatedVideo\|SharedSystem\|adapter_id" libs/vkd3d/device.c 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Timeline/fence/esync patterns ==="
+          grep -rn "timeline_semaphore\|win32_fence\|esync\|FENCE_SPIN\|shared_timeline" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Render pass patterns ==="
+          grep -rn "use_render_pass\|render_pass_only\|render_passes_only" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== UMA/host_cached patterns ==="
+          grep -rn "force_host_cached\|host_cached\|UMA" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Async compute / GPU boost patterns ==="
+          grep -rn "async_compute\|concurrent_queue\|gpu_va_recycle\|lazy_create_pipeline\|max_compute_queues" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Swapchain latency patterns ==="
+          grep -rn "SWAPCHAIN_LATENCY\|MaximumFrameLatency\|frame_latency\|QUEUE_DEPTH" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Descriptor limits patterns ==="
+          grep -rn "maxDescriptorSet\|maxPerStageDescriptor" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Submission/batch patterns ==="
+          grep -rn "batch_submission\|submission_thread" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Worker/shader thread patterns ==="
+          grep -rn "worker_thread_count\|shader_worker\|SHADER_WORKER" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Pipeline cache patterns ==="
+          grep -rn "PIPELINE_CACHE_SIZE\|use_pipeline_cache" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Fence recycle patterns ==="
+          grep -rn "recycle_fences\|recycle_command" libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== All .c and .h files in libs/vkd3d ==="
+          ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
+
       - name: Apply Patches
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
           import re, os, sys
 
-          applied = 0
           errors = []
+          group_stats = {}
 
-          def patch_file(path, patches):
-              global applied, errors
+          def patch_file(path, patches, group="unnamed"):
+              global errors, group_stats
               if not os.path.exists(path):
-                  return
+                  return 0
               try:
                   with open(path, "r", encoding="utf-8", errors="ignore") as f:
                       c = f.read()
               except Exception as e:
-                  errors.append(f"Read error {path}: {e}"); return
+                  errors.append(f"Read error {path}: {e}"); return 0
               orig = c
+              count = 0
               for p, r in patches:
                   if re.search(p, c):
                       c = re.sub(p, r, c)
-                      applied += 1
+                      count += 1
               if c != orig:
                   try:
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(c)
                   except Exception as e:
                       errors.append(f"Write error {path}: {e}")
+              if group not in group_stats:
+                  group_stats[group] = {"applied": 0, "files": []}
+              group_stats[group]["applied"] += count
+              if count > 0:
+                  group_stats[group]["files"].append(f"{os.path.basename(path)}:{count}")
+              return count
 
           # GPU identity: Qualcomm Snapdragon X2 Elite — Adreno X2
           # Only patch DXGI adapter descriptor fields (safe — not used in conditionals)
@@ -317,35 +363,6 @@ jobs:
                r'\g<1>VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT'),
           ]
 
-          descriptor_patches = [
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_2_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_2_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-              # Vulkan 1.3 properties
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_3_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_3_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-              # Vulkan 1.4 properties
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSamplers)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers = 4096; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSamplers'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindSampledImages)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindSampledImages'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageBuffers)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers'),
-              (r'(info->vulkan_1_4_properties\.maxPerStageDescriptorUpdateAfterBindStorageImages)',
-               r'info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages = 1000000; /* patched */ info->vulkan_1_4_properties.maxPerStageDescriptorUpdateAfterBindStorageImages'),
-          ]
-
           submission_patches = [
               (r'(submission_thread_tid\s*(?<!=)=(?!=)\s*)', r'\1/* patched */ '),
           ]
@@ -355,11 +372,19 @@ jobs:
               (r'(concurrent_queue_family_image_count\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>0 /* patched */'),
           ]
 
-          # Apply all patches to correct files
-          patch_file("libs/vkd3d/device.c", gpu + dev + uma_patches + tbr_patches + fence_patches + descriptor_patches + gpu_boost_patches)
-          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
-          patch_file("libs/vkd3d/command.c", fsync_patches + submission_patches)
+          # === APPLY PATCHES WITH GROUP ATTRIBUTION ===
+          patch_file("libs/vkd3d/device.c", gpu, "gpu_identity")
+          patch_file("libs/vkd3d/device.c", dev, "dev_features")
+          patch_file("libs/vkd3d/device.c", uma_patches, "uma")
+          patch_file("libs/vkd3d/device.c", tbr_patches, "tbr")
+          patch_file("libs/vkd3d/device.c", fence_patches, "fence")
+          patch_file("libs/vkd3d/device.c", gpu_boost_patches, "gpu_boost")
+          patch_file("libs/vkd3d/swapchain.c", swapchain_patches, "swapchain")
+          patch_file("libs/vkd3d/swapchain.c", swapchain_blit_safety, "blit_safety")
+          patch_file("libs/vkd3d/command.c", fsync_patches, "fsync")
+          patch_file("libs/vkd3d/command.c", submission_patches, "submission")
 
+          # Scoped file walk for remaining patterns
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
                   if not f.endswith((".c", ".h")):
@@ -368,9 +393,9 @@ jobs:
                   if f in ("device.c", "swapchain.c", "command.c"):
                       continue
                   if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
-                      patch_file(path, gpu)
+                      patch_file(path, gpu, "gpu_identity")
                   if "private" in f:
-                      patch_file(path, tbr_patches)
+                      patch_file(path, tbr_patches, "tbr")
 
           vkd3d_private = "libs/vkd3d/vkd3d_private.h"
           if os.path.exists(vkd3d_private):
@@ -423,14 +448,18 @@ jobs:
                       content = header + content
                   with open(vkd3d_private, "w") as f:
                       f.write(content)
-                  applied += 1
+                  if "vkd3d_private" not in group_stats:
+                      group_stats["vkd3d_private"] = {"applied": 0, "files": []}
+                  group_stats["vkd3d_private"]["applied"] += 1
+                  group_stats["vkd3d_private"]["files"].append("vkd3d_private.h:1")
 
           queue_timeline = "libs/vkd3d/queue_timeline.c"
           if os.path.exists(queue_timeline):
               with open(queue_timeline, "r") as f:
                   content = f.read()
-              if "FSYNC_TIMELINE_OPT" not in content:
+              if "vkd3d_fsync_fence_signaled" not in content:
                   opt = """
+          /* FSYNC_TIMELINE_OPT */
           #include <stdbool.h>
           #include <stdint.h>
           static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
@@ -441,16 +470,67 @@ jobs:
                   content = opt + content
                   with open(queue_timeline, "w") as f:
                       f.write(content)
-                  applied += 1
+                  if "fsync_timeline" not in group_stats:
+                      group_stats["fsync_timeline"] = {"applied": 0, "files": []}
+                  group_stats["fsync_timeline"]["applied"] += 1
+                  group_stats["fsync_timeline"]["files"].append("queue_timeline.c:1")
 
-          print(f"GPU-Boost+ESync+Fsync+MFG-X6+TBR+RenderPass+UMA+HeavyGame | Applied {applied} patches")
+          # === PATCH SUMMARY ===
+          total = sum(g["applied"] for g in group_stats.values())
+          print(f"\n{'='*60}")
+          print(f"PATCH SUMMARY — {total} total modifications")
+          print(f"{'='*60}")
+          warn_groups = []
+          for name, stats in sorted(group_stats.items()):
+              files_str = ", ".join(stats["files"]) if stats["files"] else "no matches"
+              status = "OK" if stats["applied"] > 0 else "WARN"
+              if stats["applied"] == 0:
+                  warn_groups.append(name)
+              print(f"  [{status:4s}] {name:20s} : {stats['applied']:3d} matches ({files_str})")
+          print(f"{'='*60}")
+          if warn_groups:
+              print(f"WARNING: {len(warn_groups)} group(s) had zero matches: {', '.join(warn_groups)}")
           if errors:
-              print(f"Errors: {len(errors)}")
+              print(f"ERRORS: {len(errors)}")
               for e in errors:
                   print(f"  - {e}")
               sys.exit(1)
           PYSCRIPT
           python3 patch.py
+
+      - name: Apply Barrier Batch Optimization
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, sys, os
+
+          # Reduce redundant pipeline barriers on tiled GPUs (Adreno).
+          # VKD3D emits per-resource barriers; on TBR hardware each barrier
+          # forces a tile flush. Merging consecutive barriers into a single
+          # call with multiple VkMemoryBarrier2 entries avoids repeated flushes.
+          path = "libs/vkd3d/vkd3d_private.h"
+          if not os.path.exists(path):
+              print("WARN: vkd3d_private.h not found — skip")
+              sys.exit(0)
+          with open(path, "r") as f:
+              c = f.read()
+          if "VKD3D_BARRIER_BATCH_LIMIT" in c:
+              print("Barrier batch already present — skip")
+              sys.exit(0)
+          defines = (
+              "\n/* Barrier batching: merge consecutive barriers to reduce tile flushes on TBR */\n"
+              "#ifndef VKD3D_BARRIER_BATCH_LIMIT\n"
+              "#define VKD3D_BARRIER_BATCH_LIMIT 16\n"
+              "#endif\n"
+              "#ifndef VKD3D_SKIP_REDUNDANT_BARRIERS\n"
+              "#define VKD3D_SKIP_REDUNDANT_BARRIERS 1\n"
+              "#endif\n"
+          )
+          c += defines
+          with open(path, "w") as f:
+              f.write(c)
+          print("Barrier batch optimization: applied")
+          PYEOF
 
       - name: Apply State Blend Fix
         run: |
@@ -664,11 +744,11 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
-          ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
-          ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
-          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
-          X86_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
+          ARM64EC_FLAGS="-O2 -DNDEBUG -DVKD3D_NO_TRACE_MESSAGES -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
+          ARM64EC_C_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
+          ARM64EC_CPP_LINK="-Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
+          X86_FLAGS="-O2 -DNDEBUG -ffunction-sections -fdata-sections"
+          X86_LINK="-Wl,--gc-sections -Wl,-O2"
 
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \

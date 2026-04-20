@@ -101,7 +101,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git ninja-build curl jq python3 python3-venv python3-pip \
-            glslang-tools spirv-tools zstd wget unzip patchelf gh wine
+            glslang-tools spirv-tools zstd wget unzip patchelf gh
 
       - name: Pin Meson via venv
         run: |
@@ -633,7 +633,6 @@ jobs:
           strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
           windres = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-windres'
           widl = '${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-widl'
-          exe_wrapper = ['wine']
           [host_machine]
           system = 'windows'
           cpu_family = 'x86_64'

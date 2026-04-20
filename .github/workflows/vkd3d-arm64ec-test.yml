@@ -594,7 +594,7 @@ jobs:
                       r'(?:[^}]*ERR\s*\([^)]*\)\s*;)*\s*\n\s*)'
                       r'(return\s+hresult_from_vk_result\s*\(\s*vr\s*\)\s*;)',
                       r'/* heavy_compute_softfail */\n'
-                      r'                WARN("Compute pipeline failed (soft-fail), vr %d — pipeline set to NULL.\n", vr);\n'
+                      r'                WARN("Compute pipeline failed (soft-fail), vr %d - pipeline set to NULL.\\n", vr);\n'
                       r'                pipeline->vk_pipeline = VK_NULL_HANDLE;\n'
                       r'                return S_OK;',
                       c, count=1

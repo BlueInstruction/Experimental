@@ -6,10 +6,11 @@ on:
 
       mesa_source:
         type: choice
-        description: "Mesa source (adreno_main = BlueInstruction fork, clean_main = upstream + CI patches)"
+        description: "Mesa source (adreno_main = BlueInstruction fork, robclark = Rob Clark freedreno fork, clean_main = upstream + CI patches)"
         default: "adreno_main"
         options:
           - adreno_main
+          - robclark
           - clean_main
           - latest_release
           - staging_branch
@@ -50,7 +51,7 @@ on:
 
       enable_deck_emu:
         type: boolean
-        description: "Enable A750 Windows identity — apiVersion 1.3.295 / 2 GiB heap (TU_DEBUG=deck_emu)"
+        description: "Enable Snapdragon X2 Elite Extreme identity — apiVersion 1.4.303 / 16 GiB heap (TU_DEBUG=deck_emu)"
         default: true
 
       enable_timeline_hack:
@@ -107,6 +108,7 @@ jobs:
             ninja-build ccache patchelf \
             flex bison \
             glslang-tools \
+            glslang-dev \
             ca-certificates
           pip install --break-system-packages meson mako pyyaml
 

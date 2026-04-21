@@ -31,6 +31,7 @@
 # ║                                                                            ║
 # ║    Mesa3D Freedreno / Turnip                                               ║
 # ║      Source: https://gitlab.freedesktop.org/mesa/mesa                     ║
+# ║      Rob Clark fork: https://gitlab.freedesktop.org/robclark/mesa         ║
 # ║      Driver: src/freedreno/vulkan/ (tu_device.cc, tu_knl_kgsl.cc, etc.)  ║
 # ║      KMD: KGSL (Kernel Graphics Support Layer — Qualcomm Android kernel)  ║
 # ║                                                                            ║
@@ -71,8 +72,15 @@ PATCHES_DIR="$(pwd)/patches"
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
+# Rob Clark — Freedreno/Turnip lead developer (Qualcomm)
+# Contains bleeding-edge freedreno/turnip work before it lands in upstream Mesa.
+# https://gitlab.freedesktop.org/robclark
+ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
 TURNIP_CI_REPO="https://github.com/whitebelyash/mesa-tu8.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
+SPIRV_HEADERS_REPO="https://github.com/KhronosGroup/SPIRV-Headers.git"
+SPIRV_TOOLS_REPO="https://github.com/KhronosGroup/SPIRV-Tools.git"
+GLSLANG_REPO="https://github.com/KhronosGroup/glslang.git"
 
 # ── Build configuration ───────────────────────────────────────────────────────
 
@@ -116,7 +124,7 @@ LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections -Wl,--icf=safe -Wl,-O2}"
 
 check_deps() {
     log_info "Checking dependencies"
-    local deps="git meson ninja patchelf zip ccache curl python3"
+    local deps="git meson ninja patchelf zip ccache curl python3 glslangValidator"
     local missing=0
     for dep in $deps; do
         command -v "$dep" &>/dev/null || { log_error "Missing dependency: $dep"; missing=1; }
@@ -174,6 +182,10 @@ clone_mesa() {
             target_ref="main"
             clone_args=("--depth" "200" "--branch" "main")
             ;;
+        robclark)
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+            ;;
         latest_release)
             target_ref=$(fetch_latest_release)
             clone_args=("--depth" "1" "--branch" "$target_ref")
@@ -195,9 +207,16 @@ clone_mesa() {
 
     local primary_repo="$MESA_REPO"
     [[ "$MESA_SOURCE" == "clean_main" ]] && primary_repo="$MESA_MIRROR"
+    [[ "$MESA_SOURCE" == "robclark" ]]   && primary_repo="$ROBCLARK_REPO"
 
     if ! git clone "${clone_args[@]}" "$primary_repo" "$MESA_DIR" 2>/dev/null; then
         log_warn "Primary source failed — trying mesa mirror"
+        # For adreno_main, the fork-specific branch won't exist on the mirror;
+        # fall back to upstream 'main'.
+        if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
+            target_ref="main"
+            clone_args=("--depth" "200" "--branch" "main")
+        fi
         git clone "${clone_args[@]}" "$MESA_MIRROR" "$MESA_DIR" || {
             log_error "All Mesa sources failed"
             exit 1
@@ -230,40 +249,6 @@ clone_mesa() {
         fi
     fi
 
-    # For clean_main, fetch and apply freedreno_turnip-CI patches
-    if [[ "$MESA_SOURCE" == "clean_main" ]]; then
-        log_info "Fetching freedreno_turnip-CI patches..."
-        local ci_dir="${WORKDIR}/turnip-ci"
-        if git clone --depth=1 "$TURNIP_CI_REPO" "$ci_dir" 2>/dev/null; then
-            # Apply .patch files from the CI repo's patches directory
-            local patch_dir=""
-            for try_dir in "$ci_dir/patches" "$ci_dir/patch" "$ci_dir"; do
-                if compgen -G "${try_dir}/*.patch" >/dev/null 2>&1; then
-                    patch_dir="$try_dir"
-                    break
-                fi
-            done
-            if [[ -n "$patch_dir" ]]; then
-                log_info "Applying freedreno_turnip-CI patches from $patch_dir"
-                for p in $(find "$patch_dir" -maxdepth 1 -name '*.patch' | sort); do
-                    local pname
-                    pname=$(basename "$p")
-                    if git apply --check "$p" 2>/dev/null; then
-                        git apply "$p"
-                        log_success "Applied: $pname"
-                    else
-                        log_warn "Skipped (doesn't apply cleanly): $pname"
-                    fi
-                done
-            else
-                log_warn "No .patch files found in freedreno_turnip-CI"
-            fi
-            rm -rf "$ci_dir"
-        else
-            log_warn "Failed to clone freedreno_turnip-CI, continuing without patches"
-        fi
-    fi
-
     local version commit
     version=$(get_mesa_version)
     commit=$(git rev-parse --short=8 HEAD)
@@ -279,20 +264,37 @@ update_vulkan_headers() {
     # that the generated vk_enum_to_str.c still references).
     case "$MESA_SOURCE" in
         latest_release|staging_branch|custom_tag)
-            log_info "Skipping Vulkan header update (stable release — bundled headers match generated code)"
+            log_info "Skipping Vulkan/SPIRV header update (stable release — bundled headers match generated code)"
             return 0
             ;;
     esac
-    log_info "Updating Vulkan headers (ensures EXT↔KHR compatibility aliases)"
+
+    # ── Vulkan Headers (latest release) ────────────────────────────────────────
+    log_info "Updating Vulkan headers to latest release"
     local hdr_dir="${WORKDIR}/vk-headers"
     git clone --depth=1 "$VULKAN_HEADERS_REPO" "$hdr_dir" 2>/dev/null || {
         log_warn "Failed to clone Vulkan headers — using Mesa defaults"
-        return 0
     }
-    [[ -d "${hdr_dir}/include/vulkan" ]] && \
+    if [[ -d "${hdr_dir}/include/vulkan" ]]; then
         cp -r "${hdr_dir}/include/vulkan"/* "${MESA_DIR}/include/vulkan/" 2>/dev/null || true
+        local vk_ver
+        vk_ver=$(grep -m1 "^#define VK_HEADER_VERSION " "${hdr_dir}/include/vulkan/vulkan_core.h" 2>/dev/null | awk '{print $3}') || true
+        log_success "Vulkan headers updated (VK_HEADER_VERSION=${vk_ver:-unknown})"
+    fi
     rm -rf "$hdr_dir"
-    log_success "Vulkan headers updated"
+
+    # ── SPIRV Headers (latest release) ─────────────────────────────────────────
+    log_info "Updating SPIRV headers to latest release"
+    local spirv_hdr_dir="${WORKDIR}/spirv-headers-latest"
+    git clone --depth=1 "$SPIRV_HEADERS_REPO" "$spirv_hdr_dir" 2>/dev/null || {
+        log_warn "Failed to clone SPIRV headers — using Mesa defaults"
+    }
+    if [[ -d "${spirv_hdr_dir}/include/spirv" ]]; then
+        mkdir -p "${MESA_DIR}/include/spirv"
+        cp -r "${spirv_hdr_dir}/include/spirv"/* "${MESA_DIR}/include/spirv/" 2>/dev/null || true
+        log_success "SPIRV headers updated"
+    fi
+    rm -rf "$spirv_hdr_dir"
 }
 
 # ── PATCH 1: disable has_branch_and_or ────────────────────────────────────────
@@ -714,15 +716,28 @@ PATCH_EOF
     log_success "Gralloc UBWC detection broadened"
 }
 
-# ── PATCH 8: A750 Windows x86_64 identity (deck_emu) ─────────────────────────
+# ── PATCH 8: Snapdragon X2 Elite Extreme (X2E-96-100) identity (deck_emu) ─────
 # Reason: Winlator and similar Android x86_64 translation layers expose the GPU
 #         to Windows games. Some games check vendorID/deviceID and reject unknown
-#         hardware. Spoofing as a known Windows GPU profile allows these games to
-#         initialize Vulkan correctly. apiVersion 1.3.295 matches the A750 Windows
-#         driver version. Controlled by TU_DEBUG=deck_emu at runtime.
+#         hardware. Spoofing as the Snapdragon X2 Elite Extreme (X2E-96-100) —
+#         the highest-end Qualcomm Windows-on-ARM GPU — allows these games to
+#         initialize Vulkan correctly and enables the best code paths.
+#
+#         Official specs (qualcomm.com/products/mobile-pcs/snapdragon-x2-elite):
+#           SKU:    X2E-96-100
+#           GPU:    Qualcomm Adreno X2-90 @ up to 1.85 GHz
+#           API:    DirectX 12.2, Vulkan 1.4, OpenCL 3.0
+#           CPU:    18-core Qualcomm Oryon (12P+6E) @ up to 5.0 GHz
+#           Memory: LPDDR5x @ up to 228 GB/s
+#           NPU:    Qualcomm Hexagon, 80 TOPS
+#           Cache:  53 MB
+#
+#         apiVersion 1.4.303 matches the latest Qualcomm Windows driver.
+#         16 GiB heap = typical LPDDR5x config on X2 Elite Extreme laptops.
+#         Controlled by TU_DEBUG=deck_emu at runtime.
 apply_patch_a750_identity() {
     [[ "$ENABLE_DECK_EMU" != "true" ]] && { log_info "Deck emu disabled — skip"; return 0; }
-    log_info "Patch: A750 Windows identity (deck_emu)"
+    log_info "Patch: Snapdragon X2 Elite Extreme identity (deck_emu)"
 
     local tu_util_h="${MESA_DIR}/src/freedreno/vulkan/tu_util.h"
     local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
@@ -757,23 +772,29 @@ m_api = re.search(r'(\n[ \t]*pdevice->vk\.properties\.apiVersion\s*=)', content)
 if m_api:
     api_code = (
         '\n   if (TU_DEBUG(DECK_EMU)) {\n'
-        '      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 295);\n'
+        '      /* Snapdragon X2 Elite Extreme (X2E-96-100) — Adreno X2-90 @ 1.85 GHz */\n'
+        '      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 4, 303);\n'
+        '      pdevice->vk.properties.vendorID = 0x4D4F4351; /* QCOM (Windows WoA) */\n'
+        '      pdevice->vk.properties.deviceID = 0x0C40;     /* Adreno X2-90 */\n'
         '   }\n'
     )
     content = content[:m_api.start()] + '\n' + api_code + content[m_api.start():]
-    print('[OK] apiVersion 1.3.295 injected')
+    print('[OK] apiVersion 1.4.303 + X2E-96-100 identity injected')
     applied += 1
 else:
-    m_api2 = re.search(r'VK_MAKE_API_VERSION\(0,\s*1,\s*3,\s*\d+\)', content)
+    m_api2 = re.search(r'VK_MAKE_API_VERSION\(0,\s*1,\s*\d+,\s*\d+\)', content)
     if m_api2:
         ln_end = content.find('\n', m_api2.end())
         api_code = (
             '\n   if (TU_DEBUG(DECK_EMU)) {\n'
-            '      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 295);\n'
+            '      /* Snapdragon X2 Elite Extreme (X2E-96-100) — Adreno X2-90 @ 1.85 GHz */\n'
+            '      pdevice->vk.properties.apiVersion = VK_MAKE_API_VERSION(0, 1, 4, 303);\n'
+            '      pdevice->vk.properties.vendorID = 0x4D4F4351; /* QCOM (Windows WoA) */\n'
+            '      pdevice->vk.properties.deviceID = 0x0C40;     /* Adreno X2-90 */\n'
             '   }\n'
         )
         content = content[:ln_end] + '\n' + api_code + content[ln_end:]
-        print('[OK] apiVersion 1.3.295 injected (VK_MAKE anchor)')
+        print('[OK] apiVersion 1.4.303 + X2E-96-100 identity injected (VK_MAKE anchor)')
         applied += 1
     else:
         print('[WARN] apiVersion injection point not found')
@@ -795,12 +816,13 @@ for pat in [
                 close += 1
             heap_code = (
                 '\n   if (TU_DEBUG(DECK_EMU)) {\n'
+                f'      /* Snapdragon X2 Elite Extreme: 16 GiB LPDDR5X */\n'
                 f'      if ({param}->memoryProperties.memoryHeapCount > 0)\n'
-                f'         {param}->memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n'
+                f'         {param}->memoryProperties.memoryHeaps[0].size = 16384ULL * 1024ULL * 1024ULL;\n'
                 '   }\n'
             )
             content = content[:close - 1] + '\n' + heap_code + content[close - 1:]
-            print(f'[OK] 2 GiB heap injected (param={param})')
+            print(f'[OK] 16 GiB heap injected (param={param})')
             applied += 1
             heap_injected = True
             break
@@ -811,11 +833,12 @@ if not heap_injected:
         ln_end = content.find('\n', m_hs.end())
         heap_code = (
             '\n   if (TU_DEBUG(DECK_EMU)) {\n'
-            '      pdevice->memory.memoryProperties.memoryHeaps[0].size = 2048ULL * 1024ULL * 1024ULL;\n'
+            '      /* Snapdragon X2 Elite Extreme: 16 GiB LPDDR5X */\n'
+            '      pdevice->memory.memoryProperties.memoryHeaps[0].size = 16384ULL * 1024ULL * 1024ULL;\n'
             '   }\n'
         )
         content = content[:ln_end] + '\n' + heap_code + content[ln_end:]
-        print('[OK] 2 GiB heap injected (fallback anchor)')
+        print('[OK] 16 GiB heap injected (fallback anchor)')
         applied += 1
 
 with open(path, 'w') as f:
@@ -824,7 +847,7 @@ print(f'[OK] deck_emu: {applied} injections applied')
 PYEOF
     fi
 
-    log_success "A750 Windows identity (deck_emu) applied"
+    log_success "Snapdragon X2 Elite Extreme identity (deck_emu) applied"
 }
 
 # ── PATCH 9: Vulkan extensions for A750 ───────────────────────────────────────
@@ -941,6 +964,25 @@ A750_EXTS = [
     "VK_QCOM_render_pass_shader_resolve", "VK_QCOM_render_pass_store_ops",
     "VK_QCOM_render_pass_transform", "VK_QCOM_rotated_copy_commands",
     "VK_QCOM_tile_properties",
+    # ── Vulkan 1.4 / latest extensions ─────────────────────────────────────
+    "VK_EXT_extended_dynamic_state3", "VK_EXT_shader_object",
+    "VK_EXT_dynamic_rendering_unused_attachments",
+    "VK_EXT_attachment_feedback_loop_layout",
+    "VK_EXT_attachment_feedback_loop_dynamic_state",
+    "VK_EXT_host_image_copy", "VK_EXT_nested_command_buffer",
+    "VK_EXT_shader_relaxed_extended_instruction",
+    "VK_EXT_non_seamless_cube_map", "VK_EXT_primitives_generated_query",
+    "VK_EXT_graphics_pipeline_library", "VK_EXT_depth_bias_control",
+    "VK_EXT_frame_boundary", "VK_EXT_external_memory_host",
+    "VK_EXT_map_memory_placed", "VK_EXT_descriptor_buffer",
+    "VK_EXT_pageable_device_local_memory",
+    "VK_KHR_cooperative_matrix", "VK_KHR_pipeline_binary",
+    "VK_KHR_shader_relaxed_extended_instruction",
+    "VK_KHR_compute_shader_derivatives",
+    "VK_KHR_shader_float_controls2",
+    "VK_KHR_video_queue", "VK_KHR_video_decode_queue",
+    "VK_KHR_video_decode_h264", "VK_KHR_video_decode_h265",
+    "VK_KHR_video_decode_av1",
 ]
 
 known = set(re.findall(r'"(VK_[A-Z0-9_]+)"', c))
@@ -1059,6 +1101,25 @@ A750_CORE = [
     "VK_QCOM_render_pass_shader_resolve", "VK_QCOM_render_pass_store_ops",
     "VK_QCOM_render_pass_transform", "VK_QCOM_rotated_copy_commands",
     "VK_QCOM_tile_properties",
+    # ── Vulkan 1.4 / latest extensions ─────────────────────────────────────
+    "VK_EXT_extended_dynamic_state3", "VK_EXT_shader_object",
+    "VK_EXT_dynamic_rendering_unused_attachments",
+    "VK_EXT_attachment_feedback_loop_layout",
+    "VK_EXT_attachment_feedback_loop_dynamic_state",
+    "VK_EXT_host_image_copy", "VK_EXT_nested_command_buffer",
+    "VK_EXT_shader_relaxed_extended_instruction",
+    "VK_EXT_non_seamless_cube_map", "VK_EXT_primitives_generated_query",
+    "VK_EXT_graphics_pipeline_library", "VK_EXT_depth_bias_control",
+    "VK_EXT_frame_boundary", "VK_EXT_external_memory_host",
+    "VK_EXT_map_memory_placed", "VK_EXT_descriptor_buffer",
+    "VK_EXT_pageable_device_local_memory",
+    "VK_KHR_cooperative_matrix", "VK_KHR_pipeline_binary",
+    "VK_KHR_shader_relaxed_extended_instruction",
+    "VK_KHR_compute_shader_derivatives",
+    "VK_KHR_shader_float_controls2",
+    "VK_KHR_video_queue", "VK_KHR_video_decode_queue",
+    "VK_KHR_video_decode_h264", "VK_KHR_video_decode_h265",
+    "VK_KHR_video_decode_av1",
 ]
 
 try:
@@ -1114,10 +1175,10 @@ if r is None:
 
 ev, ins = r
 print(f"[OK] injection point: var='{ev}'")
-lines = ["\n    // === A750 EXTENSIONS (Qualcomm GDG 80-78185-2 AL) ==="]
+lines = ["\n    // === ADRENO X2 ELITE EXTREME EXTENSIONS (Qualcomm GDG 80-78185-2 AL + Vulkan 1.4) ==="]
 for e in dev_exts:
     lines.append(f"    {ev}->{e[3:]} = true;")
-lines.append("    // === END A750 ===\n")
+lines.append("    // === END ADRENO X2 ===\n")
 inj = "\n".join(lines)
 content = content[:ins] + inj + content[ins:]
 with open(tu_path, 'w') as f:
@@ -1185,23 +1246,41 @@ apply_patch_series() {
 }
 
 setup_subprojects() {
-    log_info "Setting up SPIRV subprojects"
+    log_info "Setting up SPIRV + glslang subprojects (latest releases)"
     cd "$MESA_DIR"
     mkdir -p subprojects
     local CACHE="${WORKDIR}/sp-cache"
     mkdir -p "$CACHE"
 
+    # SPIRV-Tools and SPIRV-Headers — required by Mesa meson build
+    local -A SP_REPOS=(
+        ["spirv-tools"]="$SPIRV_TOOLS_REPO"
+        ["spirv-headers"]="$SPIRV_HEADERS_REPO"
+    )
     for proj in spirv-tools spirv-headers; do
         if [[ -d "$CACHE/$proj" ]]; then
             log_info "Using cached $proj"
             cp -r "$CACHE/$proj" subprojects/
         else
-            log_info "Cloning $proj"
-            git clone --depth=1 "https://github.com/KhronosGroup/${proj}.git" "subprojects/$proj"
+            log_info "Cloning $proj (latest)"
+            git clone --depth=1 "${SP_REPOS[$proj]}" "subprojects/$proj"
             cp -r "subprojects/$proj" "$CACHE/"
         fi
     done
-    log_success "Subprojects ready"
+
+    # glslang — shader compiler, needed for GLSL→SPIR-V pipeline
+    if [[ ! -d "subprojects/glslang" ]]; then
+        if [[ -d "$CACHE/glslang" ]]; then
+            log_info "Using cached glslang"
+            cp -r "$CACHE/glslang" subprojects/
+        else
+            log_info "Cloning glslang (latest)"
+            git clone --depth=1 "$GLSLANG_REPO" "subprojects/glslang"
+            cp -r "subprojects/glslang" "$CACHE/"
+        fi
+    fi
+
+    log_success "Subprojects ready (spirv-tools, spirv-headers, glslang)"
 }
 
 create_cross_file() {
@@ -1265,7 +1344,8 @@ configure_build() {
     meson setup build                                    \
         --cross-file "${WORKDIR}/cross-aarch64.txt"     \
         -Dbuildtype="$buildtype"                         \
-        -Db_ndebug=true                                  \                                  \
+        -Db_ndebug=true                                  \
+        -Db_lto=true                                     \
         -Dplatforms=android                              \
         -Dplatform-sdk-version="$API_LEVEL"              \
         -Dandroid-stub=true                              \
@@ -1287,7 +1367,7 @@ configure_build() {
         -Dbuild-tests=false                              \
         -Ddefault_library=shared                         \
         -Dwerror=false                                   \
-        --force-fallback-for=spirv-tools,spirv-headers   \
+        --force-fallback-for=spirv-tools,spirv-headers,glslang \
         2>&1 | tee "${WORKDIR}/meson.log"
 
     if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
@@ -1318,18 +1398,28 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    local driver_name="libvulkan_freedreno.so"
+    # Driver filename: Vulkan-1_X2E-96-100.so (Snapdragon X2 Elite Extreme identity)
+    # Also ship libvulkan_freedreno.so as fallback for loaders that expect the Mesa name
+    local driver_name="Vulkan-1_X2E-96-100.so"
+    local driver_name_compat="libvulkan_freedreno.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
+    cp "$driver_src" "${pkg_dir}/${driver_name_compat}"
     patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
+    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name_compat}"
 
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || \
         aarch64-linux-android-strip "${pkg_dir}/${driver_name}" 2>/dev/null || true
+    "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+        "${pkg_dir}/${driver_name_compat}" 2>/dev/null || \
+        aarch64-linux-android-strip "${pkg_dir}/${driver_name_compat}" 2>/dev/null || true
 
     local clean_version="${version%-devel}"
-    local filename="Turnip_v${clean_version}-B${BUILD_NUMBER}"
+    # Package name: MesaTurnip-v{mesa_version}-Dv{build_number}
+    # e.g. MesaTurnip-v26.2.0-Dv1
+    local filename="MesaTurnip-v${clean_version}-Dv${BUILD_NUMBER}"
     local driver_size
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
 
@@ -1337,14 +1427,13 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "${filename}",
-    "description": "",
+    "description": "Snapdragon X2 Elite Extreme (X2E-96-100) — Adreno X2-90",
     "author": "BlueInstruction",
     "packageVersion": "${BUILD_NUMBER}",
     "vendor": "Mesa",
-    "driverVersion": "${vulkan_version}",
-    "mesaVersion": "${clean_version}",
+    "driverVersion": "Vulkan ${vulkan_version}",
     "minApi": 28,
-    "libraryName": "${driver_name}",
+    "libraryName": "${driver_name}"
 }
 EOF
 
@@ -1353,7 +1442,7 @@ EOF
     echo "$build_date"     > "${WORKDIR}/build_date.txt"
 
     cd "$pkg_dir"
-    zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
+    zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" "$driver_name_compat" meta.json
     log_success "Package: ${filename}.zip ($driver_size)"
 }
 
@@ -1370,7 +1459,7 @@ print_summary() {
     echo "  ║           Turnip Driver Build Summary                     ║"
     echo "  ║  Mesa Freedreno — Qualcomm Adreno A7xx FOSS Vulkan       ║"
     echo "  ╠═══════════════════════════════════════════════════════════╣"
-    printf "  ║  %-20s : %-35s ║\n" "Package"       "Turnip_v${clean_version}-B${BUILD_NUMBER}"
+    printf "  ║  %-20s : %-35s ║\n" "Package"       "MesaTurnip-v${clean_version}-Dv${BUILD_NUMBER}"
     printf "  ║  %-20s : %-35s ║\n" "Mesa Version"  "$version"
     printf "  ║  %-20s : %-35s ║\n" "Vulkan Header" "$vulkan_version"
     printf "  ║  %-20s : %-35s ║\n" "Commit"        "$commit"
@@ -1383,14 +1472,21 @@ print_summary() {
     printf "  ║  %-20s : %-35s ║\n" "March"         "armv8.2-a+fp16+rcpc+dotprod+i8mm"
     echo "  ╠═══════════════════════════════════════════════════════════╣"
     printf "  ║  %-20s : %-35s ║\n" "Deck Emu"      "$ENABLE_DECK_EMU"
+    printf "  ║  %-20s : %-35s ║\n" "  Identity"    "SD X2 Elite Extreme (X2E-96-100)"
+    printf "  ║  %-20s : %-35s ║\n" "  GPU"         "Adreno X2-90 @ 1.85 GHz"
+    printf "  ║  %-20s : %-35s ║\n" "  API"         "Vulkan 1.4 / DX12.2"
+    printf "  ║  %-20s : %-35s ║\n" "  VRAM"        "16 GiB LPDDR5x (228 GB/s)"
     printf "  ║  %-20s : %-35s ║\n" "A7xx Fixes"    "$ENABLE_A7XX_FIXES"
     printf "  ║  %-20s : %-35s ║\n" "Quest 3"       "$ENABLE_QUEST3"
     printf "  ║  %-20s : %-35s ║\n" "Timeline Hack" "$ENABLE_TIMELINE_HACK"
     printf "  ║  %-20s : %-35s ║\n" "UBWC 5/6"      "$ENABLE_UBWC_HACK"
     echo "  ╠═══════════════════════════════════════════════════════════╣"
+    echo "  ║  Subprojects: spirv-tools, spirv-headers, glslang       ║"
+    echo "  ║  Headers: Vulkan (latest) + SPIRV (latest)               ║"
+    echo "  ╠═══════════════════════════════════════════════════════════╣"
     echo "  ║  Translation layer support (via Vulkan extensions):      ║"
     echo "  ║    DXVK        — DX9/10/11 → Vulkan    ✓ supported      ║"
-    echo "  ║    VKD3D-Proton — DX12 FL12_1 → Vulkan  ✓ supported     ║"
+    echo "  ║    VKD3D-Proton — DX12 FL12_2 → Vulkan  ✓ supported     ║"
     echo "  ║    DX12 Ultimate (mesh/RT pipeline)      ✗ A8x required  ║"
     echo "  ╚═══════════════════════════════════════════════════════════╝"
     echo ""

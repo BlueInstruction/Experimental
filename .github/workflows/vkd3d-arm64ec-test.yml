@@ -656,7 +656,6 @@ jobs:
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
-            -Db_lto=true \
             -Db_ndebug=true \
             -Dstrip=true
           ninja -C build-arm64ec -j2 2>&1 | tee build-arm64ec.log
@@ -665,7 +664,6 @@ jobs:
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
-            -Db_lto=true \
             -Db_ndebug=true \
             -Dstrip=true
           ninja -C build-x86 -j2 2>&1 | tee build-x86.log

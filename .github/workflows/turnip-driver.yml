@@ -1,4 +1,4 @@
-name: Turnip Driver — Adreno A7xx (Mesa Freedreno)
+name: Turnip Driver — (Mesa Freedreno)
 
 on:
   workflow_dispatch:

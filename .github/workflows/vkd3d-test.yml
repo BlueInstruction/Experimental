@@ -436,12 +436,14 @@ jobs:
           if "adreno_fallback" in c:
               print("Adreno PSO fallback: already applied"); exit(0)
 
-          # Dynamic: find any graphics pipeline creation call
+          # Dynamic: find any pipeline creation call
           pattern = None
           for pat in [
               r'(hr\s*=\s*\w*create\w*graphics\w*pipeline\w*\s*\([^)]+\)\s*;)',
               r'(hr\s*=\s*\w*pipeline_state_create\w*\s*\([^)]+\)\s*;)',
               r'(hr\s*=\s*\w*graphics_pipeline\w*\s*\([^)]+\)\s*;)',
+              r'(hr\s*=\s*d3d12_pipeline_state_create\s*\([^)]+\)\s*;)',
+              r'(FAILED\s*\(\s*hr\s*=\s*\w*pipeline\w*create\w*\([^)]+\)\s*\))',
           ]:
               pattern = re.search(pat, c, re.IGNORECASE)
               if pattern:

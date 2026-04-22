@@ -257,6 +257,18 @@ jobs:
           echo ""
           echo "=== All .c and .h files in libs/vkd3d ==="
           ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
+          echo ""
+          echo "=== Patch anchor: feature_level functions in device.c ==="
+          grep -n "feature_level\|determine_feature_level\|D3D_FEATURE_LEVEL_12_0" libs/vkd3d/device.c 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Patch anchor: sparseBinding + KHR_buffer_device_address ==="
+          grep -n "sparseBinding\|KHR_buffer_device_address" libs/vkd3d/device.c 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Patch anchor: PSO creation functions in state.c ==="
+          grep -n "create_graphics_pipeline\|CreateGraphicsPipelineState\|pipeline_state_create" libs/vkd3d/state.c 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Patch anchor: VRS tier patterns ==="
+          grep -n "VARIABLE_SHADING_RATE_TIER\|SHADING_RATE_TIER" libs/vkd3d/device.c 2>/dev/null | head -10 || true
       # ── PATCHES DISABLED ──────────────────────────────────────────────
       # Most patches disabled — caused UE5 compatibility issues (Samson).
       # Kept for future re-enablement. Remove 'if: false' to re-enable.

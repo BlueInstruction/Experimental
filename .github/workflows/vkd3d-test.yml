@@ -258,7 +258,36 @@ jobs:
           echo "=== All .c and .h files in libs/vkd3d ==="
           ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
 
+      # ── PATCHES DISABLED ──────────────────────────────────────────────
+      # Most patches disabled — caused UE5 compatibility issues (Samson).
+      # Kept for future re-enablement. Remove 'if: false' to re-enable.
+      # Only VRS Tier 2 patch is active (commit 8850039, needed for Crimson Desert).
+      # ────────────────────────────────────────────────────────────────────
+
+      - name: Apply VRS Tier 2 Patch
+        run: |
+          cd src
+          python3 - << 'PYEOF'
+          import re, os
+          # Commit 8850039: Bump RDNA1 compat path for VRS up to tier 2.
+          # Crimson Desert hard requires VRS tier 2 in latest patch.
+          # This was in upstream master but got reverted/changed.
+          path = "libs/vkd3d/device.c"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          old = "return D3D12_VARIABLE_SHADING_RATE_TIER_1;"
+          new = "return D3D12_VARIABLE_SHADING_RATE_TIER_2;"
+          if old in c:
+              c = c.replace(old, new, 1)
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print("VRS Tier 2 patch: applied (TIER_1 → TIER_2)")
+          else:
+              print("VRS Tier 2 patch: already applied or pattern not found")
+          PYEOF
+
       - name: Apply Patches
+        if: false
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
@@ -421,6 +450,7 @@ jobs:
           python3 patch.py
 
       - name: Apply Command Submit ERR Downgrade
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -452,6 +482,7 @@ jobs:
           PYEOF
 
       - name: Apply State Blend Fix
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -482,6 +513,7 @@ jobs:
           PYEOF
 
       - name: Apply Transfer Queue Fix
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -524,6 +556,7 @@ jobs:
           PYEOF
 
       - name: Apply Heavy Game Resource Fixes
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'

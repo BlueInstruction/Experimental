@@ -324,9 +324,9 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
               replacement = '''    bool fl12_capable = device->device_info.features2.features.sparseBinding &&
         vk_info->KHR_buffer_device_address;
     if (!fl12_capable && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
-    { fl12_capable = true; WARN("Adreno: elevating to FL 12.1 (sparse binding emulated).\\n"); }
+    { fl12_capable = true; WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n"); }
     if (fl12_capable)
-        feature_level = D3D_FEATURE_LEVEL_12_1;'''
+        feature_level = D3D_FEATURE_LEVEL_12_0;'''
               c = c[:old_check.start()] + replacement + c[old_check.end():]
               print("Adreno FL 12.0 patch: applied")
           else:
@@ -334,8 +334,8 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
               if old_simple in c:
                   idx = c.find(old_simple) + len(old_simple)
                   c = c[:idx] + '''
-    if (feature_level < D3D_FEATURE_LEVEL_12_1 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
-    { feature_level = D3D_FEATURE_LEVEL_12_1; WARN("Adreno: elevating to FL 12.1.\\n"); }''' + c[idx:]
+    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
+    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }''' + c[idx:]
                   print("Adreno FL 12.0 patch: applied (fallback)")
           with open(path, "w", encoding="utf-8") as f:
               f.write(c)

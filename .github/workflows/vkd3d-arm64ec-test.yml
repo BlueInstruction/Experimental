@@ -297,18 +297,18 @@ jobs:
               c = f.read()
           if "vkd3d_adreno_fl12_ok" in c:
               print("Adreno FL 12.0 patch: already applied"); exit(0)
-          helper = '''
-/* Adreno FL 12.0 override — BlueInstruction patch */
-#define QUALCOMM_VENDOR_ID 0x5143u
-static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)
-{ return props->vendorID == QUALCOMM_VENDOR_ID; }
-static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
-{
-    const struct vkd3d_vulkan_info *vk = &device->vk_info;
-    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;
-    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;
-}
-'''
+          helper = (
+              '\n/* Adreno FL 12.0 override — BlueInstruction patch */\n'
+              '#define QUALCOMM_VENDOR_ID 0x5143u\n'
+              'static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)\n'
+              '{ return props->vendorID == QUALCOMM_VENDOR_ID; }\n'
+              'static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)\n'
+              '{\n'
+              '    const struct vkd3d_vulkan_info *vk = &device->vk_info;\n'
+              '    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;\n'
+              '    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;\n'
+              '}\n'
+          )
           anchor = "static D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
           if anchor not in c:
               anchor = "D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
@@ -321,12 +321,14 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
               r'if\s*\(\s*device->device_info\.features2\.features\.sparseBinding\s*&&\s*\n?\s*vk_info->KHR_buffer_device_address\s*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
               c, re.DOTALL)
           if old_check:
-              replacement = '''    bool fl12_capable = device->device_info.features2.features.sparseBinding &&
-        vk_info->KHR_buffer_device_address;
-    if (!fl12_capable && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
-    { fl12_capable = true; WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n"); }
-    if (fl12_capable)
-        feature_level = D3D_FEATURE_LEVEL_12_0;'''
+              replacement = (
+                  '    bool fl12_capable = device->device_info.features2.features.sparseBinding &&\n'
+                  '        vk_info->KHR_buffer_device_address;\n'
+                  '    if (!fl12_capable && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))\n'
+                  '    { fl12_capable = true; WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n"); }\n'
+                  '    if (fl12_capable)\n'
+                  '        feature_level = D3D_FEATURE_LEVEL_12_0;'
+              )
               c = c[:old_check.start()] + replacement + c[old_check.end():]
               with open(path, "w", encoding="utf-8") as f:
                   f.write(c)
@@ -335,9 +337,11 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
               old_simple = "feature_level = D3D_FEATURE_LEVEL_12_0;"
               if old_simple in c:
                   idx = c.find(old_simple) + len(old_simple)
-                  c = c[:idx] + '''
-    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
-    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }''' + c[idx:]
+                  adreno_insert = (
+                      '\n    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))\n'
+                      '    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }'
+                  )
+                  c = c[:idx] + adreno_insert + c[idx:]
                   with open(path, "w", encoding="utf-8") as f:
                       f.write(c)
                   print("Adreno FL 12.0 patch: applied (fallback)")
@@ -362,10 +366,11 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
               if anchor in c:
                   pattern = re.search(r'(hr\s*=\s*d3d12_pipeline_state_create_graphics\s*\([^)]+\)\s*;)', c)
                   if pattern:
-                      fallback = '''
-    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */
-    if (hr == E_INVALIDARG && device->device_info.properties2.properties.vendorID == 0x5143u)
-    { WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n"); }'''
+                      fallback = (
+                          '\n    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */\n'
+                          '    if (hr == E_INVALIDARG && device->device_info.properties2.properties.vendorID == 0x5143u)\n'
+                          '    { WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n"); }'
+                      )
                       c = c[:pattern.end()] + fallback + c[pattern.end():]
                       with open(path, "w", encoding="utf-8") as f:
                           f.write(c)

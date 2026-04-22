@@ -328,6 +328,8 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
     if (fl12_capable)
         feature_level = D3D_FEATURE_LEVEL_12_0;'''
               c = c[:old_check.start()] + replacement + c[old_check.end():]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
               print("Adreno FL 12.0 patch: applied")
           else:
               old_simple = "feature_level = D3D_FEATURE_LEVEL_12_0;"
@@ -336,9 +338,12 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
                   c = c[:idx] + '''
     if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))
     { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }''' + c[idx:]
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(c)
                   print("Adreno FL 12.0 patch: applied (fallback)")
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(c)
+              else:
+                  print("ERROR: Adreno FL 12.0 patch completely failed — neither pattern matched in device.c")
+                  exit(1)
           PYEOF
 
       - name: Apply Adreno PSO Fallback

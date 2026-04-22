@@ -350,6 +350,8 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
     if (fl12_capable)
         feature_level = D3D_FEATURE_LEVEL_12_0;'''
               c = c[:old_check.start()] + replacement + c[old_check.end():]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
               print("Adreno FL 12.0 patch: applied")
           else:
               print("WARN: sparseBinding FL12 check not found — trying simple replace")
@@ -368,10 +370,12 @@ static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)
         WARN("Adreno: elevating to FL 12.0 (sparse binding emulated, capabilities confirmed).\\n");
     }'''
                   c = c[:idx] + adreno_block + c[idx:]
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(c)
                   print("Adreno FL 12.0 patch: applied (fallback path)")
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(c)
+              else:
+                  print("ERROR: Adreno FL 12.0 patch completely failed — neither pattern matched in device.c")
+                  exit(1)
           PYEOF
 
       - name: Apply Adreno PSO Fallback

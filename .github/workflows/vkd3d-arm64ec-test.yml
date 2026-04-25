@@ -191,7 +191,7 @@ jobs:
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch master --depth 1 \
-            https://github.com/BlueInstruction/vkd3d-proton.git src
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"

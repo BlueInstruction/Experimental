@@ -66,7 +66,7 @@ jobs:
               | jq -r '.[0].tag_name')
           fi
           VER_CLEAN="${VER#v}"
-          RELEASE_TAG="vkd3d-proton-heavy-${VER_CLEAN}-${BUILD_DATE}"
+          RELEASE_TAG="vkd3d-proton-${VER_CLEAN}-${BUILD_DATE}"
           SKIP="false"
           if [[ "${{ inputs.FORCE_MODE }}" != "true" ]]; then
             HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
@@ -194,30 +194,11 @@ jobs:
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
       
-      - name: Update Vulkan + SPIRV Headers
-        run: |
-          VK_TAG=$(curl -sSL \
-            https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest \
-            | jq -r '.tag_name // empty')
-          [[ -z "$VK_TAG" ]] && VK_TAG="main"
-          echo "VK_HEADERS_TAG=$VK_TAG" >> $GITHUB_ENV
-          git clone --depth 1 --branch "$VK_TAG" \
-            https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
-          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
-          [[ -d vk-headers/include/vulkan ]] && cp -r vk-headers/include/vulkan src/include/
-          [[ -d vk-headers/registry ]] && { mkdir -p src/registry; cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true; }
-          rm -rf vk-headers
-
-          SPIRV_TAG=$(curl -sSL \
-            https://api.github.com/repos/KhronosGroup/SPIRV-Headers/releases/latest \
-            | jq -r '.tag_name // empty')
-          if [[ -n "$SPIRV_TAG" ]]; then
-            echo "SPIRV_HEADERS_TAG=$SPIRV_TAG" >> $GITHUB_ENV
-            git clone --depth 1 --branch "$SPIRV_TAG" \
-              https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
-            [[ -d spirv-h/include/spirv ]] && cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
-            rm -rf spirv-h
-          fi
+      # Base/upstream build — use the pinned Vulkan-Headers and SPIRV-Headers
+      # that vkd3d-proton ships as git submodules. Do not overwrite them with
+      # the latest KhronosGroup main branch: that risks build breakage when
+      # extensions are promoted (EXT→KHR aliases get removed) and defeats the
+      # purpose of a reproducible "vanilla upstream" build.
 
       - name: Create Cross Files
         run: |
@@ -295,12 +276,39 @@ jobs:
           done
           # Meson -Dstrip=true handles stripping during build
 
+          # Base/upstream build — no patches. Provide a brief notes file so users
+          # can compare with the -p (patched) variant.
+          cat > pkg/VKD3D_CONFIG.txt << 'CFGEOF'
+          # vkd3d-proton (base / -b) — vanilla upstream HansKristian-Work/master
+          #
+          # This is a stock upstream build. No Adreno-specific patches.
+          # Use this variant for compatibility testing or when the -p build
+          # introduces regressions.
+          #
+          # If a game runs better in -p than -b, please report which patch
+          # helps so we can document it.
+          #
+          # ── Common environment variables ──────────────────────────────────
+          # VKD3D_CONFIG=dxr                         # force-enable raytracing
+          # VKD3D_CONFIG=no_upload_hvv               # KGSL VRAM saver
+          # VKD3D_CONFIG=force_host_cached           # reduce stutters
+          # VKD3D_SHADER_CACHE_PATH=/sdcard/vkd3d-cache
+          # VKD3D_FRAME_RATE=60                      # 0 = uncapped
+          # VKD3D_SWAPCHAIN_PRESENT_MODE=FIFO_LATEST_READY
+          # VKD3D_DEBUG=warn                         # none|err|info|fixme|warn|trace
+          # VKD3D_SHADER_DEBUG=warn
+          # VKD3D_LOG_FILE=/sdcard/vkd3d.log
+          #
+          # See the upstream HansKristian-Work/vkd3d-proton README for the full
+          # list of VKD3D_CONFIG flags and environment variables.
+          # CFGEOF
+
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}",
+            "versionName": "${VER}-${COMMIT}-b",
             "versionCode": 0,
-            "description": "vkd3d-proton",
+            "description": "vkd3d-proton base (vanilla upstream)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -310,7 +318,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-v${VER}-${COMMIT}"
+          PKG="vkd3d-proton-v${VER}-${COMMIT}-b"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 

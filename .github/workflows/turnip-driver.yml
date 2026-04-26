@@ -158,12 +158,12 @@ jobs:
           export API_LEVEL="${{ env.API_LEVEL }}"
           export BUILD_NUMBER="${{ inputs.build_number || '1' }}"
 
-          export ENABLE_DECK_EMU="${{ inputs.enable_deck_emu != '' && inputs.enable_deck_emu || 'true' }}"
-          export ENABLE_TIMELINE_HACK="${{ inputs.enable_timeline_hack != '' && inputs.enable_timeline_hack || 'true' }}"
-          export ENABLE_UBWC_HACK="${{ inputs.enable_ubwc_hack != '' && inputs.enable_ubwc_hack || 'true' }}"
-          export ENABLE_A7XX_FIXES="${{ inputs.enable_a7xx_fixes != '' && inputs.enable_a7xx_fixes || 'true' }}"
-          export ENABLE_QUEST3="${{ inputs.enable_quest3 != '' && inputs.enable_quest3 || 'true' }}"
-          export APPLY_PATCH_SERIES="${{ inputs.apply_patch_series != '' && inputs.apply_patch_series || 'true' }}"
+          export ENABLE_DECK_EMU="${{ format('{0}', inputs.enable_deck_emu) }}"
+          export ENABLE_TIMELINE_HACK="${{ format('{0}', inputs.enable_timeline_hack) }}"
+          export ENABLE_UBWC_HACK="${{ format('{0}', inputs.enable_ubwc_hack) }}"
+          export ENABLE_A7XX_FIXES="${{ format('{0}', inputs.enable_a7xx_fixes) }}"
+          export ENABLE_QUEST3="${{ format('{0}', inputs.enable_quest3) }}"
+          export APPLY_PATCH_SERIES="${{ format('{0}', inputs.apply_patch_series) }}"
 
           bash turnip-driver.sh
 

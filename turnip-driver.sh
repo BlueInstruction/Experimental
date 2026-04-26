@@ -563,7 +563,7 @@ apply_patch_timeline_semaphore() {
     cat << 'PATCH_EOF' > "${WORKDIR}/timeline.patch"
 --- a/src/vulkan/runtime/vk_sync_timeline.c
 +++ b/src/vulkan/runtime/vk_sync_timeline.c
-@@ -507,54 +507,50 @@ vk_sync_timeline_wait_locked(struct vk_device *device,
+@@ -507,54 +507,64 @@ vk_sync_timeline_wait_locked(struct vk_device *device,
                                enum vk_sync_wait_flags wait_flags,
                                uint64_t abs_timeout_ns)
  {
@@ -598,6 +598,28 @@ apply_patch_timeline_semaphore() {
 -      result = vk_sync_wait(device, &point->sync, 0,
 -                            VK_SYNC_WAIT_COMPLETE,
 -                            abs_timeout_ns);
++   /* Phase 1: wait for the value to be at least pending. Required to honour
++    * VK_SYNC_WAIT_PENDING semantics — callers may only need pending notification
++    * and must not be blocked on full completion. */
++   while (state->highest_pending < wait_value) {
++      int ret = u_cnd_monotonic_timedwait(&state->cond, &state->mutex,
++                                          &abs_timeout_ts);
++      if (ret == thrd_timedout)
++         return VK_TIMEOUT;
++      if (ret != thrd_success)
++         return vk_errorf(device, VK_ERROR_UNKNOWN, "cnd_timedwait failed");
++   }
++
++   if (wait_flags & VK_SYNC_WAIT_PENDING)
++      return VK_SUCCESS;
++
++   /* GC completed points before scanning pending_points to keep the list bounded. */
++   VkResult gc_result = vk_sync_timeline_gc_locked(device, state, false);
++   if (gc_result != VK_SUCCESS)
++      return gc_result;
++
++   /* Phase 2: completion. Scan pending_points directly instead of calling
++    * vk_sync_timeline_first_point — reduces lock contention in DXVK/VKD3D-Proton. */
 +   while (state->highest_past < wait_value) {
 +      struct vk_sync_timeline_point *point = NULL;
  
@@ -770,6 +792,13 @@ applied = 0
 
 m_api = re.search(r'(\n[ \t]*pdevice->vk\.properties\.apiVersion\s*=)', content)
 if m_api:
+    # Insert AFTER the original assignment line; otherwise the original assignment
+    # immediately overwrites the spoofed apiVersion. Find the end of the statement
+    # (semicolon + newline) and inject the deck_emu block there.
+    semicolon = content.find(';', m_api.end())
+    ln_end = content.find('\n', semicolon) if semicolon != -1 else -1
+    if ln_end == -1:
+        ln_end = len(content)
     api_code = (
         '\n   if (TU_DEBUG(DECK_EMU)) {\n'
         '      /* Snapdragon X2 Elite Extreme (X2E-96-100) — Adreno X2-90 @ 1.85 GHz */\n'
@@ -778,7 +807,7 @@ if m_api:
         '      pdevice->vk.properties.deviceID = 0x0C40;     /* Adreno X2-90 */\n'
         '   }\n'
     )
-    content = content[:m_api.start()] + '\n' + api_code + content[m_api.start():]
+    content = content[:ln_end] + '\n' + api_code + content[ln_end:]
     print('[OK] apiVersion 1.4.303 + X2E-96-100 identity injected')
     applied += 1
 else:

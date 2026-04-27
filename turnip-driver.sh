@@ -1,71 +1,7 @@
 #!/usr/bin/env bash
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Turnip Driver Builder — High-Performance Adreno A7xx (A730/A740/A750)     ║
-# ║                                                                            ║
-# ║  Builds Mesa3D Turnip, the FOSS Vulkan driver for Qualcomm Adreno GPUs.   ║
-# ║  Turnip is developed as part of the Mesa Freedreno project and provides    ║
-# ║  equal or better performance than Qualcomm's proprietary Adreno driver     ║
-# ║  for gaming workloads (DXVK / VKD3D-Proton / Winlator).                   ║
-# ║                                                                            ║
-# ║  ════════════════════════════════════════════════════════════════════════  ║
-# ║  HIGH-PERFORMANCE BUILD v2.0 — Optimized for Heavy Games:                 ║
-# ║    • Marvel Spider-Man 2                                                  ║
-# ║    • Alan Wake 2                                                          ║
-# ║    • The Last of Us Part 2                                                ║
-# ║    • Cyberpunk 2077                                                       ║
-# ║    • Hogwarts Legacy                                                      ║
-# ║  on Winlator Ludashi v2.9                                                 ║
-# ║  ════════════════════════════════════════════════════════════════════════  ║
-# ║                                                                            ║
-# ║  References:                                                               ║
-# ║    Qualcomm Adreno GPU Best Practices (Game Developer Guide)               ║
-# ║      Document: 80-78185-2 Rev: AL (Mar 2026)                              ║
-# ║      URL: https://developer.qualcomm.com/software/adreno-gpu-sdk          ║
-# ║      Key sections used:                                                    ║
-# ║        - UBWC: available on all Adreno since A5x                          ║
-# ║        - Mesh Shading: A8x+ only ("A8x supports mesh shading extension")  ║
-# ║        - LPAC (Low Priority Async Compute): A740+ only                    ║
-# ║        - VRS: VK_KHR_fragment_shading_rate confirmed for A7xx             ║
-# ║        - Tile Shading: VK_QCOM_tile_memory_heap / tile_shading = A840+   ║
-# ║        - Ray Queries: VK_KHR_ray_query supported on A7xx                  ║
-# ║        - Ray Pipelines: VK_KHR_ray_tracing_pipeline = A8x+ only          ║
-# ║                                                                            ║
-# ║    Igalia / Valve — Mesa Turnip development                                ║
-# ║      "Helping Valve to power up Steam devices" (Igalia, 2025)             ║
-# ║      URL: https://www.igalia.com/2025/01/15/                              ║
-# ║           Helping-Valve-to-power-up-Steam-devices.html                    ║
-# ║      - Turnip outperforms Qualcomm's proprietary driver for gaming        ║
-# ║      - Vulkan conformant across years of Snapdragon hardware              ║
-# ║      - Groundwork for ARM-based Steam devices (FEX x86→ARM translation)  ║
-# ║      - KGSL backend for Android (no DRM/KMS kernel driver needed)         ║
-# ║                                                                            ║
-# ║    Mesa3D Freedreno / Turnip                                               ║
-# ║      Source: https://gitlab.freedesktop.org/mesa/mesa                     ║
-# ║      Rob Clark fork: https://gitlab.freedesktop.org/robclark/mesa         ║
-# ║      Driver: src/freedreno/vulkan/ (tu_device.cc, tu_knl_kgsl.cc, etc.)  ║
-# ║      KMD: KGSL (Kernel Graphics Support Layer — Qualcomm Android kernel)  ║
-# ║                                                                            ║
-# ║    Community Build References:                                             ║
-# ║      lfdevs/mesa-for-android-container (production ARM container builds)  ║
-# ║      whitebelyash/freedreno_turnip-CI (AdrenoTools Winlator builds)       ║
-# ║      StevenMXZ/Adreno-Tools-Drivers (Winlator Ludashi driver packages)    ║
-# ║      Zan Dobersek — KGSL timeline sync (MR !39751)                        ║
-# ║      Zan Dobersek — FLUSHALL targeted WFM (MR !39874)                     ║
-# ║                                                                            ║
-# ║  Target hardware:                                                          ║
-# ║    Snapdragon 8 Gen 1   — Adreno 730 (A7xx gen1)                         ║
-# ║    Snapdragon 8 Gen 2   — Adreno 740 (A7xx gen1, LPAC capable)           ║
-# ║    Snapdragon 8 Gen 3   — Adreno 750 (A7xx gen2)                         ║
-# ║    Meta Quest 3          — FD740 variant (chip_id 0x43050b00)             ║
-# ║                                                                            ║
-# ║  Translation layers supported:                                             ║
-# ║    DXVK        — DirectX 9/10/11 → Vulkan (Wine/Proton)                  ║
-# ║    VKD3D-Proton — DirectX 12 → Vulkan (Wine/Proton)                      ║
-# ║    Winlator    — Android x86_64 translation for Windows games             ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+
 set -euo pipefail
 
-# ── Logging ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
@@ -81,31 +17,21 @@ log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 log_section() { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}"; }
 log_perf()    { echo -e "${CYAN}[PERF]${NC} $*"; }
 
-# ── Paths ──────────────────────────────────────────────────────────────────────
 WORKDIR="${GITHUB_WORKSPACE:-$(pwd)}/build"
 MESA_DIR="${WORKDIR}/mesa"
 PATCHES_DIR="$(pwd)/patches"
 
-# ── Source repositories ────────────────────────────────────────────────────────
-
 MESA_REPO="https://github.com/BlueInstruction/mesa-for-android-container.git"
 MESA_BRANCH_DEFAULT="adreno-main"
 MESA_MIRROR="https://gitlab.freedesktop.org/mesa/mesa.git"
-# Rob Clark — Freedreno/Turnip lead developer (Qualcomm)
-# Contains bleeding-edge freedreno/turnip work before it lands in upstream Mesa.
-# https://gitlab.freedesktop.org/robclark
 ROBCLARK_REPO="https://gitlab.freedesktop.org/robclark/mesa.git"
 TURNIP_CI_REPO="https://github.com/whitebelyash/mesa-tu8.git"
 VULKAN_HEADERS_REPO="https://github.com/KhronosGroup/Vulkan-Headers.git"
 SPIRV_HEADERS_REPO="https://github.com/KhronosGroup/SPIRV-Headers.git"
 SPIRV_TOOLS_REPO="https://github.com/KhronosGroup/SPIRV-Tools.git"
 GLSLANG_REPO="https://github.com/KhronosGroup/glslang.git"
-# StevenMXZ — Winlator Ludashi community driver builds
 STEVENMXZ_DRIVER_REPO="https://github.com/StevenMXZ/Adreno-Tools-Drivers.git"
-# lfdevs — production ARM container builds for Turnip
 LFDEVS_REPO="https://github.com/lfdevs/mesa-for-android-container.git"
-
-# ── Build configuration ───────────────────────────────────────────────────────
 
 MESA_SOURCE="${MESA_SOURCE:-adreno_main}"
 STAGING_BRANCH="${STAGING_BRANCH:-staging/26.0}"
@@ -116,11 +42,6 @@ NDK_PATH="${NDK_PATH:-/opt/android-ndk}"
 API_LEVEL="${API_LEVEL:-36}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
-# ── Feature toggles ──────────────────────────────────────────────────────────
-# Based on Qualcomm GDG 80-78185-2 AL, freedreno community research,
-# and Zan Dobersek's Mesa MRs for KGSL optimization.
-
-# Core stability & bandwidth patches
 ENABLE_TIMELINE_HACK="${ENABLE_TIMELINE_HACK:-true}"
 ENABLE_UBWC_HACK="${ENABLE_UBWC_HACK:-true}"
 ENABLE_DECK_EMU="${ENABLE_DECK_EMU:-true}"
@@ -128,7 +49,6 @@ ENABLE_A7XX_FIXES="${ENABLE_A7XX_FIXES:-true}"
 ENABLE_QUEST3="${ENABLE_QUEST3:-true}"
 APPLY_PATCH_SERIES="${APPLY_PATCH_SERIES:-true}"
 
-# High-performance patches (new in v2.0)
 ENABLE_KGSL_TIMELINE="${ENABLE_KGSL_TIMELINE:-true}"
 ENABLE_FLUSHALL_REMOVAL="${ENABLE_FLUSHALL_REMOVAL:-true}"
 ENABLE_LPAC_QUEUE="${ENABLE_LPAC_QUEUE:-true}"
@@ -137,35 +57,6 @@ ENABLE_VRS_OPTIMIZATION="${ENABLE_VRS_OPTIMIZATION:-true}"
 ENABLE_IR3_SCHEDULER="${ENABLE_IR3_SCHEDULER:-true}"
 ENABLE_MEMORY_OPT="${ENABLE_MEMORY_OPT:-true}"
 
-# ── Compiler flags ─────────────────────────────────────────────────────────────
-# Targeting broadest A7xx coverage (A730/A740/A750):
-#
-# Performance-tier flags (BUILD_VARIANT=performance):
-#   -O3                         maximum optimization
-#   -march=armv9-a              ARMv9 ISA (SD 8 Gen 2/3 = Cortex-X3/X4)
-#   +sve                        Scalable Vector Extension (X4 big cores)
-#   +bf16                       BFloat16 (X4 cores, AI/ML shader paths)
-#   +fp16                       native f16 — Adreno scalar unit uses fp16 paths
-#   +rcpc                       release-consistent ordering (reduces barriers)
-#   +dotprod                    SDOT/UDOT instructions (shader math)
-#   +i8mm                       int8 matrix multiply (X3/X4 cores, present on A740+)
-#   +lse                        Large System Extensions (faster atomics)
-#   -ffast-math                 enables SIMD float reductions
-#   -fno-finite-math-only       preserve NaN/Inf to avoid rendering artifacts
-#   -fno-math-errno             skip errno on libm calls
-#   -fno-trapping-math          no FP trap signals → more vectorization
-#   -fno-signed-char            unsigned char (Adreno register model)
-#   -DNDEBUG                    strip assert() from release build
-#
-# NOT INCLUDED (would break Mesa's meson subprojects):
-#   -fvisibility=hidden         hides libxml2 / libarchive public symbols → link fail
-#   -fno-semantic-interposition / -fno-plt
-#                                 also affect subproject ABI; Mesa applies its own
-#                                 visibility=hidden on the Turnip driver target only.
-#
-# Standard-tier flags (BUILD_VARIANT=optimized):
-#   Same as above but with -march=armv8.2-a (broader compatibility)
-#
 if [[ "$BUILD_VARIANT" == "performance" ]]; then
     CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-signed-char -DNDEBUG}"
     CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
@@ -174,15 +65,6 @@ else
     CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+i8mm -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
 fi
 
-# Linker flags:
-#   --gc-sections       strip dead code sections
-#   --icf=safe          merge identical functions (smaller binary + I-cache friendly)
-#   -O2                 linker optimization level 2
-#   --as-needed         only link libraries that are actually used
-#   --build-id=sha1     compact build ID for debugging (smaller than UUID)
-#   -z,now              bind all symbols at load time (no lazy binding → faster runtime)
-#   -z,relro            read-only relocations after relocation processing
-#   --hash-style=gnu    faster symbol lookup than sysv hash
 LDFLAGS_EXTRA="${LDFLAGS_EXTRA:--Wl,--gc-sections -Wl,--icf=safe -Wl,-O2 -Wl,--as-needed -Wl,--build-id=sha1 -Wl,-z,now -Wl,-z,relro -Wl,--hash-style=gnu}"
 
 check_deps() {
@@ -274,8 +156,6 @@ clone_mesa() {
 
     if ! git clone "${clone_args[@]}" "$primary_repo" "$MESA_DIR" 2>/dev/null; then
         log_warn "Primary source failed — trying mesa mirror"
-        # For adreno_main, the fork-specific branch won't exist on the mirror;
-        # fall back to upstream 'main'.
         if [[ "$MESA_SOURCE" == "adreno_main" ]]; then
             target_ref="main"
             clone_args=("--depth" "200" "--branch" "main")
@@ -321,21 +201,12 @@ clone_mesa() {
 }
 
 update_vulkan_headers() {
-    # Mesa ships its own copy of Vulkan-Headers and SPIRV-Headers that matches
-    # the code it generates (vk_enum_to_str.c, vk_extensions.c, etc.). When we
-    # overwrite them with bleeding-edge KhronosGroup/main, EXT→KHR promotions
-    # remove aliases that the generated code still references — build breaks with:
-    #
-    #   error: use of undeclared identifier 'VK_DEVICE_FAULT_ADDRESS_TYPE_MAX_ENUM_EXT';
-    #
-    # Always skip the overwrite. If a specific Mesa branch genuinely needs newer
-    # headers, set UPDATE_VULKAN_HEADERS=1 explicitly.
+
     if [[ "${UPDATE_VULKAN_HEADERS:-0}" != "1" ]]; then
         log_info "Skipping Vulkan/SPIRV header update (Mesa ships matching headers). Set UPDATE_VULKAN_HEADERS=1 to override."
         return 0
     fi
-
-    # ── Vulkan Headers (latest release) ────────────────────────────────────────
+    
     log_warn "UPDATE_VULKAN_HEADERS=1 — this may break the build if Mesa uses old EXT aliases"
     log_info "Updating Vulkan headers to latest release"
     local hdr_dir="${WORKDIR}/vk-headers"
@@ -350,7 +221,6 @@ update_vulkan_headers() {
     fi
     rm -rf "$hdr_dir"
 
-    # ── SPIRV Headers (latest release) ─────────────────────────────────────────
     log_info "Updating SPIRV headers to latest release"
     local spirv_hdr_dir="${WORKDIR}/spirv-headers-latest"
     git clone --depth=1 "$SPIRV_HEADERS_REPO" "$spirv_hdr_dir" 2>/dev/null || {
@@ -364,14 +234,6 @@ update_vulkan_headers() {
     rm -rf "$spirv_hdr_dir"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 1: disable has_branch_and_or
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: The ir3 compiler incorrectly enables the branch-and-or instruction for
-#         A7xx gen2+ (A750). This causes shader compilation failures in some
-#         DX12/Vulkan game shaders when running through DXVK/VKD3D-Proton.
-#         Safe to disable — the compiler falls back to equivalent 2-instruction
-#         sequences that are correctly handled by the A750 hardware.
 apply_patch_disable_branch_and_or() {
     [[ "$ENABLE_A7XX_FIXES" != "true" ]] && return 0
     log_info "Patch: disable has_branch_and_or (A750 shader stability)"
@@ -388,14 +250,6 @@ apply_patch_disable_branch_and_or() {
         log_success "has_branch_and_or disabled" || log_warn "sed did not match — field may not exist in this branch"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 2: A7xx gen1 compute_constlen_quirk
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Compute shaders on A7xx gen1 devices (A725/A730) crash at dispatch
-#         without this quirk. It forces the compiler to set a non-zero constlen
-#         for compute pipelines even when the shader constant buffer is empty.
-#         A7xx gen2 (A740/A750) does not need this — the quirk is inserted only
-#         in the a7xx_gen1 GPU properties block in freedreno_devices.py.
 apply_patch_a7xx_compute_constlen() {
     [[ "$ENABLE_A7XX_FIXES" != "true" ]] && return 0
     log_info "Patch: A7xx gen1 compute_constlen_quirk"
@@ -441,14 +295,6 @@ PYEOF
     log_success "A7xx gen1 compute constlen quirk done"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 3: disable mesh shader (A7xx)
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Qualcomm Game Developer Guide 80-78185-2 AL explicitly states:
-#         "A8x supports the Vulkan mesh shading extension."
-#         A750 (A7xx) does NOT have hardware mesh shader support. Enabling the
-#         extension on A7xx causes GPU hangs and driver crashes in games that
-#         use EXT_mesh_shader code paths.
 apply_patch_disable_mesh_shader() {
     [[ "$ENABLE_A7XX_FIXES" != "true" ]] && return 0
     log_info "Patch: disable EXT_mesh_shader (A7xx — A8x-only feature per Qualcomm GDG)"
@@ -492,12 +338,6 @@ PYEOF
     log_success "Mesh shader disabled for A7xx"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 4: Quest 3 FD740 GPU registration
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Meta Quest 3 uses chip_id 0x43050B00 (FD740 variant) which is not
-#         registered in all Mesa branches. Without this block the driver returns
-#         VK_ERROR_INCOMPATIBLE_DRIVER on Quest 3 hardware.
 apply_patch_quest3_gpu() {
     [[ "$ENABLE_QUEST3" != "true" ]] && { log_info "Quest 3 support disabled — skip"; return 0; }
     log_info "Patch: Quest 3 FD740 GPU registration"
@@ -616,15 +456,6 @@ PYEOF
     log_success "Quest 3 GPU support done"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 5: timeline semaphore optimization
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Reduces CPU spin-wait overhead in DXVK/VKD3D-Proton timeline semaphore
-#         loops. The original implementation checks highest_pending first (extra
-#         lock contention). This version goes directly to the pending_points list,
-#         reducing CPU usage by ~15% in GPU-bound scenarios with frequent syncs.
-#         This is critical for games like Alan Wake 2 that heavily use timeline
-#         semaphores for frame synchronization.
 apply_patch_timeline_semaphore() {
     [[ "$ENABLE_TIMELINE_HACK" != "true" ]] && { log_info "Timeline hack disabled — skip"; return 0; }
     log_info "Patch: timeline semaphore optimization (DXVK/VKD3D CPU overhead)"
@@ -754,16 +585,6 @@ PATCH_EOF
     log_success "Timeline semaphore optimization applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 6: UBWC 5/6 version support
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Qualcomm GDG confirms UBWC is available on all Adreno GPUs since A5x.
-#         Snapdragon 8 Gen 3 (A750) reports UBWC version 5 or 6 from the KGSL
-#         kernel driver. Mesa's KGSL backend only handles versions up to 4 by
-#         default, causing UBWC to be silently disabled — doubling memory bandwidth
-#         for every framebuffer operation.
-#         With proper UBWC, A750 achieves 2-5x memory bandwidth savings, which
-#         is critical for heavy games with large framebuffers (4K textures).
 apply_patch_ubwc_56() {
     [[ "$ENABLE_UBWC_HACK" != "true" ]] && { log_info "UBWC 5/6 hack disabled — skip"; return 0; }
     log_info "Patch: UBWC version 5/6 support (A750 bandwidth fix)"
@@ -775,7 +596,6 @@ apply_patch_ubwc_56() {
         return 0
     fi
 
-    # Add case 5 and case 6 with proper UBWC configuration for A7xx gen2+
     python3 - "$kgsl" << 'PYEOF'
 import sys
 
@@ -833,15 +653,6 @@ PYEOF
     log_success "UBWC version 5/6 cases added"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 7: gralloc UBWC detection broadening
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Some gralloc implementations omit the 'gmsm' magic number. Removing
-#         that check allows UBWC-compressed buffers to be correctly identified
-#         by reading the UBWC flag bit directly from the handle data.
-#         Critical for Winlator containers where Android gralloc has evolved
-#         past the gmsm magic detection. Without this, swapchain images get
-#         DRM_FORMAT_MOD_INVALID, causing screen distortion.
 apply_patch_gralloc_ubwc() {
     log_info "Patch: gralloc UBWC detection broadening"
     local target="${MESA_DIR}/src/util/u_gralloc/u_gralloc_fallback.c"
@@ -879,27 +690,6 @@ PATCH_EOF
     log_success "Gralloc UBWC detection broadened"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 8: Snapdragon X2 Elite Extreme (X2E-96-100) identity (deck_emu)
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Winlator and similar Android x86_64 translation layers expose the GPU
-#         to Windows games. Some games check vendorID/deviceID and reject unknown
-#         hardware. Spoofing as the Snapdragon X2 Elite Extreme (X2E-96-100) —
-#         the highest-end Qualcomm Windows-on-ARM GPU — allows these games to
-#         initialize Vulkan correctly and enables the best code paths.
-#
-#         Official specs (qualcomm.com/products/mobile-pcs/snapdragon-x2-elite):
-#           SKU:    X2E-96-100
-#           GPU:    Qualcomm Adreno X2-90 @ up to 1.85 GHz
-#           API:    DirectX 12.2, Vulkan 1.4, OpenCL 3.0
-#           CPU:    18-core Qualcomm Oryon (12P+6E) @ up to 5.0 GHz
-#           Memory: LPDDR5x @ up to 228 GB/s
-#           NPU:    Qualcomm Hexagon, 80 TOPS
-#           Cache:  53 MB
-#
-#         apiVersion 1.4.303 matches the latest Qualcomm Windows driver.
-#         16 GiB heap = typical LPDDR5x config on X2 Elite Extreme laptops.
-#         Controlled by TU_DEBUG=deck_emu at runtime.
 apply_patch_a750_identity() {
     [[ "$ENABLE_DECK_EMU" != "true" ]] && { log_info "Deck emu disabled — skip"; return 0; }
     log_info "Patch: Snapdragon X2 Elite Extreme identity (deck_emu)"
@@ -1020,26 +810,6 @@ PYEOF
     log_success "Snapdragon X2 Elite Extreme identity (deck_emu) applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 9: Vulkan extensions for A750
-# ═══════════════════════════════════════════════════════════════════════════════
-# Extension policy (from Qualcomm GDG 80-78185-2 AL + Vulkan 1.4 spec):
-#   INCLUDED (A7xx confirmed):
-#     VK_KHR_fragment_shading_rate (VRS — full A7xx section in PDF)
-#     VK_KHR_maintenance1-8        (maintenance8 is newest, Vulkan 1.4 required)
-#     VK_QCOM_tile_properties      (bin/tile size queries — A7xx)
-#     VK_EXT_conservative_rasterization
-#     VK_KHR_compute_shader_derivatives (critical for heavy game shader paths)
-#     VK_KHR_cooperative_matrix    (shader performance)
-#     VK_KHR_pipeline_binary       (faster pipeline creation for shader-heavy games)
-#     VK_EXT_graphics_pipeline_library (reduces shader compilation stalls)
-#     VK_EXT_shader_object         (independent shader objects — DXVK benefit)
-#     VK_EXT_nested_command_buffer (reduces CPU overhead in command recording)
-#     VK_EXT_descriptor_buffer     (faster descriptor access than descriptor sets)
-#   EXCLUDED (not for A750):
-#     VK_QCOM_tile_memory_heap     (Adreno 840+ ONLY per PDF section "Tile Shading")
-#     VK_QCOM_tile_shading         (Adreno 840+ ONLY per PDF section "Tile Shading")
-#     VK_EXT_mesh_shader           (A8x ONLY per PDF — patched out above)
 apply_patch_vulkan_extensions() {
     log_info "Patch: Vulkan extensions for A750 (A7xx confirmed + Vulkan 1.4)"
     local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
@@ -1377,39 +1147,17 @@ PYEOF
     log_success "Vulkan extensions applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 10: KGSL Timeline Sync Detection (Zan Dobersek MR !39751)
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: The biggest potential win for heavy games on Winlator. KGSL timeline
-#         sync provides native timeline semaphore support instead of emulated
-#         syncobj-based timelines. This reduces CPU overhead significantly
-#         in synchronization-heavy games (Alan Wake 2, Spider-Man 2).
-#
-#         Benefits:
-#         - Zero-command fast path: waits/signals via simple ioctls
-#         - Native timeline semaphores: direct KGSL timeline support
-#         - Fewer ioctl roundtrips per frame → less CPU overhead
-#         - Better synchronization accuracy for heavy games
-#
-#         If the kernel KGSL driver doesn't support timeline ioctls, the driver
-#         gracefully falls back to syncobj-based sync (no regression).
-#
-#         Reference: Zan Dobersek, Mesa MR !39751
-#         Kernel requirement: KGSL with IOCTL_KGSL_TIMELINE_CREATE support
 apply_patch_kgsl_timeline() {
     [[ "$ENABLE_KGSL_TIMELINE" != "true" ]] && { log_info "KGSL timeline sync disabled — skip"; return 0; }
     log_info "Patch: KGSL timeline sync detection (Zan Dobersek MR !39751)"
     local kgsl="${MESA_DIR}/src/freedreno/vulkan/tu_knl_kgsl.cc"
     [[ ! -f "$kgsl" ]] && { log_warn "tu_knl_kgsl.cc not found — skip"; return 0; }
 
-    # Check if timeline sync is already implemented
     if grep -q 'kgsl_timeline_create\|TU_KGSL_SYNC_IMPL_TYPE_TIMELINE\|KGSL_TIMELINE' "$kgsl"; then
         log_warn "KGSL timeline sync already present — skip"
         return 0
     fi
-
-    # Add runtime detection of KGSL timeline ioctl support
-    # This probes the kernel at device init time and sets the sync implementation type
+    
     python3 - "$kgsl" << 'PYEOF'
 import sys, re
 
@@ -1497,20 +1245,6 @@ PYEOF
     log_success "KGSL timeline sync detection applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 11: FLUSHALL Removal for Gaming Performance
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Upstream Mesa forces TU_DEBUG_FLUSHALL for A8xx GPUs (for CTS
-#         conformance), which causes a full GPU cache flush after every draw.
-#         This is catastrophic for heavy game performance.
-#
-#         For A7xx (A740/A750), FLUSHALL is not forced by default, but some
-#         Mesa branches may inherit it. This patch ensures FLUSHALL is never
-#         active in gaming builds, and replaces the global flush with a
-#         targeted indirect-draw WFM (Zan Dobersek, MR !39874).
-#
-#         Impact: Eliminating unnecessary flushes can improve frame rates by
-#         10-30% in GPU-bound scenarios with many draw calls.
 apply_patch_flushall_removal() {
     [[ "$ENABLE_FLUSHALL_REMOVAL" != "true" ]] && { log_info "FLUSHALL removal disabled — skip"; return 0; }
     log_info "Patch: FLUSHALL removal for gaming performance (MR !39874)"
@@ -1518,7 +1252,6 @@ apply_patch_flushall_removal() {
     local tu_cmd="${MESA_DIR}/src/freedreno/vulkan/tu_cmd_buffer.cc"
     [[ ! -f "$tu_device" ]] && { log_warn "tu_device.cc not found — skip"; return 0; }
 
-    # Remove any forced FLUSHALL for A8xx in tu_device.cc
     python3 - "$tu_device" << 'PYEOF'
 import sys, re
 
@@ -1549,7 +1282,6 @@ else:
     print("[INFO] No forced FLUSHALL assignments found — already clean")
 PYEOF
 
-    # Add targeted indirect-draw WFM instead of global flush
     if [[ -f "$tu_cmd" ]]; then
         python3 - "$tu_cmd" << 'PYEOF'
 import sys, re
@@ -1582,24 +1314,6 @@ PYEOF
     log_success "FLUSHALL removal for gaming performance applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 12: LPAC Async Compute Queue Exposure for A740/A750
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Qualcomm GDG 80-78185-2 AL confirms LPAC (Low Priority Async Compute)
-#         is available on A740+ GPUs. Currently Turnip exposes only a single
-#         queue family with compute capability, which means compute and graphics
-#         work items are serialized at the queue level.
-#
-#         Heavy games like Marvel Spider-Man 2 and The Last of Us Part 2
-#         heavily rely on async compute for particle systems, AI, audio, etc.
-#
-#         This patch enables a TU_DEBUG flag that exposes a separate compute-only
-#         queue family when the hardware supports it (A740/A750), allowing
-#         VKD3D-Proton to schedule async compute work independently.
-#
-#         Note: Full LPAC support requires kernel KGSL support for priority
-#         queue contexts. This patch enables the Vulkan-level queue exposure;
-#         the actual priority separation depends on the KGSL implementation.
 apply_patch_lpac_queue() {
     [[ "$ENABLE_LPAC_QUEUE" != "true" ]] && { log_info "LPAC queue disabled — skip"; return 0; }
     log_info "Patch: LPAC async compute queue exposure (A740/A750)"
@@ -1608,12 +1322,11 @@ apply_patch_lpac_queue() {
     local tu_util_cc="${MESA_DIR}/src/freedreno/vulkan/tu_util.cc"
     local tu_device_cc="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
 
-    # Add TU_DEBUG_LPAC flag
     if [[ -f "$tu_util_h" ]] && ! grep -q "TU_DEBUG_LPAC" "$tu_util_h"; then
         local last_bit new_bit
         last_bit=$(grep -oP 'BITFIELD64_BIT\(\K[0-9]+' "$tu_util_h" | sort -n | tail -1)
         new_bit=$((last_bit + 1))
-        # Insert after DECK_EMU if present, otherwise after FORCE_CONCURRENT_BINNING
+        
         if grep -q "TU_DEBUG_DECK_EMU" "$tu_util_h"; then
             sed -i "/TU_DEBUG_DECK_EMU/a\\   TU_DEBUG_LPAC = BITFIELD64_BIT(${new_bit})," \
                 "$tu_util_h" 2>/dev/null || true
@@ -1624,7 +1337,6 @@ apply_patch_lpac_queue() {
         log_success "LPAC debug flag added (bit ${new_bit})"
     fi
 
-    # Register LPAC debug option
     if [[ -f "$tu_util_cc" ]] && ! grep -q '"lpac"' "$tu_util_cc"; then
         if grep -q '"deck_emu"' "$tu_util_cc"; then
             sed -i '/{ "deck_emu"/a\   { "lpac", TU_DEBUG_LPAC },' \
@@ -1635,8 +1347,7 @@ apply_patch_lpac_queue() {
         fi
         log_success "lpac option registered"
     fi
-
-    # Expose separate compute queue family when LPAC is enabled
+    
     if [[ -f "$tu_device_cc" ]] && ! grep -q "TU_DEBUG_LPAC" "$tu_device_cc"; then
         python3 - "$tu_device_cc" << 'PYEOF'
 import sys, re
@@ -1678,19 +1389,6 @@ PYEOF
     log_success "LPAC async compute queue exposure applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 13: TU_DEBUG=noconform Auto-Enable for Gaming
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Heavy games (Spider-Man 2, TLoU Part 2, Alan Wake 2) often expect
-#         Vulkan extensions and features that the driver can technically support
-#         but hasn't officially certified through conformance testing. The
-#         noconform flag bypasses these conformance checks, enabling:
-#         - Extensions the GPU can handle but aren't in the official profile
-#         - Higher Vulkan API version reporting (1.4.x instead of 1.3.128)
-#         - Better game compatibility without CTS conformance regressions
-#
-#         This patch makes noconform behavior the default for the performance
-#         build variant, controlled by the ENABLE_NOCONFORM toggle.
 apply_patch_noconform() {
     [[ "$ENABLE_NOCONFORM" != "true" ]] && { log_info "noconform auto-enable disabled — skip"; return 0; }
     log_info "Patch: noconform auto-enable for gaming compatibility"
@@ -1750,16 +1448,6 @@ PYEOF
     log_success "noconform auto-enable prepared (use TU_DEBUG=noconform at runtime)"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 14: VRS / Fragment Shading Rate Optimization
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: A740/A750 hardware supports VK_KHR_fragment_shading_rate (VRS).
-#         Heavy games like Spider-Man 2 use VRS to reduce shading rate for
-#         distant/background objects, which can save 20-40% GPU time.
-#
-#         This patch ensures VRS is properly configured for A740/A750 with
-#         optimal shading rate caps: 2x2 minimum rate for performance mode,
-#         fragment size 4x4 available for ultra-performance scenarios.
 apply_patch_vrs_optimization() {
     [[ "$ENABLE_VRS_OPTIMIZATION" != "true" ]] && { log_info "VRS optimization disabled — skip"; return 0; }
     log_info "Patch: VRS / Fragment Shading Rate optimization (A740/A750)"
@@ -1806,15 +1494,6 @@ PYEOF
     log_success "VRS fragment shading rate optimization applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 15: Ir3 Compiler Scheduler Optimization
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: The ir3 shader compiler has optimization passes that can be tuned
-#         for heavy game shader workloads. Key optimizations:
-#         - Enable optimal register allocation for A7xx gen2 (A750)
-#         - Ensure dual-wave dispatch is utilized for compute shaders
-#         - Allow more aggressive instruction scheduling
-#         - Enable copy propagation and constant folding optimizations
 apply_patch_ir3_scheduler() {
     [[ "$ENABLE_IR3_SCHEDULER" != "true" ]] && { log_info "ir3 scheduler optimization disabled — skip"; return 0; }
     log_info "Patch: ir3 compiler scheduler optimization (A750 shader performance)"
@@ -1822,7 +1501,6 @@ apply_patch_ir3_scheduler() {
     local ir3_shader="${MESA_DIR}/src/freedreno/ir3/ir3_shader.c"
     [[ ! -f "$ir3_compiler" ]] && { log_warn "ir3_compiler.c not found — skip"; return 0; }
 
-    # Ensure optimal compiler flags for A750
     python3 - "$ir3_compiler" << 'PYEOF'
 import sys, re
 
@@ -1859,27 +1537,12 @@ PYEOF
     log_success "ir3 compiler scheduler optimization applied"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PATCH 16: Memory Allocation Optimization for Heavy Games
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reason: Heavy games allocate large amounts of GPU memory (4K textures,
-#         multi-GB framebuffers). The default Turnip memory allocation strategy
-#         may not be optimal for these workloads. This patch:
-#         - Increases the default sub-allocation size to reduce allocation overhead
-#         - Ensures the heap layout is optimized for A750's memory controller
-#         - Prefers device-local memory for textures used by heavy games
 apply_patch_memory_opt() {
     [[ "$ENABLE_MEMORY_OPT" != "true" ]] && { log_info "Memory optimization disabled — skip"; return 0; }
     log_info "Patch: Memory allocation optimization for heavy games"
     local tu_device="${MESA_DIR}/src/freedreno/vulkan/tu_device.cc"
     [[ ! -f "$tu_device" ]] && { log_warn "tu_device.cc not found — skip"; return 0; }
 
-    # The memory optimization is primarily achieved through the deck_emu heap
-    # size override (16 GiB) and proper memory type configuration.
-    # Additional optimizations for sub-allocation are handled at the Mesa
-    # runtime level via environment variables.
-
-    # Create a recommended environment configuration file for Winlator
     local env_file="${WORKDIR}/turnip-env.conf"
     cat > "$env_file" << 'ENVEOF'
 # Turnip Driver Environment Configuration for Heavy Games
@@ -1915,7 +1578,6 @@ ENVEOF
     log_success "Memory optimization + env config created at ${env_file}"
 }
 
-# ── Patch orchestrator ─────────────────────────────────────────────────────────
 apply_patches() {
     log_section "Patches (A7xx / Gaming Performance / Vulkan 1.4)"
     cd "$MESA_DIR"
@@ -1929,31 +1591,28 @@ apply_patches() {
         apply_patch_series "$PATCHES_DIR/series"
     fi
 
-    # ── Core stability & bandwidth patches (PATCH 1-9) ──
     log_info "Applying core stability patches (1-9)"
-    apply_patch_disable_branch_and_or       # P1: A750 shader stability
-    apply_patch_a7xx_compute_constlen       # P2: A7xx gen1 compute fix
-    apply_patch_disable_mesh_shader         # P3: A7xx mesh shader disable
-    apply_patch_quest3_gpu                  # P4: Quest 3 FD740
-    apply_patch_timeline_semaphore          # P5: Timeline CPU overhead
-    apply_patch_ubwc_56                     # P6: UBWC 5/6 bandwidth
-    apply_patch_gralloc_ubwc                # P7: Gralloc UBWC detection
-    apply_patch_a750_identity               # P8: X2 Elite Extreme identity
-    apply_patch_vulkan_extensions           # P9: Vulkan 1.4 extensions
+    apply_patch_disable_branch_and_or 
+    apply_patch_a7xx_compute_constlen 
+    apply_patch_disable_mesh_shader
+    apply_patch_quest3_gpu              
+    apply_patch_timeline_semaphore
+    apply_patch_ubwc_56                   
+    apply_patch_gralloc_ubwc               
+    apply_patch_a750_identity              
+    apply_patch_vulkan_extensions           
 
-    # ── High-performance patches (PATCH 10-16, new in v2.0) ──
     if [[ "$BUILD_VARIANT" == "performance" || "$BUILD_VARIANT" == "optimized" ]]; then
         log_info "Applying high-performance patches (10-16)"
-        apply_patch_kgsl_timeline            # P10: KGSL timeline sync
-        apply_patch_flushall_removal         # P11: FLUSHALL gaming removal
-        apply_patch_lpac_queue               # P12: LPAC async compute
-        apply_patch_noconform                # P13: noconform gaming mode
-        apply_patch_vrs_optimization         # P14: VRS shading rate
-        apply_patch_ir3_scheduler            # P15: ir3 compiler optimization
-        apply_patch_memory_opt               # P16: Memory allocation
+        apply_patch_kgsl_timeline        
+        apply_patch_flushall_removal       
+        apply_patch_lpac_queue           
+        apply_patch_noconform            
+        apply_patch_vrs_optimization        
+        apply_patch_ir3_scheduler       
+        apply_patch_memory_opt        
     fi
-
-    # ── Custom patches from patches/ directory ──
+    
     if [[ -d "$PATCHES_DIR" ]]; then
         for patch in "$PATCHES_DIR"/*.patch; do
             [[ ! -f "$patch" ]] && continue
@@ -1993,7 +1652,6 @@ setup_subprojects() {
     local CACHE="${WORKDIR}/sp-cache"
     mkdir -p "$CACHE"
 
-    # SPIRV-Tools and SPIRV-Headers — required by Mesa meson build
     local -A SP_REPOS=(
         ["spirv-tools"]="$SPIRV_TOOLS_REPO"
         ["spirv-headers"]="$SPIRV_HEADERS_REPO"
@@ -2009,7 +1667,6 @@ setup_subprojects() {
         fi
     done
 
-    # glslang — shader compiler, needed for GLSL→SPIR-V pipeline
     if [[ ! -d "subprojects/glslang" ]]; then
         if [[ -d "$CACHE/glslang" ]]; then
             log_info "Using cached glslang"
@@ -2082,13 +1739,6 @@ configure_build() {
     [[ "$BUILD_VARIANT" == "debug" ]]   && buildtype="debug"
     [[ "$BUILD_VARIANT" == "profile" ]] && buildtype="debugoptimized"
 
-    # Build configuration optimized for Adreno A7xx gaming
-    # Key differences from standard builds:
-    #   -Dvulkan-beta=true     → enables beta Vulkan extensions
-    #   -Dfreedreno-kmds=kgsl  → KGSL kernel mode (Android required)
-    #   -Dstrip=true           → strip debug symbols for smaller binary
-    #   No video codecs        → reduces binary size and compile time
-    #   No gallium drivers     → Turnip-only, no OpenGL overhead
     meson setup build                                    \
         --cross-file "${WORKDIR}/cross-aarch64.txt"     \
         -Dbuildtype="$buildtype"                         \
@@ -2147,32 +1797,22 @@ package_driver() {
 
     local driver_src="${MESA_DIR}/build/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg_dir="${WORKDIR}/package"
-    # Driver filename: Vulkan-1_X2E-96-100.so (Snapdragon X2 Elite Extreme identity)
-    # Also ship libvulkan_freedreno.so as fallback for loaders that expect the Mesa name
-    local driver_name="Vulkan-1_X2E-96-100.so"
-    local driver_name_compat="libvulkan_freedreno.so"
+
+    local driver_name="libvulkan_freedreno.so"
 
     mkdir -p "$pkg_dir"
     cp "$driver_src" "${pkg_dir}/${driver_name}"
-    cp "$driver_src" "${pkg_dir}/${driver_name_compat}"
     patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name}"
-    patchelf --set-soname "vulkan.adreno.so" "${pkg_dir}/${driver_name_compat}"
 
     "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
         "${pkg_dir}/${driver_name}" 2>/dev/null || \
         aarch64-linux-android-strip "${pkg_dir}/${driver_name}" 2>/dev/null || true
-    "${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
-        "${pkg_dir}/${driver_name_compat}" 2>/dev/null || \
-        aarch64-linux-android-strip "${pkg_dir}/${driver_name_compat}" 2>/dev/null || true
 
     local clean_version="${version%-devel}"
-    # Package name: MesaTurnip-v{mesa_version}-Dv{build_number}
-    # e.g. MesaTurnip-v26.2.0-Dv1
     local filename="MesaTurnip-v${clean_version}-Dv${BUILD_NUMBER}"
     local driver_size
     driver_size=$(du -h "${pkg_dir}/${driver_name}" | cut -f1)
 
-    # Determine build variant tag for the package description
     local variant_desc="Standard"
     [[ "$BUILD_VARIANT" == "performance" ]] && variant_desc="High-Performance (Gaming)"
     [[ "$BUILD_VARIANT" == "optimized" ]]   && variant_desc="Optimized (Gaming + Stability)"
@@ -2181,23 +1821,16 @@ package_driver() {
 {
     "schemaVersion": 1,
     "name": "${filename}",
-    "description": "Snapdragon X2 Elite Extreme (X2E-96-100) — ${variant_desc}",
+    "description": "built form Mesa main",
     "author": "BlueInstruction",
-    "packageVersion": "${BUILD_NUMBER}",
+    "packageVersion": "1",
     "vendor": "Mesa",
     "driverVersion": "Vulkan ${vulkan_version}",
     "minApi": 28,
-    "libraryName": "${driver_name}",
-    "buildVariant": "${BUILD_VARIANT}",
-    "targetGames": ["Marvel Spider-Man 2", "Alan Wake 2", "The Last of Us Part 2"],
-    "recommendedEnv": {
-        "TU_DEBUG": "noconform,deck_emu",
-        "MESA_LOADER_DRIVER_OVERRIDE": "kgsl"
-    }
+    "libraryName": "${driver_name}"
 }
 EOF
 
-    # Include the environment configuration file
     if [[ -f "${WORKDIR}/turnip-env.conf" ]]; then
         cp "${WORKDIR}/turnip-env.conf" "${pkg_dir}/turnip-env.conf"
     fi
@@ -2261,24 +1894,6 @@ print_summary() {
     printf "  ║  %-22s : %-39s ║\n" "Timeline Hack" "$ENABLE_TIMELINE_HACK"
     printf "  ║  %-22s : %-39s ║\n" "UBWC 5/6"      "$ENABLE_UBWC_HACK"
     echo "  ╠═══════════════════════════════════════════════════════════════════╣"
-    echo "  ║  Subprojects: spirv-tools, spirv-headers, glslang (latest)     ║"
-    echo "  ║  Headers: Vulkan (latest) + SPIRV (latest)                     ║"
-    echo "  ╠═══════════════════════════════════════════════════════════════════╣"
-    echo "  ║  Runtime Environment (Winlator Ludashi v2.9):                  ║"
-    echo "  ║    TU_DEBUG=noconform,deck_emu                                 ║"
-    echo "  ║    MESA_LOADER_DRIVER_OVERRIDE=kgsl                            ║"
-    echo "  ╠═══════════════════════════════════════════════════════════════════╣"
-    echo "  ║  Translation layer support:                                     ║"
-    echo "  ║    DXVK         — DX9/10/11 → Vulkan   ✓ supported             ║"
-    echo "  ║    VKD3D-Proton — DX12 FL12_2 → Vulkan  ✓ supported            ║"
-    echo "  ║    DX12 Ultimate (mesh/RT pipeline)      ✗ A8x required         ║"
-    echo "  ╠═══════════════════════════════════════════════════════════════════╣"
-    echo "  ║  Target Games:                                                  ║"
-    echo "  ║    Marvel Spider-Man 2     ✓ VRS + Timeline + noconform         ║"
-    echo "  ║    Alan Wake 2             ✓ Async Compute + Maintenance8        ║"
-    echo "  ║    The Last of Us Part 2   ✓ UBWC + LRZ + Dynamic Rendering     ║"
-    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
-    echo ""
     ls -lh "${WORKDIR}"/*.zip 2>/dev/null | awk '{print "  Output: " $9 " (" $5 ")"}'
     echo ""
 }
@@ -2286,8 +1901,8 @@ print_summary() {
 main() {
     echo ""
     echo -e "${BOLD}${CYAN}  Turnip Driver Builder — High Performance v2.0${NC}"
-    echo -e "  Mesa Freedreno FOSS Vulkan Driver (Igalia/Valve)"
-    echo -e "  Qualcomm GDG 80-78185-2 AL + Community Optimizations"
+    echo -e "  Mesa Freedreno FOSS Vulkan Driver"
+    echo -e "  Community Optimizations"
     echo ""
     log_info "Variant: $BUILD_VARIANT | Source: $MESA_SOURCE | API: $API_LEVEL"
 

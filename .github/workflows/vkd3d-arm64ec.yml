@@ -122,7 +122,7 @@ jobs:
             LLVM_TAG=$(curl -sSL \
               https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
               | jq -r '.tag_name // empty')
-            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20251104"
+            [[ -z "$LLVM_TAG" ]] && LLVM_TAG="20260407"
           fi
           echo "tag=$LLVM_TAG" >> $GITHUB_OUTPUT
 
@@ -168,350 +168,50 @@ jobs:
           arm64ec-w64-mingw32-clang --version
           i686-w64-mingw32-clang --version
 
+      - name: Cache GLSLang
+        id: cache-glslang
+        uses: actions/cache@v4
+        with:
+          path: glslang
+          key: glslang-main-tot-v2
+
+      - name: Setup latest GLSLang
+        if: steps.cache-glslang.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-linux-Release.zip
+          unzip -q glslang-main-linux-Release.zip -d glslang
+          rm glslang-main-linux-Release.zip
+
+      - name: Add GLSLang to PATH
+        run: |
+          echo "$PWD/glslang/bin" >> $GITHUB_PATH
+          echo "GLSLang version:"
+          $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
+
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch master --depth 1 \
-            https://github.com/BlueInstruction/vkd3d-proton.git src
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"
 
-      - name: Update Vulkan + SPIRV Headers
-        run: |
-          VK_TAG=$(curl -sSL \
-            https://api.github.com/repos/KhronosGroup/Vulkan-Headers/releases/latest \
-            | jq -r '.tag_name // empty')
-          [[ -z "$VK_TAG" ]] && VK_TAG="main"
-          echo "VK_HEADERS_TAG=$VK_TAG" >> $GITHUB_ENV
-          git clone --depth 1 --branch "$VK_TAG" \
-            https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers 2>/dev/null || \
-          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git vk-headers
-          [[ -d vk-headers/include/vulkan ]] && cp -r vk-headers/include/vulkan src/include/
-          [[ -d vk-headers/registry ]] && { mkdir -p src/registry; cp -f vk-headers/registry/vk.xml src/registry/ 2>/dev/null || true; }
-          rm -rf vk-headers
-
-          SPIRV_TAG=$(curl -sSL \
-            https://api.github.com/repos/KhronosGroup/SPIRV-Headers/releases/latest \
-            | jq -r '.tag_name // empty')
-          if [[ -n "$SPIRV_TAG" ]]; then
-            echo "SPIRV_HEADERS_TAG=$SPIRV_TAG" >> $GITHUB_ENV
-            git clone --depth 1 --branch "$SPIRV_TAG" \
-              https://github.com/KhronosGroup/SPIRV-Headers.git spirv-h 2>/dev/null || true
-            [[ -d spirv-h/include/spirv ]] && cp -r spirv-h/include/spirv src/include/ 2>/dev/null || true
-            rm -rf spirv-h
-          fi
-
-      - name: Apply Patches
-        run: |
-          cd src
-          cat > patch.py << 'PYSCRIPT'
-          import re, os, sys
-
-          applied = 0
-          errors = []
-
-          def patch_file(path, patches):
-              global applied, errors
-              if not os.path.exists(path):
-                  return
-              try:
-                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                      c = f.read()
-              except Exception as e:
-                  errors.append(f"Read error {path}: {e}"); return
-              orig = c
-              for p, r in patches:
-                  if re.search(p, c):
-                      c = re.sub(p, r, c)
-                      applied += 1
-              if c != orig:
-                  try:
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(c)
-                  except Exception as e:
-                      errors.append(f"Write error {path}: {e}")
-
-          # === GPU IDENTITY: Qualcomm Adreno 750 ===
-          gpu = [
-              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x5143;'),
-              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x43a;'),
-              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>2048ULL * 1024 * 1024;'),
-              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096ULL * 1024 * 1024;'),
-          ]
-
-          # === D3D12 FEATURES — accurate for Adreno 750 / Turnip ===
-          dev = [
-              (r'(\.UMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(\.CacheCoherentUMA\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(\.IsolatedMMU\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(data->HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(info\.HighestShaderModel\s*=\s*)[^;]+;', r'\g<1>D3D_SHADER_MODEL_6_6;'),
-              (r'(MaxSupportedFeatureLevel\s*=\s*)[^;]+;', r'\g<1>D3D_FEATURE_LEVEL_12_1;'),
-              (r'(D3D12SDKVersion\s*=\s*)[^;]+;', r'\g<1>613;'),
-              (r'(options1\.WaveOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options1\.WaveLaneCountMin\s*=\s*)[^;]+;', r'\g<1>64;'),
-              (r'(options1\.WaveLaneCountMax\s*=\s*)[^;]+;', r'\g<1>128;'),
-              (r'(options1\.Int64ShaderOps\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options1\.ExpandedComputeResourceStates\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options2\.DepthBoundsTestSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options2\.ProgrammableSamplePositionsTier\s*=\s*)[^;]+;', r'\g<1>D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_2;'),
-              (r'(options3\.BarycentricsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
-              (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
-              (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
-              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
-              (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options7\.MeshShaderTier\s*=\s*)[^;]+;', r'\g<1>D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;'),
-              (r'(options7\.SamplerFeedbackTier\s*=\s*)[^;]+;', r'\g<1>D3D12_SAMPLER_FEEDBACK_TIER_1_0;'),
-              (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
-              (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
-              (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
-              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
-              (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
-              # === MEMORY ALLOCATION CAP ===
-              (r'(#define\s+VKD3D_VA_BLOCK_SIZE\s+)\w+', r'\g<1>(512ull * 1024 * 1024)'),
-              (r'(committed_resource_size_limit\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>512 * 1024 * 1024;'),
-              (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.OutputMergerLogicOp\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options\.PSSpecifiedStencilRefSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.EnhancedBarriersSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.RelaxedFormatCastingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options12\.UnifiedImageLayoutsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options16\.GPUUploadHeapSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options18\.RenderPassesValid\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-          ]
-
-          tbr_patches = [
-              (r'(TileBasedRenderer\s*(?<!=)=(?!=)\s*)FALSE', r'\g<1>TRUE'),
-              (r'(tile_based_renderer\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
-              (r'(->use_tile_based_rendering\s*=\s*)false', r'\1true'),
-          ]
-
-          fsync_patches = [
-              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
-              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
-              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>32'),
-              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
-              (r'(->use_esync\s*=\s*)false', r'\1true'),
-              (r'(esync_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
-          ]
-
-          submission_patches = [
-              (r'(->use_batch_submission\s*=\s*)true', r'\1false'),
-              (r'(submission_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8;'),
-          ]
-
-          descriptor_patches = [
-              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
-              (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-              (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
-          ]
-
-          gpu_boost_patches = [
-              (r'(->use_async_compute\s*=\s*)false', r'\1true'),
-              (r'(async_compute_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
-              (r'(->use_concurrent_queue\s*=\s*)false', r'\1true'),
-              (r'(->use_gpu_va_recycle\s*=\s*)false', r'\1true'),
-              (r'(->use_lazy_create_pipeline\s*=\s*)true', r'\1false'),
-              (r'(max_compute_queues\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
-          ]
-
-          # === SWAPCHAIN: conservative for Turnip/KGSL ===
-          swapchain_patches = [
-              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>3'),
-              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>8'),
-              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>3\2'),
-              (r'(swapchain->frame_latency\s*=\s*)\d+', r'\g<1>3'),
-          ]
-
-          swapchain_blit_safety = [
-              (r'(blit_command\s*=\s*)!blank_present\s*&&[^;]+;', r'\g<1>false;'),
-              (r'(imageUsage\s*=\s*)VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT\s*\|\s*VK_IMAGE_USAGE_TRANSFER_DST_BIT',
-               r'\g<1>VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT'),
-          ]
-
-          cmdqueue_patches = [
-              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
-              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
-          ]
-
-          renderpass_patches = [
-              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
-              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
-              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
-          ]
-
-          uma_patches = [
-              (r'(->force_host_cached\s*=\s*)false', r'\1true'),
-              (r'(->host_cached\s*=\s*)false', r'\1true'),
-          ]
-
-          worker_patches = [
-              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
-              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
-              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
-          ]
-
-          cache_patches = [
-              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>131072'),
-              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
-          ]
-
-          fence_patches = [
-              (r'(->recycle_fences\s*=\s*)false', r'\1true'),
-              (r'(recycle_command_allocators\s*(?<!=)=(?!=)\s*)false', r'\1true'),
-          ]
-
-          patch_file("libs/vkd3d/device.c", gpu + dev + renderpass_patches + uma_patches + tbr_patches)
-
-          for root, dirs, files in os.walk("libs/vkd3d"):
-              for f in files:
-                  if not f.endswith((".c", ".h")):
-                      continue
-                  path = os.path.join(root, f)
-                  if f != "device.c" and any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
-                      patch_file(path, gpu)
-                  patch_file(path, fsync_patches)
-                  patch_file(path, submission_patches)
-                  patch_file(path, descriptor_patches)
-                  patch_file(path, worker_patches)
-                  patch_file(path, cache_patches)
-                  patch_file(path, fence_patches)
-                  patch_file(path, uma_patches)
-                  patch_file(path, renderpass_patches)
-                  patch_file(path, gpu_boost_patches)
-                  patch_file(path, tbr_patches)
-
-          patch_file("libs/vkd3d/swapchain.c", swapchain_patches + swapchain_blit_safety)
-          patch_file("libs/vkd3d/command.c", cmdqueue_patches)
-
-          vkd3d_private = "libs/vkd3d/vkd3d_private.h"
-          if os.path.exists(vkd3d_private):
-              with open(vkd3d_private, "r") as f:
-                  content = f.read()
-              if "VKD3D_FSYNC_ENABLED" not in content:
-                  header = """
-          #ifndef VKD3D_FSYNC_ENABLED
-          #define VKD3D_FSYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_ESYNC_ENABLED
-          #define VKD3D_ESYNC_ENABLED 1
-          #endif
-          #ifndef VKD3D_FENCE_SPIN_COUNT
-          #define VKD3D_FENCE_SPIN_COUNT 32
-          #endif
-          #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
-          #define VKD3D_TIMELINE_SEM_FAST_PATH 1
-          #endif
-          #ifndef VKD3D_SKIP_REDUNDANT_FENCE_WAIT
-          #define VKD3D_SKIP_REDUNDANT_FENCE_WAIT 1
-          #endif
-          #ifndef VKD3D_UMA_FORCE_HOST_CACHED
-          #define VKD3D_UMA_FORCE_HOST_CACHED 1
-          #endif
-          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
-          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 3
-          #endif
-          #ifndef VKD3D_RENDER_PASS_FORCE
-          #define VKD3D_RENDER_PASS_FORCE 1
-          #endif
-          #ifndef VKD3D_TBR_ADRENO
-          #define VKD3D_TBR_ADRENO 1
-          #endif
-          #ifndef VKD3D_GPU_BOOST
-          #define VKD3D_GPU_BOOST 1
-          #endif
-          """
-                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
-                  if m:
-                      pos = content.find('\n', m.end()) + 1
-                      content = content[:pos] + header + content[pos:]
-                  else:
-                      content = header + content
-                  with open(vkd3d_private, "w") as f:
-                      f.write(content)
-                  applied += 1
-
-          queue_timeline = "libs/vkd3d/queue_timeline.c"
-          if os.path.exists(queue_timeline):
-              with open(queue_timeline, "r") as f:
-                  content = f.read()
-              if "FSYNC_TIMELINE_OPT" not in content:
-                  opt = """
-          #include <stdbool.h>
-          #include <stdint.h>
-          static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
-          {
-              return current >= target;
-          }
-          """
-                  content = opt + content
-                  with open(queue_timeline, "w") as f:
-                      f.write(content)
-                  applied += 1
-
-          print(f"GPU-Boost+ESync+Fsync+MFG-X6+TBR+RenderPass+UMA | Applied {applied} patches")
-          if errors:
-              print(f"Errors: {len(errors)}")
-              for e in errors:
-                  print(f"  - {e}")
-              sys.exit(1)
-          PYSCRIPT
-          python3 patch.py
-
-      - name: Apply State Blend Fix
-        run: |
-          cd src
-          python3 - << 'PYEOF'
-          import sys
-          path = "libs/vkd3d/state.c"
-          with open(path, "r", encoding="utf-8") as f:
-              c = f.read()
-          old = (
-              'ERR("Enabling blending on RT %u with format %s, '
-              'but using integer format is not supported.\\n", i,\n'
-              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
-              '                    return E_INVALIDARG;'
-          )
-          new = (
-              'WARN("Force-disabling blending on RT %u (integer format %s), '
-              'preventing GPU hang.\\n", i,\n'
-              '                            debug_dxgi_format(desc->rtv_formats.RTFormats[i]));\n'
-              '                    state->graphics.blend_attachments[i].blendEnable = VK_FALSE;\n'
-              '                    break;'
-          )
-          if old not in c:
-              print("WARN: blend patch target not found — may already be patched", file=sys.stderr)
-          else:
-              c = c.replace(old, new, 1)
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(c)
-              print("State blend fix: applied")
-          PYEOF
+      # Base/upstream build — use the pinned Vulkan-Headers and SPIRV-Headers
+      # that vkd3d-proton ships as git submodules. Do not overwrite them with
+      # the latest KhronosGroup main branch: that risks build breakage when
+      # extensions are promoted (EXT→KHR aliases get removed) and defeats the
+      # purpose of a reproducible "vanilla upstream" build.
 
       - name: Create Cross Files
         run: |
-          cat > crossfile-arm64ec.txt << 'EOF'
+          cat > crossfile-arm64ec.txt << EOF
           [binaries]
-          ar = 'arm64ec-w64-mingw32-ar'
-          c = 'arm64ec-w64-mingw32-clang'
-          cpp = 'arm64ec-w64-mingw32-clang++'
-          ld = 'arm64ec-w64-mingw32-ld'
-          windres = 'arm64ec-w64-mingw32-windres'
-          strip = 'arm64ec-w64-mingw32-strip'
-          widl = 'arm64ec-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/arm64ec-w64-mingw32-widl'
           [host_machine]
           system = 'windows'
           cpu_family = 'aarch64'
@@ -522,15 +222,14 @@ jobs:
           cpp_link_args = ['-lmingwex', '-lmsvcrt', '-lucrt', '-lc++', '-lc++abi', '-lunwind']
           EOF
 
-          cat > crossfile-x86.txt << 'EOF'
+          cat > crossfile-x86.txt << EOF
           [binaries]
-          ar = 'i686-w64-mingw32-ar'
-          c = 'i686-w64-mingw32-clang'
-          cpp = 'i686-w64-mingw32-clang++'
-          ld = 'i686-w64-mingw32-ld'
-          windres = 'i686-w64-mingw32-windres'
-          strip = 'i686-w64-mingw32-strip'
-          widl = 'i686-w64-mingw32-widl'
+          c = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang'
+          cpp = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-clang++'
+          ar = '${TOOLCHAIN_DIR}/bin/llvm-ar'
+          strip = '${TOOLCHAIN_DIR}/bin/llvm-strip'
+          windres = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-windres'
+          widl = '${TOOLCHAIN_DIR}/bin/i686-w64-mingw32-widl'
           [host_machine]
           system = 'windows'
           cpu_family = 'x86'
@@ -543,30 +242,20 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
-          ARM64EC_FLAGS="-O3 -DNDEBUG -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.4-a+dotprod+fp16+rcpc"
-          ARM64EC_C_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt"
-          ARM64EC_CPP_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2 -lmingwex -lmsvcrt -lucrt -lc++ -lc++abi -lunwind"
-          X86_FLAGS="-O3 -DNDEBUG -flto=thin -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
-          X86_LINK="-flto=thin -Wl,--icf=safe -Wl,--gc-sections -Wl,-O2"
-
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
-            -Dc_args="$ARM64EC_FLAGS" \
-            -Dcpp_args="$ARM64EC_FLAGS" \
-            -Dc_link_args="$ARM64EC_C_LINK" \
-            -Dcpp_link_args="$ARM64EC_CPP_LINK"
-          ninja -C build-arm64ec -j$(nproc) 2>&1 | tee build-arm64ec.log
+            -Db_ndebug=true \
+            -Dstrip=true
+          ninja -C build-arm64ec -j2 2>&1 | tee build-arm64ec.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-arm64ec.log; exit 1; }
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
-            -Dc_args="$X86_FLAGS" \
-            -Dcpp_args="$X86_FLAGS" \
-            -Dc_link_args="$X86_LINK" \
-            -Dcpp_link_args="$X86_LINK"
-          ninja -C build-x86 -j$(nproc) 2>&1 | tee build-x86.log
+            -Db_ndebug=true \
+            -Dstrip=true
+          ninja -C build-x86 -j2 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
       - name: Verify Build
@@ -588,14 +277,38 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          llvm-strip --strip-debug pkg/system32/*.dll pkg/syswow64/*.dll 2>/dev/null || true
+          # Meson -Dstrip=true handles stripping during build
+
+          # Base/upstream build — no patches. Provide a brief notes file so users
+          # can compare with the -p (patched) variant.
+          cat > pkg/VKD3D_CONFIG.txt << 'CFGEOF'
+          # vkd3d-proton arm64ec (base / -b) — vanilla upstream HansKristian-Work/master
+          #
+          # This is a stock upstream ARM64EC build. No Adreno-specific patches.
+          # Use this variant for compatibility testing or when the -p build
+          # introduces regressions.
+          #
+          # ── Common environment variables ──────────────────────────────────
+          # VKD3D_CONFIG=dxr                         # force-enable raytracing
+          # VKD3D_CONFIG=no_upload_hvv               # KGSL VRAM saver
+          # VKD3D_CONFIG=force_host_cached           # reduce stutters
+          # VKD3D_SHADER_CACHE_PATH=/sdcard/vkd3d-cache
+          # VKD3D_FRAME_RATE=60                      # 0 = uncapped
+          # VKD3D_SWAPCHAIN_PRESENT_MODE=FIFO_LATEST_READY
+          # VKD3D_DEBUG=warn                         # none|err|info|fixme|warn|trace
+          # VKD3D_SHADER_DEBUG=warn
+          # VKD3D_LOG_FILE=/sdcard/vkd3d.log
+          #
+          # See the upstream HansKristian-Work/vkd3d-proton README for the full
+          # list of VKD3D_CONFIG flags and environment variables.
+          CFGEOF
 
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-arm64ec-${COMMIT}",
+            "versionName": "${VER}-arm64ec-${COMMIT}-b",
             "versionCode": 0,
-            "description": "vkd3d-proton",
+            "description": "vkd3d-proton arm64ec base (vanilla upstream)",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -605,7 +318,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-arm64ec-v${VER}-${COMMIT}"
+          PKG="vkd3d-proton-arm64ec-v${VER}-${COMMIT}-b"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 

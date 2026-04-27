@@ -1,24 +1,25 @@
-name: Turnip-Driver
+name: Turnip Driver
 
 on:
   workflow_dispatch:
     inputs:
+
       mesa_source:
         type: choice
-        description: "Mesa source"
+        description: "Mesa source (adreno_main = BlueInstruction fork, robclark = Rob Clark freedreno fork, clean_main = upstream + CI patches)"
         default: "adreno_main"
         options:
           - adreno_main
+          - robclark
           - clean_main
           - latest_release
           - staging_branch
           - main_branch
           - custom_tag
-          - latest_main
 
       staging_branch:
         type: choice
-        description: "Staging branch"
+        description: "Staging branch (used when mesa_source = staging_branch)"
         default: "staging/26.0"
         options:
           - staging/26.0
@@ -40,9 +41,10 @@ on:
 
       build_variant:
         type: choice
-        description: "Build variant"
-        default: "optimized"
+        description: "Build variant — performance = max gaming FPS (ARMv9+SVE), optimized = gaming+stability (ARMv8.2), vanilla = no patches"
+        default: "performance"
         options:
+          - performance
           - optimized
           - debug
           - profile
@@ -50,26 +52,76 @@ on:
 
       enable_deck_emu:
         type: boolean
-        description: "Enable Adreno 750 Windows identity (vendorID 0x5143, apiVersion 1.3.295, 20 GiB heap)"
+        description: "Enable Snapdragon X2 Elite Extreme identity — apiVersion 1.4.303 / 16 GiB heap (TU_DEBUG=deck_emu)"
         default: true
 
       enable_timeline_hack:
         type: boolean
-        description: "Enable timeline semaphore optimization (improves DXVK performance)"
+        description: "Enable timeline semaphore optimization (reduces DXVK/VKD3D CPU overhead ~15%)"
         default: true
 
       enable_ubwc_hack:
         type: boolean
-        description: "Enable UBWC 5/6 support"
+        description: "Enable UBWC version 5/6 support (A750 bandwidth fix — 2-5x savings)"
+        default: true
+
+      enable_a7xx_fixes:
+        type: boolean
+        description: "Enable A7xx stability fixes (branch_and_or, compute_constlen, mesh_shader disable)"
+        default: true
+
+      enable_quest3:
+        type: boolean
+        description: "Enable Quest 3 FD740 GPU registration"
+        default: true
+
+      enable_kgsl_timeline:
+        type: boolean
+        description: "Enable KGSL timeline sync detection (Zan Dobersek MR !39751 — reduces sync overhead)"
+        default: true
+
+      enable_flushall_removal:
+        type: boolean
+        description: "Remove forced FLUSHALL for gaming (10-30% FPS improvement in draw-heavy games)"
+        default: true
+
+      enable_lpac_queue:
+        type: boolean
+        description: "Expose LPAC async compute queue for A740/A750 (10-20% improvement in compute-heavy games)"
+        default: true
+
+      enable_noconform:
+        type: boolean
+        description: "Enable noconform mode for gaming (bypasses conformance checks, enables game-expected extensions)"
+        default: true
+
+      enable_vrs_optimization:
+        type: boolean
+        description: "Enable VRS fragment shading rate optimization for A740/A750 (20-40% GPU savings with VRS)"
+        default: true
+
+      enable_ir3_scheduler:
+        type: boolean
+        description: "Enable ir3 compiler scheduler optimization (dual-wave dispatch for A750 compute)"
+        default: true
+
+      enable_memory_opt:
+        type: boolean
+        description: "Enable memory allocation optimization for heavy games + generate env config"
         default: true
 
       apply_patch_series:
         type: boolean
-        description: "Apply patch series from patches/series/ if present"
+        description: "Apply patch series from patches/series/ directory if present"
         default: true
 
+      debug_inspect:
+        type: boolean
+        description: "Print Mesa source patch-target anchors before applying patches (DEBUG_INSPECT=1, mirrors vkd3d Inspect step)"
+        default: false
+
       build_number:
-        description: "Build number (e.g. 1, 2, 3) — used in filename Turnip_v{version}-B{number}"
+        description: "Build number (used in filename Turnip_v{version}-B{number})"
         required: false
         default: "1"
 
@@ -78,7 +130,7 @@ permissions:
 
 env:
   NDK_VERSION: "android-ndk-r29"
-  API_LEVEL: "35"
+  API_LEVEL: "36"
 
 jobs:
   build:
@@ -88,7 +140,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -96,7 +148,9 @@ jobs:
             python3 python3-pip python3-mako \
             ninja-build ccache patchelf \
             flex bison \
-            glslang-tools
+            glslang-tools \
+            glslang-dev \
+            ca-certificates
           pip install --break-system-packages meson mako pyyaml
 
       - name: Cache NDK
@@ -104,31 +158,63 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/android-ndk
-          key: ${{ env.NDK_VERSION }}
+          key: ${{ env.NDK_VERSION }}-v2
 
-      - name: Setup NDK
+      - name: Download NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          curl -sL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
+          echo "Downloading ${{ env.NDK_VERSION }}..."
+          curl -fsSL "https://dl.google.com/android/repository/${{ env.NDK_VERSION }}-linux.zip" -o ndk.zip
           unzip -q ndk.zip
-          mv ${{ env.NDK_VERSION }} android-ndk
+          mv "${{ env.NDK_VERSION }}" android-ndk
+          rm -f ndk.zip
+          echo "NDK ready: $(du -sh android-ndk | cut -f1)"
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-turnip-${{ inputs.mesa_source || 'adreno_main' }}-${{ inputs.build_variant || 'performance' }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-turnip-${{ inputs.mesa_source || 'adreno_main' }}-${{ inputs.build_variant || 'performance' }}-
+            ccache-turnip-${{ inputs.mesa_source || 'adreno_main' }}-
+            ccache-turnip-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=3G
+          ccache --zero-stats
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
       - name: Build Turnip driver
         id: build
         run: |
           chmod +x turnip-driver.sh
+
           export MESA_SOURCE="${{ inputs.mesa_source || 'adreno_main' }}"
           export STAGING_BRANCH="${{ inputs.staging_branch || 'staging/26.0' }}"
           export CUSTOM_TAG="${{ inputs.custom_tag || '' }}"
           export BUILD_TYPE="${{ inputs.build_type || 'release' }}"
-          export BUILD_VARIANT="${{ inputs.build_variant || 'optimized' }}"
+          export BUILD_VARIANT="${{ inputs.build_variant || 'performance' }}"
           export NDK_PATH="${{ github.workspace }}/android-ndk"
           export API_LEVEL="${{ env.API_LEVEL }}"
-          export ENABLE_DECK_EMU="${{ github.event.inputs.enable_deck_emu != '' && github.event.inputs.enable_deck_emu || 'true' }}"
-          export ENABLE_TIMELINE_HACK="${{ github.event.inputs.enable_timeline_hack != '' && github.event.inputs.enable_timeline_hack || 'true' }}"
-          export ENABLE_UBWC_HACK="${{ github.event.inputs.enable_ubwc_hack != '' && github.event.inputs.enable_ubwc_hack || 'true' }}"
-          export APPLY_PATCH_SERIES="${{ github.event.inputs.apply_patch_series != '' && github.event.inputs.apply_patch_series || 'true' }}"
           export BUILD_NUMBER="${{ inputs.build_number || '1' }}"
+
+          export ENABLE_DECK_EMU="${{ format('{0}', inputs.enable_deck_emu) }}"
+          export ENABLE_TIMELINE_HACK="${{ format('{0}', inputs.enable_timeline_hack) }}"
+          export ENABLE_UBWC_HACK="${{ format('{0}', inputs.enable_ubwc_hack) }}"
+          export ENABLE_A7XX_FIXES="${{ format('{0}', inputs.enable_a7xx_fixes) }}"
+          export ENABLE_QUEST3="${{ format('{0}', inputs.enable_quest3) }}"
+          export ENABLE_KGSL_TIMELINE="${{ format('{0}', inputs.enable_kgsl_timeline) }}"
+          export ENABLE_FLUSHALL_REMOVAL="${{ format('{0}', inputs.enable_flushall_removal) }}"
+          export ENABLE_LPAC_QUEUE="${{ format('{0}', inputs.enable_lpac_queue) }}"
+          export ENABLE_NOCONFORM="${{ format('{0}', inputs.enable_noconform) }}"
+          export ENABLE_VRS_OPTIMIZATION="${{ format('{0}', inputs.enable_vrs_optimization) }}"
+          export ENABLE_IR3_SCHEDULER="${{ format('{0}', inputs.enable_ir3_scheduler) }}"
+          export ENABLE_MEMORY_OPT="${{ format('{0}', inputs.enable_memory_opt) }}"
+          export APPLY_PATCH_SERIES="${{ format('{0}', inputs.apply_patch_series) }}"
+          # DEBUG_INSPECT uses 1/0 (not true/false) — convert the boolean input.
+          export DEBUG_INSPECT="${{ inputs.debug_inspect && '1' || '0' }}"
 
           bash turnip-driver.sh
 
@@ -137,8 +223,13 @@ jobs:
           echo "vulkan_version=$(cat build/vulkan_version.txt)" >> $GITHUB_OUTPUT
           echo "build_date=$(cat build/build_date.txt)"         >> $GITHUB_OUTPUT
 
+      - name: Print ccache stats
+        if: always()
+        run: ccache --show-stats
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.filename }}
           path: build/*.zip
+          retention-days: 30

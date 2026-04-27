@@ -234,13 +234,6 @@ update_vulkan_headers() {
     rm -rf "$spirv_hdr_dir"
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Inspect Mesa Source (debug patch targets)
-# ═══════════════════════════════════════════════════════════════════════════════
-# Mirrors vkd3d-test.yml's "Inspect VKD3D Source" debug step. Greps for the
-# patterns each apply_patch_* function targets, so when Mesa changes upstream
-# and a patch silently no-ops, the build log shows whether the anchor still
-# exists. Run only when DEBUG_INSPECT=1 to keep normal logs concise.
 inspect_mesa_sources() {
     [[ "${DEBUG_INSPECT:-0}" != "1" ]] && return 0
 

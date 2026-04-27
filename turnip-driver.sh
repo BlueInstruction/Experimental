@@ -155,20 +155,23 @@ ENABLE_MEMORY_OPT="${ENABLE_MEMORY_OPT:-true}"
 #   -fno-math-errno             skip errno on libm calls
 #   -fno-trapping-math          no FP trap signals → more vectorization
 #   -fno-signed-char            unsigned char (Adreno register model)
-#   -fno-semantic-interposition  no PLT overhead for internal calls
-#   -fno-plt                    direct calls, no procedure linkage table
-#   -fvisibility=hidden         reduce symbol table, faster dynamic linking
 #   -DNDEBUG                    strip assert() from release build
+#
+# NOT INCLUDED (would break Mesa's meson subprojects):
+#   -fvisibility=hidden         hides libxml2 / libarchive public symbols → link fail
+#   -fno-semantic-interposition / -fno-plt
+#                                 also affect subproject ABI; Mesa applies its own
+#                                 visibility=hidden on the Turnip driver target only.
 #
 # Standard-tier flags (BUILD_VARIANT=optimized):
 #   Same as above but with -march=armv8.2-a (broader compatibility)
 #
 if [[ "$BUILD_VARIANT" == "performance" ]]; then
-    CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-signed-char -fno-semantic-interposition -fno-plt -fvisibility=hidden -DNDEBUG}"
-    CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fvisibility=hidden -DNDEBUG}"
+    CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-signed-char -DNDEBUG}"
+    CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv9-a+sve+bf16+fp16+rcpc+dotprod+i8mm+lse -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
 else
-    CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+i8mm -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-signed-char -fno-semantic-interposition -fno-plt -fvisibility=hidden -DNDEBUG}"
-    CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+i8mm -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-semantic-interposition -fno-plt -fvisibility=hidden -DNDEBUG}"
+    CFLAGS_EXTRA="${CFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+i8mm -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -fno-signed-char -DNDEBUG}"
+    CXXFLAGS_EXTRA="${CXXFLAGS_EXTRA:--O3 -march=armv8.2-a+fp16+rcpc+dotprod+i8mm -ffast-math -fno-finite-math-only -fno-math-errno -fno-trapping-math -DNDEBUG}"
 fi
 
 # Linker flags:

@@ -115,6 +115,11 @@ on:
         description: "Apply patch series from patches/series/ directory if present"
         default: true
 
+      debug_inspect:
+        type: boolean
+        description: "Print Mesa source patch-target anchors before applying patches (DEBUG_INSPECT=1, mirrors vkd3d Inspect step)"
+        default: false
+
       build_number:
         description: "Build number (used in filename Turnip_v{version}-B{number})"
         required: false
@@ -208,6 +213,8 @@ jobs:
           export ENABLE_IR3_SCHEDULER="${{ format('{0}', inputs.enable_ir3_scheduler) }}"
           export ENABLE_MEMORY_OPT="${{ format('{0}', inputs.enable_memory_opt) }}"
           export APPLY_PATCH_SERIES="${{ format('{0}', inputs.apply_patch_series) }}"
+          # DEBUG_INSPECT uses 1/0 (not true/false) — convert the boolean input.
+          export DEBUG_INSPECT="${{ inputs.debug_inspect && '1' || '0' }}"
 
           bash turnip-driver.sh
 

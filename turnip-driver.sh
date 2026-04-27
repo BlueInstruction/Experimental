@@ -234,6 +234,79 @@ update_vulkan_headers() {
     rm -rf "$spirv_hdr_dir"
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Inspect Mesa Source (debug patch targets)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mirrors vkd3d-test.yml's "Inspect VKD3D Source" debug step. Greps for the
+# patterns each apply_patch_* function targets, so when Mesa changes upstream
+# and a patch silently no-ops, the build log shows whether the anchor still
+# exists. Run only when DEBUG_INSPECT=1 to keep normal logs concise.
+inspect_mesa_sources() {
+    [[ "${DEBUG_INSPECT:-0}" != "1" ]] && return 0
+
+    log_section "Inspect Mesa Source (debug patch targets)"
+    cd "$MESA_DIR"
+
+    echo "=== PATCH 1: has_branch_and_or anchor (ir3_compiler.c) ==="
+    grep -n "has_branch_and_or" src/freedreno/ir3/ir3_compiler.c 2>/dev/null | head -10 || true
+    echo ""
+    echo "=== PATCH 2: A7xx gen1 quirk anchors (freedreno_devices.py) ==="
+    grep -n "reading_shading_rate_requires_smask_quirk\|enable_tp_ubwc_flag_hint\|compute_constlen_quirk" \
+        src/freedreno/common/freedreno_devices.py 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 3: EXT_mesh_shader + meshShader features (tu_device.cc) ==="
+    grep -n "EXT_mesh_shader\|->meshShader\|->taskShader" src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 4: Quest 3 FD740 anchors (freedreno_devices.py) ==="
+    grep -n "FD730\|FD740\|chip_id=0x43050\|# Values from blob" \
+        src/freedreno/common/freedreno_devices.py 2>/dev/null | head -10 || true
+    echo ""
+    echo "=== PATCH 5: timeline semaphore (vk_sync_timeline.c) ==="
+    grep -n "vk_sync_timeline_wait_locked\|highest_pending\|highest_past\|pending_points" \
+        src/vulkan/runtime/vk_sync_timeline.c 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 6: UBWC switch cases (tu_knl_kgsl.cc) ==="
+    grep -n "KGSL_UBWC_\|case [0-9]:\|ubwc_config\." src/freedreno/vulkan/tu_knl_kgsl.cc 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 7: gralloc UBWC (u_gralloc_fallback.c) ==="
+    grep -n "gmsm\|HAS_FREEDRENO\|DRM_FORMAT_MOD_QCOM_COMPRESSED\|hnd->handle->numInts" \
+        src/util/u_gralloc/u_gralloc_fallback.c 2>/dev/null | head -10 || true
+    echo ""
+    echo "=== PATCH 8: TU_DEBUG flags + apiVersion (tu_util.h, tu_util.cc, tu_device.cc) ==="
+    grep -n "TU_DEBUG_FORCE_CONCURRENT_BINNING\|BITFIELD64_BIT" src/freedreno/vulkan/tu_util.h 2>/dev/null | head -10 || true
+    grep -n '"forcecb"\|"deck_emu"' src/freedreno/vulkan/tu_util.cc 2>/dev/null | head -10 || true
+    grep -n "pdevice->vk\.properties\.apiVersion\|VK_MAKE_API_VERSION\|memoryHeaps\[0\]\.size" \
+        src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 9: vk_extensions injection points ==="
+    grep -n "tu_get_device_extensions\|tu_fill_device_extensions\|vk_device_extension_table" \
+        src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -10 || true
+    grep -n '"VK_KHR_swapchain"' src/vulkan/util/vk_extensions.py 2>/dev/null | head -5 || true
+    echo ""
+    echo "=== PATCH 10: KGSL timeline sync (tu_knl_kgsl.cc) ==="
+    grep -n "device->fd\s*=\|tu_physical_device_try_create\|kgsl_timeline\|KGSL_TIMELINE" \
+        src/freedreno/vulkan/tu_knl_kgsl.cc 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 11: FLUSHALL anchors (tu_device.cc, tu_cmd_buffer.cc) ==="
+    grep -n "TU_DEBUG_FLUSHALL\|tu_env\.debug\s*\|=" src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -10 || true
+    grep -n "tu_CmdDrawIndirect" src/freedreno/vulkan/tu_cmd_buffer.cc 2>/dev/null | head -5 || true
+    echo ""
+    echo "=== PATCH 12: LPAC queue family (tu_device.cc) ==="
+    grep -n "queue_family_count\|TU_DEBUG_LPAC" src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -10 || true
+    echo ""
+    echo "=== PATCH 14: VRS feature flags (tu_device.cc) ==="
+    grep -n "fragmentShadingRate\|pipelineFragmentShadingRate\|primitiveFragmentShadingRate" \
+        src/freedreno/vulkan/tu_device.cc 2>/dev/null | head -20 || true
+    echo ""
+    echo "=== PATCH 15: ir3 compiler scheduler (ir3_compiler.c) ==="
+    grep -n "has_dual_wave_dispatch\|has_sampler" src/freedreno/ir3/ir3_compiler.c 2>/dev/null | head -10 || true
+    echo ""
+    echo "=== Files present in vulkan/ir3 dirs ==="
+    ls -1 src/freedreno/vulkan/*.cc src/freedreno/vulkan/*.h 2>/dev/null | head -20 || true
+    echo ""
+    log_success "Mesa source inspection complete (DEBUG_INSPECT=1)"
+}
+
 apply_patch_disable_branch_and_or() {
     [[ "$ENABLE_A7XX_FIXES" != "true" ]] && return 0
     log_info "Patch: disable has_branch_and_or (A750 shader stability)"
@@ -1591,6 +1664,8 @@ apply_patches() {
         apply_patch_series "$PATCHES_DIR/series"
     fi
 
+    inspect_mesa_sources
+
     log_info "Applying core stability patches (1-9)"
     apply_patch_disable_branch_and_or 
     apply_patch_a7xx_compute_constlen 
@@ -1831,18 +1906,12 @@ package_driver() {
 }
 EOF
 
-    if [[ -f "${WORKDIR}/turnip-env.conf" ]]; then
-        cp "${WORKDIR}/turnip-env.conf" "${pkg_dir}/turnip-env.conf"
-    fi
-
     echo "$filename"       > "${WORKDIR}/filename.txt"
     echo "$vulkan_version" > "${WORKDIR}/vulkan_version.txt"
     echo "$build_date"     > "${WORKDIR}/build_date.txt"
 
     cd "$pkg_dir"
-    zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" "$driver_name_compat" meta.json
-    # Add env config to zip if it exists
-    [[ -f "turnip-env.conf" ]] && zip -9 -u "${WORKDIR}/${filename}.zip" turnip-env.conf
+    zip -9 "${WORKDIR}/${filename}.zip" "$driver_name" meta.json
     log_success "Package: ${filename}.zip ($driver_size)"
 }
 

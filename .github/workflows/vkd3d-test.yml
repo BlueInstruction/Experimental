@@ -881,7 +881,7 @@ jobs:
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-${COMMIT}",
+            "versionName": "${VER}-${COMMIT}-p",
             "versionCode": 0,
             "description": "vkd3d-proton",
             "files": [
@@ -893,7 +893,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-v${VER}-${COMMIT}"
+          PKG="vkd3d-proton-${VER}-${COMMIT}-p"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 

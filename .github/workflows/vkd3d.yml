@@ -187,13 +187,91 @@ jobs:
           echo "GLSLang version:"
           $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
 
+      # SPIRV-Tools binary (newer than apt 'spirv-tools'). Best-effort.
+      # Even though this is a vanilla build, a fresher SPIRV-Tools improves
+      # SPIR-V optimization at vkd3d build time (no source-level patches
+      # are introduced).
+      - name: Cache SPIRV-Tools
+        id: cache-spirv-tools
+        uses: actions/cache@v4
+        with:
+          path: spirv-tools-bin
+          key: spirv-tools-main-tot-v1
+
+      - name: Setup latest SPIRV-Tools
+        if: steps.cache-spirv-tools.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          wget -q https://github.com/KhronosGroup/SPIRV-Tools/releases/download/main-tot/SPIRV-Tools-main-linux-Release.zip -O spirv-tools.zip
+          if [[ ! -s spirv-tools.zip ]]; then
+            TAG=$(curl -sSL https://api.github.com/repos/KhronosGroup/SPIRV-Tools/releases/latest | jq -r '.tag_name // empty')
+            [[ -n "$TAG" ]] && wget -q "https://github.com/KhronosGroup/SPIRV-Tools/releases/download/${TAG}/SPIRV-Tools-${TAG}-linux-Release.zip" -O spirv-tools.zip
+          fi
+          if [[ -s spirv-tools.zip ]]; then
+            unzip -q spirv-tools.zip -d spirv-tools-bin || true
+            rm -f spirv-tools.zip
+          else
+            echo "SPIRV-Tools upstream zip not available — falling back to apt 'spirv-tools'"
+            mkdir -p spirv-tools-bin
+          fi
+          set -e
+
+      - name: Add SPIRV-Tools to PATH
+        run: |
+          if [[ -d "$PWD/spirv-tools-bin/bin" ]]; then
+            echo "$PWD/spirv-tools-bin/bin" >> $GITHUB_PATH
+          fi
+
+      # DXC (DirectX Shader Compiler) — best-effort fetch.
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc-bin
+          key: dxc-latest-v1
+
+      - name: Setup latest DXC
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          DXC_TAG=$(curl -sSL https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest | jq -r '.tag_name // empty')
+          mkdir -p dxc-bin
+          if [[ -n "$DXC_TAG" ]]; then
+            URL=$(curl -sSL "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/tags/${DXC_TAG}" \
+              | jq -r '.assets[]? | select(.name | test("linux.*x86_64.*\\.tar\\.gz$")) | .browser_download_url' | head -n1)
+            if [[ -n "$URL" ]]; then
+              wget -q "$URL" -O dxc.tar.gz
+              tar -xzf dxc.tar.gz -C dxc-bin --strip-components=1 2>/dev/null || true
+              rm -f dxc.tar.gz
+            fi
+          fi
+          set -e
+
+      - name: Add DXC to PATH
+        run: |
+          if [[ -d "$PWD/dxc-bin/bin" ]]; then
+            echo "$PWD/dxc-bin/bin" >> $GITHUB_PATH
+          fi
+
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch turnip-fixes --depth 1 \
             https://github.com/BlueInstruction/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-      
+
+      # Vanilla build: still pull each submodule's tracking-branch tip so the
+      # base build picks up new vkd3d-proton submodule fixes the moment they
+      # land upstream (Vulkan-Headers, SPIRV-Headers, dxil-spirv, …). No
+      # source-level patches are added — this only refreshes pinned commits.
+      - name: Update vkd3d submodules to remote tip
+        run: |
+          cd src
+          git submodule foreach --recursive 'git fetch --depth=1 origin HEAD || true'
+          git submodule update --remote --merge --recursive 2>/dev/null || true
+          echo "Submodule status:"
+          git submodule status --recursive | head -20 || true
+
       # Base/upstream build — use the pinned Vulkan-Headers and SPIRV-Headers
       # that vkd3d-proton ships as git submodules. Do not overwrite them with
       # the latest KhronosGroup main branch: that risks build breakage when
@@ -331,4 +409,4 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: rm -rf src out pkg vk-headers spirv-h .venv
+        run: rm -rf src out pkg vk-headers spirv-h .venv spirv-tools-bin dxc-bin glslang

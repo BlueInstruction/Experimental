@@ -187,12 +187,96 @@ jobs:
           echo "GLSLang version:"
           $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
 
+      # SPIRV-Tools binary (newer than the apt 'spirv-tools' package).
+      # Improves SPIR-V optimization at build time. Best-effort: keep the apt
+      # package as a fallback if the upstream zip layout changes.
+      - name: Cache SPIRV-Tools
+        id: cache-spirv-tools
+        uses: actions/cache@v4
+        with:
+          path: spirv-tools-bin
+          key: spirv-tools-main-tot-v1
+
+      - name: Setup latest SPIRV-Tools
+        if: steps.cache-spirv-tools.outputs.cache-hit != 'true'
+        run: |
+          # The KhronosGroup release asset name varies — try the well-known
+          # 'main-tot' rolling artifact first, then fall back to latest tag.
+          set +e
+          wget -q https://github.com/KhronosGroup/SPIRV-Tools/releases/download/main-tot/SPIRV-Tools-main-linux-Release.zip -O spirv-tools.zip
+          if [[ ! -s spirv-tools.zip ]]; then
+            TAG=$(curl -sSL https://api.github.com/repos/KhronosGroup/SPIRV-Tools/releases/latest | jq -r '.tag_name // empty')
+            [[ -n "$TAG" ]] && wget -q "https://github.com/KhronosGroup/SPIRV-Tools/releases/download/${TAG}/SPIRV-Tools-${TAG}-linux-Release.zip" -O spirv-tools.zip
+          fi
+          if [[ -s spirv-tools.zip ]]; then
+            unzip -q spirv-tools.zip -d spirv-tools-bin || true
+            rm -f spirv-tools.zip
+          else
+            echo "SPIRV-Tools upstream zip not available — falling back to apt 'spirv-tools'"
+            mkdir -p spirv-tools-bin
+          fi
+          set -e
+
+      - name: Add SPIRV-Tools to PATH
+        run: |
+          if [[ -d "$PWD/spirv-tools-bin/bin" ]]; then
+            echo "$PWD/spirv-tools-bin/bin" >> $GITHUB_PATH
+          fi
+
+      # DXC (DirectX Shader Compiler) — used by some vkd3d-proton paths for
+      # DXIL → SPIR-V translation. Best-effort fetch; build does not hard-fail
+      # if it's missing because system glslangValidator/spirv-tools cover most
+      # cases.
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc-bin
+          key: dxc-latest-v1
+
+      - name: Setup latest DXC
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          DXC_TAG=$(curl -sSL https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest | jq -r '.tag_name // empty')
+          mkdir -p dxc-bin
+          if [[ -n "$DXC_TAG" ]]; then
+            URL=$(curl -sSL "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/tags/${DXC_TAG}" \
+              | jq -r '.assets[]? | select(.name | test("linux.*x86_64.*\\.tar\\.gz$")) | .browser_download_url' | head -n1)
+            if [[ -n "$URL" ]]; then
+              wget -q "$URL" -O dxc.tar.gz
+              tar -xzf dxc.tar.gz -C dxc-bin --strip-components=1 2>/dev/null || true
+              rm -f dxc.tar.gz
+            fi
+          fi
+          set -e
+
+      - name: Add DXC to PATH
+        run: |
+          if [[ -d "$PWD/dxc-bin/bin" ]]; then
+            echo "$PWD/dxc-bin/bin" >> $GITHUB_PATH
+          fi
+
       - name: Clone Source
         run: |
           git clone --recurse-submodules --recursive --branch master --depth 1 \
             https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      # Pull the latest tip of each vkd3d-proton submodule (Vulkan-Headers,
+      # SPIRV-Headers, dxil-spirv, etc.). The shallow recursive clone above
+      # pins each submodule to whatever commit the master tree records — this
+      # step opts into the latest upstream of each submodule's tracking branch.
+      # Best-effort: failures are tolerated so a broken submodule remote
+      # doesn't kill the build.
+      - name: Update vkd3d submodules to remote tip
+        run: |
+          cd src
+          git submodule foreach --recursive 'git fetch --depth=1 origin HEAD || true'
+          git submodule update --remote --merge --recursive 2>/dev/null || true
+          echo "Submodule status:"
+          git submodule status --recursive | head -20 || true
       
       - name: Update Vulkan + SPIRV Headers
         run: |
@@ -661,7 +745,42 @@ jobs:
               (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
           ]
 
-          patch_file("libs/vkd3d/device.c", gpu + renderpass_patches)
+          # ── MODERN VKD3D-PROTON PERFORMANCE FEATURES ─────────────────────
+          # Enables new vkd3d-proton optimal_performance + features paths.
+          # Source: vkd3d_optimal_perf.json suggestions — biggest CPU wins
+          # in modern (post-2.13) vkd3d-proton.
+          modern_perf_patches = [
+              # (1) descriptorBuffer — single biggest CPU overhead reduction.
+              # Replaces classic descriptor sets with VK_EXT_descriptor_buffer,
+              # eliminating a per-draw descriptor-set bind cost.
+              (r'(->use_descriptor_buffer\s*=\s*)false', r'\1true'),
+              (r'(descriptor_buffer_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              # (2) graphicsPipelineLibrary + FastLinking — reduces first-run
+              # shader compilation stutters by linking pre-built shader objects.
+              (r'(->use_pipeline_library\s*=\s*)false', r'\1true'),
+              (r'(graphicsPipelineLibrary\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(graphicsPipelineLibraryFastLinking\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              # (3) pipelineCreationCacheControl — prevents redundant compile
+              # when the same PSO is requested twice.
+              (r'(->pipeline_creation_cache_control\s*=\s*)false', r'\1true'),
+              (r'(pipelineCreationCacheControl\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              # (4) subgroupSizeControl — lets ir3 pick optimal wave size for
+              # compute shaders (Spider-Man 2 / Crimson Desert benefit).
+              (r'(->subgroup_size_control\s*=\s*)false', r'\1true'),
+              (r'(subgroupSizeControl\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              # (5) shaderFloat16 / 16-bit storage — FP16 codepaths (perf win
+              # in titles that emit half-precision shaders).
+              (r'(->shader_float16\s*=\s*)false', r'\1true'),
+              (r'(shaderFloat16\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              # (6) present_wait + present_id — better frame pacing for the
+              # MFG-X6 high-latency profile (must pair with the swapchain
+              # depth=8 patch above).
+              (r'(->use_present_wait\s*=\s*)false', r'\1true'),
+              (r'(presentWait\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(presentId\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + renderpass_patches + modern_perf_patches)
 
           for root, dirs, files in os.walk("libs/vkd3d"):
               for f in files:
@@ -995,21 +1114,43 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
+          # Aggressive perf flags for the patched (-p) heavy-game build.
+          # -O3 + ffast-math: standard hot-path inlining + FP relaxation.
+          # -mavx2 -mfma: targets the x86_64 baseline used by Winlator/Proton
+          #   on modern Snapdragon (FEX-emulated). Safe because x86 (32-bit)
+          #   build below does NOT receive these flags.
+          # -ffunction-sections -fdata-sections + --gc-sections: strips dead
+          #   code per-symbol (smaller DLL, friendlier I-cache).
+          X64_PERF_C="-O3 -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -mavx2 -mfma"
+          X64_PERF_LINK="-Wl,--gc-sections"
+
           meson setup build-x64 \
             --cross-file ../crossfile-x64.txt \
             --buildtype release \
             -Db_lto=true \
             -Db_ndebug=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dc_args="$X64_PERF_C" \
+            -Dcpp_args="$X64_PERF_C" \
+            -Dc_link_args="$X64_PERF_LINK" \
+            -Dcpp_link_args="$X64_PERF_LINK"
           ninja -C build-x64 -j2 2>&1 | tee build-x64.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x64.log; exit 1; }
+
+          # x86 (32-bit) — keep flags conservative: no AVX2/FMA (i686 baseline
+          # has no SSE4 guarantee from the runtime), but still LTO + section GC.
+          X86_PERF_C="-O3 -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
             -Db_lto=true \
             -Db_ndebug=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dc_args="$X86_PERF_C" \
+            -Dcpp_args="$X86_PERF_C" \
+            -Dc_link_args="$X64_PERF_LINK" \
+            -Dcpp_link_args="$X64_PERF_LINK"
           ninja -C build-x86 -j2 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
@@ -1122,4 +1263,4 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: rm -rf src out pkg vk-headers spirv-h .venv
+        run: rm -rf src out pkg vk-headers spirv-h .venv spirv-tools-bin dxc-bin glslang

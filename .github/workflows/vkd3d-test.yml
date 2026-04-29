@@ -1189,7 +1189,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-v${VER}-${COMMIT}-p"
+          PKG="vkd3d-proton-${VER}-${COMMIT}-p"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 

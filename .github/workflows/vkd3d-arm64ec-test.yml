@@ -188,13 +188,84 @@ jobs:
           echo "GLSLang version:"
           $PWD/glslang/bin/glslangValidator --version 2>/dev/null || $PWD/glslang/bin/glslang --version 2>/dev/null || true
 
+      # SPIRV-Tools binary (newer than apt 'spirv-tools'). Best-effort.
+      - name: Cache SPIRV-Tools
+        id: cache-spirv-tools
+        uses: actions/cache@v4
+        with:
+          path: spirv-tools-bin
+          key: spirv-tools-main-tot-v1
+
+      - name: Setup latest SPIRV-Tools
+        if: steps.cache-spirv-tools.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          wget -q https://github.com/KhronosGroup/SPIRV-Tools/releases/download/main-tot/SPIRV-Tools-main-linux-Release.zip -O spirv-tools.zip
+          if [[ ! -s spirv-tools.zip ]]; then
+            TAG=$(curl -sSL https://api.github.com/repos/KhronosGroup/SPIRV-Tools/releases/latest | jq -r '.tag_name // empty')
+            [[ -n "$TAG" ]] && wget -q "https://github.com/KhronosGroup/SPIRV-Tools/releases/download/${TAG}/SPIRV-Tools-${TAG}-linux-Release.zip" -O spirv-tools.zip
+          fi
+          if [[ -s spirv-tools.zip ]]; then
+            unzip -q spirv-tools.zip -d spirv-tools-bin || true
+            rm -f spirv-tools.zip
+          else
+            echo "SPIRV-Tools upstream zip not available — falling back to apt 'spirv-tools'"
+            mkdir -p spirv-tools-bin
+          fi
+          set -e
+
+      - name: Add SPIRV-Tools to PATH
+        run: |
+          if [[ -d "$PWD/spirv-tools-bin/bin" ]]; then
+            echo "$PWD/spirv-tools-bin/bin" >> $GITHUB_PATH
+          fi
+
+      # DXC (DirectX Shader Compiler) — best-effort fetch.
+      - name: Cache DXC
+        id: cache-dxc
+        uses: actions/cache@v4
+        with:
+          path: dxc-bin
+          key: dxc-latest-v1
+
+      - name: Setup latest DXC
+        if: steps.cache-dxc.outputs.cache-hit != 'true'
+        run: |
+          set +e
+          DXC_TAG=$(curl -sSL https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest | jq -r '.tag_name // empty')
+          mkdir -p dxc-bin
+          if [[ -n "$DXC_TAG" ]]; then
+            URL=$(curl -sSL "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/tags/${DXC_TAG}" \
+              | jq -r '.assets[]? | select(.name | test("linux.*x86_64.*\\.tar\\.gz$")) | .browser_download_url' | head -n1)
+            if [[ -n "$URL" ]]; then
+              wget -q "$URL" -O dxc.tar.gz
+              tar -xzf dxc.tar.gz -C dxc-bin --strip-components=1 2>/dev/null || true
+              rm -f dxc.tar.gz
+            fi
+          fi
+          set -e
+
+      - name: Add DXC to PATH
+        run: |
+          if [[ -d "$PWD/dxc-bin/bin" ]]; then
+            echo "$PWD/dxc-bin/bin" >> $GITHUB_PATH
+          fi
+
       - name: Clone Source
         run: |
-          git clone --recurse-submodules --recursive --branch master --depth 1 \
-            https://github.com/BlueInstruction/vkd3d-proton.git src
+          git clone --recurse-submodules --recursive --branch master --depth 6 \
+            https://github.com/HansKristian-Work/vkd3d-proton.git src
           cd src
           echo "COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
           echo "Source: master @ $(git rev-parse --short HEAD) (version label: v$VER)"
+
+      - name: Update vkd3d submodules to remote tip
+        run: |
+          cd src
+          git submodule foreach --recursive 'git fetch --depth=1 origin HEAD || true'
+          git submodule update --remote --merge --recursive 2>/dev/null || true
+          echo "Submodule status:"
+          git submodule status --recursive | head -20 || true
 
       - name: Update Vulkan + SPIRV Headers
         run: |
@@ -259,11 +330,23 @@ jobs:
           echo ""
           echo "=== All .c and .h files in libs/vkd3d ==="
           ls libs/vkd3d/*.c libs/vkd3d/*.h 2>/dev/null | sort
+          echo ""
+          echo "=== Patch anchor: feature_level functions in device.c ==="
+          grep -n "feature_level\|determine_feature_level\|D3D_FEATURE_LEVEL_12_0" libs/vkd3d/device.c 2>/dev/null | head -30 || true
+          echo ""
+          echo "=== Patch anchor: sparseBinding + KHR_buffer_device_address ==="
+          grep -n "sparseBinding\|KHR_buffer_device_address" libs/vkd3d/device.c 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Patch anchor: PSO creation functions in state.c ==="
+          grep -n "create_graphics_pipeline\|CreateGraphicsPipelineState\|pipeline_state_create" libs/vkd3d/state.c 2>/dev/null | head -20 || true
+          echo ""
+          echo "=== Patch anchor: VRS tier patterns ==="
+          grep -n "VARIABLE_SHADING_RATE_TIER\|SHADING_RATE_TIER" libs/vkd3d/device.c 2>/dev/null | head -10 || true
 
-      # ── PATCHES DISABLED ──────────────────────────────────────────────
-      # Most patches disabled — caused UE5 compatibility issues (Samson).
-      # Kept for future re-enablement. Remove 'if: false' to re-enable.
-      # Only VRS Tier 2 patch is active (commit 8850039, needed for Crimson Desert).
+      # ── ADRENO PATCHES ───────────────────────────────────────────────
+      # Patches for Adreno 7xx (Qualcomm 0x5143) on Turnip driver.
+      # VRS Tier 2 + FL 12.1 + TBR + Blend Fix + Transfer Queue + Heavy Fixes
+      # PSO Fallback removed (confirmed crash cause in Ghost of Tsushima).
       # ────────────────────────────────────────────────────────────────────
 
       - name: Apply VRS Tier 2 Patch
@@ -287,100 +370,108 @@ jobs:
               print("VRS Tier 2 patch: already applied or pattern not found")
           PYEOF
 
-      - name: Apply Adreno FL 12.0 Override
+      # DISABLED: dead code by construction.
+      # The 'dev' patches in 'Apply Adreno Tiled GPU + Rendering Patches' below
+      # already force MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL_12_2 via regex.
+      # The override here injected `if (fl < 12_1 && ...) fl = 12_1;` immediately
+      # AFTER `fl = D3D_FEATURE_LEVEL_12_1;`, so the condition is always false
+      # and the bump is also redundant (12_2 > 12_1 from dev_features).
+      - name: Apply Adreno FL 12.1 Override
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
           import re, os
+
           path = "libs/vkd3d/device.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
-          if "vkd3d_adreno_fl12_ok" in c:
-              print("Adreno FL 12.0 patch: already applied"); exit(0)
-          helper = (
-              '\n/* Adreno FL 12.0 override — BlueInstruction patch */\n'
-              '#define QUALCOMM_VENDOR_ID 0x5143u\n'
-              'static inline bool vkd3d_is_adreno(const VkPhysicalDeviceProperties *props)\n'
-              '{ return props->vendorID == QUALCOMM_VENDOR_ID; }\n'
-              'static inline bool vkd3d_adreno_fl12_ok(const struct d3d12_device *device)\n'
-              '{\n'
-              '    const struct vkd3d_vulkan_info *vk = &device->vk_info;\n'
-              '    const VkPhysicalDeviceFeatures *f = &device->device_info.features2.features;\n'
-              '    return vk->KHR_buffer_device_address && vk->EXT_descriptor_indexing && f->shaderInt64;\n'
-              '}\n'
-          )
-          anchor = "static D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
-          if anchor not in c:
-              anchor = "D3D_FEATURE_LEVEL vkd3d_determine_feature_level("
-          if anchor not in c:
-              print("WARN: vkd3d_determine_feature_level not found — skip"); exit(0)
-          pos = c.find(anchor)
-          line_start = c.rfind('\n', 0, pos) + 1
-          c = c[:line_start] + helper + '\n' + c[line_start:]
-          old_check = re.search(
-              r'if\s*\(\s*device->device_info\.features2\.features\.sparseBinding\s*&&\s*\n?\s*vk_info->KHR_buffer_device_address\s*\)\s*\n?\s*feature_level\s*=\s*D3D_FEATURE_LEVEL_12_0\s*;',
-              c, re.DOTALL)
-          if old_check:
-              replacement = (
-                  '    bool fl12_capable = device->device_info.features2.features.sparseBinding &&\n'
-                  '        vk_info->KHR_buffer_device_address;\n'
-                  '    if (!fl12_capable && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))\n'
-                  '    { fl12_capable = true; WARN("Adreno: elevating to FL 12.0 (sparse binding emulated).\\n"); }\n'
-                  '    if (fl12_capable)\n'
-                  '        feature_level = D3D_FEATURE_LEVEL_12_0;'
+          if "Adreno FL 12.1 override" in c:
+              print("Adreno FL 12.1 patch: already applied"); exit(0)
+
+          # Auto-detect the variable name
+          fl_assign = re.search(r'(\w+(?:->\w+)*(?:\.\w+)*)\s*=\s*D3D_FEATURE_LEVEL_12_1\s*;', c)
+          if fl_assign:
+              fl_var = fl_assign.group(1)
+              print(f"Detected FL 12.1 variable: {fl_var}")
+          else:
+              fl_var = "caps->max_feature_level"
+              print(f"WARN: Could not detect FL 12.1 variable, assuming: {fl_var}")
+
+          # Find the FL 12.1 assignment and add Adreno override after it
+          fl_line = re.search(
+              r'(' + re.escape(fl_var) + r'\s*=\s*D3D_FEATURE_LEVEL_12_1\s*;)',
+              c)
+          if fl_line:
+              idx = fl_line.end()
+              adreno_insert = (
+                  '\n\n    /* Adreno FL 12.1 override — BlueInstruction patch */\n'
+                  '    /* Adreno 7xx supports ROVs via fragment_shader_interlock */\n'
+                  '    if (' + fl_var + ' < D3D_FEATURE_LEVEL_12_1 &&\n'
+                  '        device->device_info.properties2.properties.vendorID == 0x5143u &&\n'
+                  '        device->device_info.features2.features.shaderInt64 &&\n'
+                  '        caps->options.ROVsSupported)\n'
+                  '    {\n'
+                  '        ' + fl_var + ' = D3D_FEATURE_LEVEL_12_1;\n'
+                  '        WARN("Adreno: elevating to FL 12.1 (ROVs confirmed).\\n");\n'
+                  '    }'
               )
-              c = c[:old_check.start()] + replacement + c[old_check.end():]
+              c = c[:idx] + adreno_insert + c[idx:]
               with open(path, "w", encoding="utf-8") as f:
                   f.write(c)
-              print("Adreno FL 12.0 patch: applied")
+              print("Adreno FL 12.1 patch: applied (after FL 12.1 assignment)")
           else:
-              old_simple = "feature_level = D3D_FEATURE_LEVEL_12_0;"
-              if old_simple in c:
-                  idx = c.find(old_simple) + len(old_simple)
-                  adreno_insert = (
-                      '\n    if (feature_level < D3D_FEATURE_LEVEL_12_0 && vkd3d_is_adreno(&device->device_info.properties2.properties) && vkd3d_adreno_fl12_ok(device))\n'
-                      '    { feature_level = D3D_FEATURE_LEVEL_12_0; WARN("Adreno: elevating to FL 12.0.\\n"); }'
-                  )
-                  c = c[:idx] + adreno_insert + c[idx:]
-                  with open(path, "w", encoding="utf-8") as f:
-                      f.write(c)
-                  print("Adreno FL 12.0 patch: applied (fallback)")
-              else:
-                  print("ERROR: Adreno FL 12.0 patch completely failed — neither pattern matched in device.c")
-                  exit(1)
+              print("ERROR: Adreno FL 12.1 patch failed — no D3D_FEATURE_LEVEL_12_1 assignment found")
+              exit(1)
           PYEOF
 
       - name: Apply Adreno PSO Fallback
+        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
           import re, os
-          path = "libs/vkd3d/state.c"
-          if not os.path.exists(path):
-              path = "libs/vkd3d/device.c"
+
+          # PSO fallback goes in device.c where d3d12_pipeline_state_create is CALLED
+          # (device.c:4796), not where it's DEFINED (state.c:5821)
+          path = "libs/vkd3d/device.c"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
           if "adreno_fallback" in c:
               print("Adreno PSO fallback: already applied"); exit(0)
-          for anchor in ["d3d12_device_CreateGraphicsPipelineState", "d3d12_pipeline_state_create_graphics"]:
-              if anchor in c:
-                  pattern = re.search(r'(hr\s*=\s*d3d12_pipeline_state_create_graphics\s*\([^)]+\)\s*;)', c)
-                  if pattern:
-                      fallback = (
-                          '\n    /* adreno_fallback: retry PSO creation with reduced descriptor on Adreno */\n'
-                          '    if (hr == E_INVALIDARG && device->device_info.properties2.properties.vendorID == 0x5143u)\n'
-                          '    { WARN("Adreno: PSO creation failed E_INVALIDARG, attempting fallback.\\n"); }'
-                      )
-                      c = c[:pattern.end()] + fallback + c[pattern.end():]
-                      with open(path, "w", encoding="utf-8") as f:
-                          f.write(c)
-                      print(f"Adreno PSO fallback: applied in {os.path.basename(path)}")
-                      exit(0)
-          print("WARN: PSO creation function not found — skip")
+
+          # Find: if (FAILED(hr = d3d12_pipeline_state_create(...)))
+          #   or: hr = d3d12_pipeline_state_create(...)
+          pattern = re.search(
+              r'((?:if\s*\(\s*)?FAILED\s*\(\s*hr\s*=\s*d3d12_pipeline_state_create\s*\([^)]*\)[^)]*\))',
+              c, re.DOTALL)
+          if not pattern:
+              pattern = re.search(
+                  r'(hr\s*=\s*d3d12_pipeline_state_create\s*\([^;]+;)',
+                  c, re.DOTALL)
+
+          if pattern:
+              after = c[pattern.end():]
+              ret_match = re.search(r'return\s+hr\s*;', after)
+              if ret_match:
+                  insert_pos = pattern.end() + ret_match.start()
+              else:
+                  insert_pos = pattern.end()
+
+              fallback = (
+                  '\n\n    /* adreno_fallback: log Adreno PSO creation failures */\n'
+                  '    if (FAILED(hr) && device->device_info.properties2.properties.vendorID == 0x5143u)\n'
+                  '        WARN("Adreno: PSO creation failed (hr %#x). Game may have rendering issues.\\n", hr);\n'
+              )
+              c = c[:insert_pos] + fallback + c[insert_pos:]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(c)
+              print(f"Adreno PSO fallback: applied at char {insert_pos} in device.c")
+          else:
+              print("ERROR: d3d12_pipeline_state_create call not found in device.c"); exit(1)
           PYEOF
 
-      - name: Apply Patches
-        if: false
+      - name: Apply Adreno Tiled GPU + Rendering Patches
         run: |
           cd src
           cat > patch.py << 'PYSCRIPT'
@@ -438,11 +529,17 @@ jobs:
               (r'(options3\.ThresholdCoefficientsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.Native16BitShaderOpsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options4\.MSAAOperationsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
-              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_1;'),
+              # (c) Raytracing tier downgraded 1_1 → 1_0 for max FPS on RT-heavy
+              # games. WARNING: Alan Wake 2 / Control Ultimate require 1_1 and will
+              # refuse to launch with 1_0. If a game refuses to start, bump to 1_1.
+              (r'(options5\.RaytracingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RAYTRACING_TIER_1_0;'),
               (r'(options5\.RenderPassesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RENDER_PASS_TIER_2;'),
               (r'(options5\.SRVOnlyTiledResourceTier3\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.VariableShadingRateTier\s*=\s*)[^;]+;', r'\g<1>D3D12_VARIABLE_SHADING_RATE_TIER_2;'),
-              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>8;'),
+              # (a) VRS tile 8→16: enlarges shading-rate regions, +5-15% FPS in
+              # VRS-aware games (Spider-Man 2, Crimson Desert). Slight peripheral
+              # pixelation is the only cost; barely visible in motion.
+              (r'(options6\.ShadingRateImageTileSize\s*=\s*)[^;]+;', r'\g<1>16;'),
               (r'(options6\.AdditionalShadingRatesSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.BackgroundProcessingSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options6\.PerPrimitiveShadingRateSupportedWithViewportIndexing\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -451,7 +548,10 @@ jobs:
               (r'(options\.ResourceBindingTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_BINDING_TIER_3;'),
               (r'(options\.TiledResourcesTier\s*=\s*)[^;]+;', r'\g<1>D3D12_TILED_RESOURCES_TIER_3;'),
               (r'(options\.ResourceHeapTier\s*=\s*)[^;]+;', r'\g<1>D3D12_RESOURCE_HEAP_TIER_2;'),
-              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_3;'),
+              # (b) Conservative rasterization 3→1: rarely visible (decals/collision
+              # only), +2-5% FPS in games using it heavily. Keep TIER_1 (not OFF)
+              # because some games require non-zero tier to enable code paths.
+              (r'(options\.ConservativeRasterizationTier\s*=\s*)[^;]+;', r'\g<1>D3D12_CONSERVATIVE_RASTERIZATION_TIER_1;'),
               (r'(options\.ROVsSupported\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
               (r'(options\.DoublePrecisionFloatShaderOps\s*=\s*)[^;]+;', r'\g<1>FALSE;'),
               (r'(options\.TypedUAVLoadAdditionalFormats\s*=\s*)[^;]+;', r'\g<1>TRUE;'),
@@ -478,10 +578,14 @@ jobs:
               (r'(VKD3D_CONFIG_FLAG_RECYCLE_COMMAND_POOLS)', r'\1 /* fence patched */'),
           ]
 
+          # MFG-X6 high-FPS profile (depth=8) — see vkd3d-test.yml for notes
           swapchain_patches = [
-              (r'(chain->frame_latency\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
-              (r'(frame_latency_internal\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>3'),
-              (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 8 /* patched */'),
+              (r'(chain->frame_latency\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>8'),
+              (r'(frame_latency_internal\s*(?<!=)=(?!=)\s*)\d+', r'\g<1>8'),
+              (r'(MaxLatency\s*>\s*chain->frame_latency)', r'MaxLatency > 16 /* patched */'),
+              (r'(#define\s+VKD3D_SWAPCHAIN_LATENCY_FRAMES\s+)\d+', r'\g<1>8'),
+              (r'(MaximumFrameLatency\s*<\s*1\s*\|\|\s*MaximumFrameLatency\s*>\s*)\w+', r'\g<1>16'),
+              (r'(frame_latency\s*=\s*min\s*\([^,]+,\s*)\d+(\s*\))', r'\g<1>8\2'),
           ]
 
           swapchain_blit_safety = [
@@ -532,8 +636,207 @@ jobs:
           PYSCRIPT
           python3 patch.py
 
+      # ── HEAVY GPU-Boost+ESync+Fsync+RenderPass+UMA PATCHES ─────────────────
+      # Adds patch groups NOT covered by 'Apply Adreno Tiled GPU + Rendering Patches'.
+      # Skipped (already handled): dev, tbr, uma, fence, gpu_boost, swapchain,
+      #   swapchain_blit_safety, submission, State Blend Fix.
+      # Added here: gpu identity (AMD VanGogh), fsync_patches, descriptor_patches,
+      #   worker_patches, cache_patches, renderpass_patches, cmdqueue_patches,
+      #   vkd3d_private.h define injection, queue_timeline.c FSYNC opt helper.
+      - name: Apply Heavy GPU-Boost+ESync+Fsync Patches
+        run: |
+          cd src
+          cat > heavy_patch.py << 'PYSCRIPT'
+          import re, os, sys
+
+          applied = 0
+          errors = []
+
+          def patch_file(path, patches):
+              global applied, errors
+              if not os.path.exists(path):
+                  return
+              try:
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      c = f.read()
+              except Exception as e:
+                  errors.append(f"Read error {path}: {e}"); return
+              orig = c
+              for p, r in patches:
+                  if re.search(p, c):
+                      c = re.sub(p, r, c)
+                      applied += 1
+              if c != orig:
+                  try:
+                      with open(path, "w", encoding="utf-8") as f:
+                          f.write(c)
+                  except Exception as e:
+                      errors.append(f"Write error {path}: {e}")
+
+          # GPU identity: AMD VanGogh (Steam Deck APU) — vendor 0x1002, device 0x163f
+          gpu = [
+              (r'(adapter_id\.vendor_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x1002;'),
+              (r'(adapter_id\.device_id\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>0x163f;'),
+              (r'(DedicatedVideoMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>8192ULL * 1024 * 1024;'),
+              (r'(SharedSystemMemory\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>16384ULL * 1024 * 1024;'),
+          ]
+
+          fsync_patches = [
+              (r'(->use_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_win32_fence\s*=\s*)true', r'\1false'),
+              (r'(#define\s+VKD3D_FENCE_SPIN_COUNT\s+)\d+', r'\g<1>32'),
+              (r'(->shared_timeline_semaphore\s*=\s*)false', r'\1true'),
+              (r'(->use_esync\s*=\s*)false', r'\1true'),
+              (r'(esync_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+          ]
+
+          descriptor_patches = [
+              (r'(maxDescriptorSetUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
+              (r'(maxDescriptorSetUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxDescriptorSetUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxDescriptorSetUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindSamplers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4096;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindSampledImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindStorageBuffers\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+              (r'(maxPerStageDescriptorUpdateAfterBindStorageImages\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>1000000;'),
+          ]
+
+          worker_patches = [
+              (r'(worker_thread_count\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(shader_worker_threads\s*(?<!=)=(?!=)\s*)[^;]+;', r'\g<1>4;'),
+              (r'(#define\s+VKD3D_SHADER_WORKER_THREADS\s+)\d+', r'\g<1>4'),
+          ]
+
+          cache_patches = [
+              (r'(#define\s+VKD3D_PIPELINE_CACHE_SIZE\s+)\d+', r'\g<1>131072'),
+              (r'(->use_pipeline_cache\s*=\s*)false', r'\1true'),
+          ]
+
+          renderpass_patches = [
+              (r'(->use_render_pass\s*=\s*)false', r'\1true'),
+              (r'(use_render_pass_only\s*(?<!=)=(?!=)\s*)false', r'\1true'),
+              (r'(->render_passes_only\s*=\s*)false', r'\1true'),
+          ]
+
+          cmdqueue_patches = [
+              (r'(#define\s+VKD3D_QUEUE_DEPTH\s+)\d+', r'\g<1>32'),
+              (r'(pending_submit_count\s*>\s*)\d+', r'\g<1>32'),
+          ]
+
+          # ── MODERN VKD3D-PROTON PERFORMANCE FEATURES ─────────────────────
+          # Same set as vkd3d-test.yml. See that workflow for per-patch notes.
+          modern_perf_patches = [
+              (r'(->use_descriptor_buffer\s*=\s*)false', r'\1true'),
+              (r'(descriptor_buffer_enabled\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->use_pipeline_library\s*=\s*)false', r'\1true'),
+              (r'(graphicsPipelineLibrary\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(graphicsPipelineLibraryFastLinking\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->pipeline_creation_cache_control\s*=\s*)false', r'\1true'),
+              (r'(pipelineCreationCacheControl\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->subgroup_size_control\s*=\s*)false', r'\1true'),
+              (r'(subgroupSizeControl\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->shader_float16\s*=\s*)false', r'\1true'),
+              (r'(shaderFloat16\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(->use_present_wait\s*=\s*)false', r'\1true'),
+              (r'(presentWait\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+              (r'(presentId\s*(?<!=)=(?!=)\s*)false', r'\g<1>true'),
+          ]
+
+          patch_file("libs/vkd3d/device.c", gpu + renderpass_patches + modern_perf_patches)
+
+          for root, dirs, files in os.walk("libs/vkd3d"):
+              for f in files:
+                  if not f.endswith((".c", ".h")):
+                      continue
+                  if f == "device.c":
+                      continue
+                  path = os.path.join(root, f)
+                  if any(k in f for k in ["adapter", "feature", "caps", "d3d12"]):
+                      patch_file(path, gpu)
+                  patch_file(path, fsync_patches)
+                  patch_file(path, descriptor_patches)
+                  patch_file(path, worker_patches)
+                  patch_file(path, cache_patches)
+                  patch_file(path, renderpass_patches)
+
+          patch_file("libs/vkd3d/command.c", cmdqueue_patches)
+
+          vkd3d_private = "libs/vkd3d/vkd3d_private.h"
+          if os.path.exists(vkd3d_private):
+              with open(vkd3d_private, "r") as f:
+                  content = f.read()
+              if "VKD3D_FSYNC_ENABLED" not in content:
+                  header = """
+          #ifndef VKD3D_FSYNC_ENABLED
+          #define VKD3D_FSYNC_ENABLED 1
+          #endif
+          #ifndef VKD3D_ESYNC_ENABLED
+          #define VKD3D_ESYNC_ENABLED 1
+          #endif
+          #ifndef VKD3D_FENCE_SPIN_COUNT
+          #define VKD3D_FENCE_SPIN_COUNT 32
+          #endif
+          #ifndef VKD3D_TIMELINE_SEM_FAST_PATH
+          #define VKD3D_TIMELINE_SEM_FAST_PATH 1
+          #endif
+          #ifndef VKD3D_SKIP_REDUNDANT_FENCE_WAIT
+          #define VKD3D_SKIP_REDUNDANT_FENCE_WAIT 1
+          #endif
+          #ifndef VKD3D_UMA_FORCE_HOST_CACHED
+          #define VKD3D_UMA_FORCE_HOST_CACHED 1
+          #endif
+          #ifndef VKD3D_MFG_X6_SWAPCHAIN_DEPTH
+          #define VKD3D_MFG_X6_SWAPCHAIN_DEPTH 8
+          #endif
+          #ifndef VKD3D_RENDER_PASS_FORCE
+          #define VKD3D_RENDER_PASS_FORCE 1
+          #endif
+          #ifndef VKD3D_TBR_ADRENO
+          #define VKD3D_TBR_ADRENO 1
+          #endif
+          #ifndef VKD3D_GPU_BOOST
+          #define VKD3D_GPU_BOOST 1
+          #endif
+          """
+                  m = re.search(r'(#pragma once|#ifndef\s+\w+\s*\n#define\s+\w+)', content)
+                  if m:
+                      pos = content.find('\n', m.end()) + 1
+                      content = content[:pos] + header + content[pos:]
+                  else:
+                      content = header + content
+                  with open(vkd3d_private, "w") as f:
+                      f.write(content)
+                  applied += 1
+
+          queue_timeline = "libs/vkd3d/queue_timeline.c"
+          if os.path.exists(queue_timeline):
+              with open(queue_timeline, "r") as f:
+                  content = f.read()
+              if "FSYNC_TIMELINE_OPT" not in content and "vkd3d_fsync_fence_signaled" not in content:
+                  opt = """
+          /* FSYNC_TIMELINE_OPT */
+          #include <stdbool.h>
+          #include <stdint.h>
+          static inline bool vkd3d_fsync_fence_signaled(uint64_t current, uint64_t target)
+          {
+              return current >= target;
+          }
+          """
+                  content = opt + content
+                  with open(queue_timeline, "w") as f:
+                      f.write(content)
+                  applied += 1
+
+          print(f"Heavy GPU-Boost+ESync+Fsync | Applied {applied} patches")
+          if errors:
+              print(f"Errors: {len(errors)}")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          PYSCRIPT
+          python3 heavy_patch.py
+
       - name: Apply Command Submit ERR Downgrade
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -565,7 +868,6 @@ jobs:
           PYEOF
 
       - name: Apply State Blend Fix
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -596,7 +898,6 @@ jobs:
           PYEOF
 
       - name: Apply Transfer Queue Fix
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -639,7 +940,6 @@ jobs:
           PYEOF
 
       - name: Apply Heavy Game Resource Fixes
-        if: false
         run: |
           cd src
           python3 - << 'PYEOF'
@@ -777,19 +1077,37 @@ jobs:
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
           cd src
 
+          # ARM64EC perf flags. Cannot use -mavx2/-mfma (those are x86-only).
+          # The MS-ABI ARM64EC baseline is armv8.2-a + fp16 + dotprod (Snapdragon
+          # X1/X2). LTO is intentionally NOT enabled here because llvm-mingw
+          # ARM64EC LTO is still finicky with the MSVC-style importlibs.
+          ARM64EC_PERF_C="-O3 -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections -march=armv8.2-a+fp16+dotprod"
+          ARM64EC_PERF_LINK="-Wl,--gc-sections"
+
           meson setup build-arm64ec \
             --cross-file ../crossfile-arm64ec.txt \
             --buildtype release \
             -Db_ndebug=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dc_args="$ARM64EC_PERF_C" \
+            -Dcpp_args="$ARM64EC_PERF_C" \
+            -Dc_link_args="$ARM64EC_PERF_LINK" \
+            -Dcpp_link_args="$ARM64EC_PERF_LINK"
           ninja -C build-arm64ec -j2 2>&1 | tee build-arm64ec.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-arm64ec.log; exit 1; }
+
+          # x86 (32-bit) sidecar — conservative i686 baseline.
+          X86_PERF_C="-O3 -ffast-math -fno-finite-math-only -ffunction-sections -fdata-sections"
 
           meson setup build-x86 \
             --cross-file ../crossfile-x86.txt \
             --buildtype release \
             -Db_ndebug=true \
-            -Dstrip=true
+            -Dstrip=true \
+            -Dc_args="$X86_PERF_C" \
+            -Dcpp_args="$X86_PERF_C" \
+            -Dc_link_args="$ARM64EC_PERF_LINK" \
+            -Dcpp_link_args="$ARM64EC_PERF_LINK"
           ninja -C build-x86 -j2 2>&1 | tee build-x86.log
           [[ ${PIPESTATUS[0]} -eq 0 ]] || { tail -n 50 build-x86.log; exit 1; }
 
@@ -812,14 +1130,13 @@ jobs:
             SRC=$(find src/build-x86 -name "$dll" -type f | head -1)
             [[ -n "$SRC" ]] && cp "$SRC" pkg/syswow64/
           done
-          # Meson -Dstrip=true handles stripping during build
 
           cat > pkg/profile.json << JSONEOF
           {
             "type": "VKD3D",
-            "versionName": "${VER}-arm64ec-${COMMIT}",
+            "versionName": "${VER}-arm64ec-${COMMIT}-p",
             "versionCode": 0,
-            "description": "vkd3d-proton arm64ec",
+            "description": "vkd3d-proton-arm64ec patched",
             "files": [
               {"source": "system32/d3d12.dll", "target": "\${system32}/d3d12.dll"},
               {"source": "system32/d3d12core.dll", "target": "\${system32}/d3d12core.dll"},
@@ -829,7 +1146,7 @@ jobs:
           }
           JSONEOF
 
-          PKG="vkd3d-proton-arm64ec-v${VER}-${COMMIT}"
+          PKG="vkd3d-proton-arm64ec-${VER}-${COMMIT}-p"
           cd pkg && tar --zstd -cf "../${PKG}.wcp" . && cd ..
           echo "PKG=$PKG" >> $GITHUB_ENV
 
@@ -842,4 +1159,4 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: rm -rf src out pkg vk-headers spirv-h .venv
+        run: rm -rf src out pkg vk-headers spirv-h .venv spirv-tools-bin dxc-bin glslang
